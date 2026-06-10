@@ -1,0 +1,32 @@
+# Local development stack.
+#
+# Usage:
+#   docker compose up -d            # start postgres
+#   pnpm db:migrate                 # apply schema
+#   pnpm dev                        # Next.js on :3000
+#
+# Production: this file is dev-only. Production should use a managed
+# Postgres (Neon, Supabase, RDS) and deploy the Next app to Vercel,
+# Fly.io, or a containerized platform.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: parcelgrid-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parcelgrid
+      POSTGRES_USER: parcelgrid
+      POSTGRES_PASSWORD: dev_password_change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parcelgrid"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_data:

@@ -1,0 +1,79 @@
+"use client";
+
+import { Icons } from "./Icons";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+interface WorkRailProps {
+  projectId: string;
+}
+
+const ITEMS = [
+  { id: "dashboard",  icon: Icons.layers, label: "대시보드",       path: "" },
+  { id: "comparison", icon: Icons.diff,   label: "시나리오 비교",  path: "comparison" },
+  { id: "detail",     icon: Icons.bar,    label: "상세 분석",       path: "scenarios/S1" },
+  { id: "comps",      icon: Icons.table,  label: "실거래 비교",     path: "comps" },
+  { id: "override",   icon: Icons.edit,   label: "가정 편집",       path: "overrides" },
+  { id: "pdf",        icon: Icons.doc,    label: "투자 보고서",     path: "report" },
+];
+
+export function WorkRail({ projectId }: WorkRailProps) {
+  const pathname = usePathname();
+  return (
+    <div
+      style={{
+        width: 48,
+        borderRight: "1px solid var(--border)",
+        background: "var(--bg-elev)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "10px 0",
+        gap: 4,
+        flexShrink: 0,
+      }}
+    >
+      {ITEMS.map((it) => {
+        const href = `/projects/${projectId}${it.path ? "/" + it.path : ""}`;
+        const active = pathname === href || (it.path && pathname.startsWith(href));
+        return (
+          <Link
+            key={it.id}
+            href={href}
+            title={it.label}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 6,
+              cursor: "pointer",
+              background: active ? "var(--fg)" : "transparent",
+              color: active ? "var(--bg)" : "var(--fg-muted)",
+              display: "grid",
+              placeItems: "center",
+              textDecoration: "none",
+            }}
+          >
+            {it.icon()}
+          </Link>
+        );
+      })}
+      <div style={{ flex: 1 }} />
+      <button
+        title="히스토리"
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 6,
+          border: 0,
+          cursor: "pointer",
+          background: "transparent",
+          color: "var(--fg-muted)",
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        {Icons.history()}
+      </button>
+    </div>
+  );
+}

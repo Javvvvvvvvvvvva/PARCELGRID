@@ -1,0 +1,157 @@
+/**
+ * Project-level orchestrator.
+ *
+ * Runs the full engine for one parcel and a set of scenarios. Decides
+ * which scenario gets the "recommended" badge based on a composite score
+ * that weights profit, DSCR, and regulatory risk.
+ *
+ * The composite score is intentionally explicit and tunable here — an
+ * investment committee can argue with "we used these weights" but not
+ * with "the AI picked it".
+ */
+
+import { calculateScenario } from "@/lib/finance/scenario";
+import { generatePFSchedule } from "@/lib/finance/cashflow";
+import { calculateTaxes } from "@/lib/finance/tax";
+import { checkCompliance, complianceScore } from "@/lib/finance/compliance";
+import {
+  toScenarioVM,
+  toCashflowVM,
+  toRiskVMs,
+  toParcelVM,
+  type ScenarioVM,
+  type CashflowRowVM,
+  type RiskVM,
+  type ParcelVM,
+} from "@/lib/adapters/view-model";
+import type { Parcel, Scenario } from "@/lib/finance/types";
+
+export interface ProjectComputed {
+  parcel: ParcelVM;
+  scenarios: ScenarioVM[];
+  /** PF schedule for the recommended scenario, ready for the dashboard chart. */
+  pfSchedule: CashflowRowVM[];
+  /** Risk findings shared at the parcel level (zoning-derived). */
+  parcelRisks: RiskVM[];
+  meta: {
+    lastSyncedAt: string;
+    version: string;
+  };
+}
+
+export interface ComputeOptions {
+  /** Project start ISO date for cashflow phasing. */
+  startDate?: string;
+  /** Force a specific scenario as recommended. */
+  recommendedId?: string;
+}
+
+export function computeProject(
+  parcel: Parcel,
+  scenarios: Scenario[],
+  options: ComputeOptions = {}
+): ProjectComputed {
+  // Compute each scenario
+  const computed = scenarios.map((scenario) => {
+    const result = calculateScenario({ parcel, scenario });
+    const compliance = checkCompliance({ parcel, program: scenario.program });
+    const score = complianceScore(compliance);
+    const taxes = calculateTaxes({
+      parcel,
+      result,
+      residentialSaleShare: scenario.program.mix.residentialSale,
+    });
+    const schedule = generatePFSchedule({
+      parcel,
+      scenario,
+      result,
+      startDate: options.startDate ?? parcel.acquired,
+    });
+    return { scenario, result, compliance, score, taxes, schedule };
+  });
+
+  // Decide the recommended scenario.
+  // Composite score = 0.5 × profit_rank + 0.3 × dscr_health + 0.2 × regulatory.
+  // We rank, not absolute, because profit scales with FAR but DSCR doesn't.
+  const recommendedIdx = options.recommendedId
+    ? computed.findIndex((c) => c.scenario.id === options.recommendedId)
+    : pickRecommended(computed);
+
+  const scenarioVMs = computed.map((c, i) =>
+    toScenarioVM(c.scenario, c.result, c.taxes, c.score, i === recommendedIdx)
+  );
+
+  // Parcel-level risks come from any scenario; zoning-only checks are
+  // invariant, but program-dependent ones (height, parking) we pull from
+  // the recommended scenario.
+  const recommended = computed[recommendedIdx];
+  const parcelRisks = toRiskVMs(recommended.compliance);
+  const parcel_ = toParcelVM(parcel, parcelRisks);
+
+  // PF schedule for the recommended scenario
+  const pfSchedule = toCashflowVM(recommended.schedule);
+
+  return {
+    parcel: parcel_,
+    scenarios: scenarioVMs,
+    pfSchedule,
+    parcelRisks,
+    meta: {
+      lastSyncedAt: new Date().toISOString(),
+      version: "v218",
+    },
+  };
+}
+
+function pickRecommended(
+  computed: ReturnType<typeof computeOne>[]
+): number {
+  // Rank each scenario by profit (higher = better), DSCR (higher = better,
+  // capped at 1.6 to avoid over-rewarding low-leverage scenarios), and
+  // regulatory score (higher = better).
+  const profits = computed.map((c) => c.result.profit);
+  const dscrs = computed.map((c) => Math.min(c.result.dscr, 1.6));
+  const scores = computed.map((c) => c.score);
+
+  const profitRank = rank(profits);
+  const dscrRank = rank(dscrs);
+  const regRank = rank(scores);
+
+  let bestIdx = 0;
+  let bestComposite = -Infinity;
+  for (let i = 0; i < computed.length; i++) {
+    const composite =
+      0.5 * profitRank[i] + 0.3 * dscrRank[i] + 0.2 * regRank[i];
+    if (composite > bestComposite) {
+      bestComposite = composite;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+// Type helper so pickRecommended's parameter type is inferable
+function computeOne(p: Parcel, s: Scenario) {
+  const r = calculateScenario({ parcel: p, scenario: s });
+  const c = checkCompliance({ parcel: p, program: s.program });
+  return {
+    scenario: s,
+    result: r,
+    compliance: c,
+    score: complianceScore(c),
+    taxes: calculateTaxes({ parcel: p, result: r }),
+    schedule: generatePFSchedule({
+      parcel: p,
+      scenario: s,
+      result: r,
+      startDate: p.acquired,
+    }),
+  };
+}
+
+/** Returns 0..1 normalized rank; higher value gets higher rank. */
+function rank(values: number[]): number[] {
+  if (values.length <= 1) return values.map(() => 1);
+  const sorted = [...values].sort((a, b) => a - b);
+  return values.map((v) => sorted.indexOf(v) / (values.length - 1));
+}

@@ -1,0 +1,1 @@
+{"response" : {"service" : {"name" : "data", "version" : "2.0", "operation" : "DescribeFeatureType", "time" : "1(ms)"}, "status" : "ERROR", "error" : {"level" : "1", "code" : "INVALID_RANGE", "text" : "request 파라미터의 값이 유효한 범위를 넘었습니다. 유효한 파라미터 값의 범위 : [GetFeature], 입력한 파라미터 값 : DescribeFeatureType"}}}
