@@ -141,7 +141,8 @@ export function estimateMarketPrice(
 
   // 추정 A: 공시지가 × 시군구 배율
   const { multiplier, tier } = locationMultiplier(address);
-  const fromPublicValue = Math.round(publicLandValueManwon * multiplier);
+  // 공시가가 만원/m² 단위이므로 lotAreaSqm을 곱해서 부지 전체 가격으로 변환
+  const fromPublicValue = Math.round(publicLandValueManwon * lotAreaSqm * multiplier);
 
   // 추정 B: 같은 지목 평당 중앙값 × 평수
   const targetCategory: JimokCategory =

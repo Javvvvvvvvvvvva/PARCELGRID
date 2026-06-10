@@ -1,0 +1,81 @@
+/* ============================================================
+   PARCELGRID — Design Tokens
+   Trustworthy. Analytical. Operator-focused.
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --bg:           oklch(0.985 0.002 80);
+  --bg-elev:      #ffffff;
+  --bg-sunken:    oklch(0.965 0.003 80);
+  --bg-rail:      oklch(0.975 0.003 80);
+  --bg-hover:     oklch(0.955 0.004 80);
+  --bg-active:    oklch(0.94 0.005 80);
+
+  /* Foreground */
+  --fg:          oklch(0.20 0.008 250);
+  --fg-muted:    oklch(0.42 0.008 250);
+  --fg-subtle:   oklch(0.58 0.006 250);
+  --fg-faint:    oklch(0.72 0.005 250);
+  --fg-onaccent: #ffffff;
+
+  /* Borders */
+  --border:        oklch(0.91 0.004 250);
+  --border-strong: oklch(0.85 0.005 250);
+  --border-faint:  oklch(0.94 0.003 250);
+
+  /* Accent */
+  --accent:        oklch(0.42 0.075 250);
+  --accent-hover:  oklch(0.36 0.08 250);
+  --accent-soft:   oklch(0.95 0.02 250);
+  --accent-fg:     oklch(0.35 0.09 250);
+
+  /* Semantic */
+  --pos:        oklch(0.48 0.10 155);
+  --pos-soft:   oklch(0.96 0.025 155);
+  --pos-fg:     oklch(0.40 0.10 155);
+
+  --neg:        oklch(0.50 0.13 25);
+  --neg-soft:   oklch(0.96 0.025 25);
+  --neg-fg:     oklch(0.45 0.13 25);
+
+  --warn:       oklch(0.62 0.13 75);
+  --warn-soft:  oklch(0.96 0.04 80);
+  --warn-fg:    oklch(0.50 0.13 60);
+
+  /* Typography */
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-serif: "IBM Plex Serif", "Noto Serif KR", Georgia, serif;
+
+  /* Sizing */
+  --r-sm: 3px;
+  --r:    5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--font-sans);
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "tnum", "cv11";
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; letter-spacing: -0.01em; }
+
+/* Scrollbar */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: oklch(0.85 0.005 250); border: 2px solid var(--bg-elev); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: oklch(0.75 0.006 250); }
+*::-webkit-scrollbar-track { background: transparent; }
