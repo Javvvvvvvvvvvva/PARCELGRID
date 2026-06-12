@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
     const computed = computeProject(parcel, scenarios, {
       transactions,
       parcelDong: parcelDong ?? "",
+      calculateMaxAcquisition: true, // 역산 활성화 (~100ms)
     });
 
     return NextResponse.json(computed);

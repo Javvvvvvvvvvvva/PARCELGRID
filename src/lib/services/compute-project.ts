@@ -14,6 +14,7 @@ import { calculateScenario } from "@/lib/finance/scenario";
 import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes } from "@/lib/finance/tax";
 import { checkCompliance, complianceScore } from "@/lib/finance/compliance";
+import { findMaxAcquisitionAll } from "@/lib/finance/max-acquisition";
 import {
   toScenarioVM,
   toCashflowVM,
@@ -37,6 +38,8 @@ export interface ProjectComputed {
   parcelRisks: RiskVM[];
   /** 실거래 비교 — 같은 법정동 / 시군구 최근 12개월. 백엔드에서 MOLIT 호출 후 주입. */
   comps: CompVM[];
+  /** 시나리오별 최대 시행 가능 인수가 (IRR 10/15/20% 역산). 백엔드에서 계산 후 주입. */
+  maxAcquisition: import("@/lib/finance/max-acquisition").ScenarioMaxAcquisition[];
   meta: {
     lastSyncedAt: string;
     version: string;
@@ -52,6 +55,8 @@ export interface ComputeOptions {
   transactions?: import("@/lib/integrations/molit").MolitTransaction[];
   /** 본인 부지의 법정동 (예: "역삼동") — 같은 동 표시용 */
   parcelDong?: string;
+  /** 최대 시행 가능 인수가 역산 (시나리오 × IRR 3개 = 12회 calculateScenario 호출, ~100ms) */
+  calculateMaxAcquisition?: boolean;
 }
 
 export function computeProject(
@@ -104,12 +109,18 @@ export function computeProject(
     ? toCompVMs(options.transactions, options.parcelDong ?? "")
     : [];
 
+  // 최대 시행 가능 인수가 역산 (옵션 — 12회 calculateScenario 호출)
+  const maxAcquisition = options.calculateMaxAcquisition
+    ? findMaxAcquisitionAll(parcel, scenarios)
+    : [];
+
   return {
     parcel: parcel_,
     scenarios: scenarioVMs,
     pfSchedule,
     parcelRisks,
     comps,
+    maxAcquisition,
     meta: {
       lastSyncedAt: new Date().toISOString(),
       version: "v218",

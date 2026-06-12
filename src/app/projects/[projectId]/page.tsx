@@ -23,6 +23,7 @@ import { ScenarioTable } from "@/components/ui/ScenarioTable";
 import { RiskMatrix } from "@/components/ui/RiskMatrix";
 import { CompsTable } from "@/components/ui/CompsTable";
 import { PFChart } from "@/components/ui/PFChart";
+import { MaxAcquisitionPanel } from "@/components/ui/MaxAcquisitionPanel";
 import { won, pct, num, koreanDate } from "@/lib/utils/format";
 
 export default function DashboardPage({
@@ -119,6 +120,14 @@ export default function DashboardPage({
 
         {/* 투자 요약 박스 (살아있는 InvestmentSummary) */}
         <InvestmentSummary scenarios={data.scenarios} defaultScenarioId={rec.id} />
+
+        {/* 최대 시행 가능 인수가 — 본인 도구의 진짜 차별화 */}
+        {data.maxAcquisition && data.maxAcquisition.length > 0 && (
+          <MaxAcquisitionPanel
+            analyses={data.maxAcquisition}
+            marketPrice={data.parcel.acquiredPrice}
+          />
+        )}
 
         {/* 시나리오 테이블 + PF 미니 차트 (가로 분할) */}
         <div
