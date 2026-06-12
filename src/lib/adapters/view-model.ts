@@ -207,6 +207,61 @@ export function toRiskVMs(checks: RiskCheck[]): RiskVM[] {
   }));
 }
 
+
+// ─────────────────────────── Comp transaction VM ───────────────────────────
+
+/**
+ * 실거래 비교 표시용. MOLIT 거래를 대시보드/실거래비교 화면에서 보기 좋게 변환.
+ * 거리 정보는 MOLIT가 좌표를 안 줘서 — 본인 부지와 같은 동이면 distanceKm=0, 다른 동이면 null.
+ */
+export interface CompVM {
+  id: string;
+  date: string;            // ISO yyyy-mm-dd
+  address: string;         // "역삼동 813-4" 같이
+  type: string;            // 한글 한 거 ("오피스텔", "도시형생활", 등)
+  lotArea: number;         // 전용/대지 면적 m²
+  priceWon: number;        // 원 단위
+  pricePerPyeong: number;  // 만원/평
+  distanceKm: number | null; // null = MOLIT가 좌표 없음
+  sameDong: boolean;       // 본인 부지와 같은 법정동인가
+}
+
+const TYPE_KR: Record<string, string> = {
+  land: "토지",
+  apartment: "아파트",
+  officetel: "오피스텔",
+  villa: "도시형생활",
+  commercial: "상업/근생",
+  office: "사무실",
+};
+
+const SQM_PER_PYEONG = 3.305785;
+
+export function toCompVMs(
+  transactions: import("@/lib/integrations/molit").MolitTransaction[],
+  parcelDong: string
+): CompVM[] {
+  return transactions
+    .filter((t) => t.priceManwon > 0 && t.exclusiveArea > 0)
+    .map((t) => {
+      const pyeong = t.exclusiveArea / SQM_PER_PYEONG;
+      const pricePerPyeong = Math.round(t.priceManwon / pyeong);
+      const sameDong = parcelDong ? t.dongName === parcelDong : false;
+      return {
+        id: t.externalId,
+        date: t.date,
+        address: `${t.dongName} ${t.jibun}`.trim(),
+        type: TYPE_KR[t.type] ?? t.type,
+        lotArea: t.exclusiveArea,
+        priceWon: t.priceManwon * 10_000,
+        pricePerPyeong,
+        distanceKm: null, // MOLIT가 좌표 없음
+        sameDong,
+      };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date)); // 최신 순
+}
+
 // ─────────────────────────── Parcel VM ───────────────────────────
 
 export interface ParcelVM extends Parcel {

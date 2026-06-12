@@ -80,6 +80,13 @@ export function useDynamicProject(projectId: string) {
       }
 
       // Build the request body
+      // address에서 법정동 추출 (예: "서울 도봉구 쌍문동 281-23" → "쌍문동")
+      const parcelDong = (() => {
+        const parts = stored.address.split(/\s+/);
+        const dong = parts.find((p) => p.endsWith("동") || p.endsWith("읍") || p.endsWith("면"));
+        return dong ?? "";
+      })();
+
       const body = {
         parcel: {
           id: stored.id,
@@ -98,7 +105,10 @@ export function useDynamicProject(projectId: string) {
           estMarketPrice: stored.estMarketPrice,
           acquired: stored.acquired,
           acquiredPrice: stored.acquiredPrice,
+          demolitionCost: (stored as { demolitionCost?: number }).demolitionCost,
         },
+        lawdCd: stored.lawdCd,
+        parcelDong,
       };
 
       const res = await fetch("/api/projects/dynamic", {

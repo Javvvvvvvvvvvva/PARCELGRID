@@ -165,7 +165,7 @@ function PFView({
           </div>
         </div>
         <div style={{ padding: "20px 16px" }}>
-          <PFChart rows={pfRows} height={280} showAxis showLegend />
+          <PFChart rows={pfRows} height={280} variant="full" />
         </div>
         <table className="ui-table">
           <thead>

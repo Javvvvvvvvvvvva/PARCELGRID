@@ -23,6 +23,8 @@ import {
   type CashflowRowVM,
   type RiskVM,
   type ParcelVM,
+  toCompVMs,
+  type CompVM,
 } from "@/lib/adapters/view-model";
 import type { Parcel, Scenario } from "@/lib/finance/types";
 
@@ -33,6 +35,8 @@ export interface ProjectComputed {
   pfSchedule: CashflowRowVM[];
   /** Risk findings shared at the parcel level (zoning-derived). */
   parcelRisks: RiskVM[];
+  /** 실거래 비교 — 같은 법정동 / 시군구 최근 12개월. 백엔드에서 MOLIT 호출 후 주입. */
+  comps: CompVM[];
   meta: {
     lastSyncedAt: string;
     version: string;
@@ -44,6 +48,10 @@ export interface ComputeOptions {
   startDate?: string;
   /** Force a specific scenario as recommended. */
   recommendedId?: string;
+  /** 실거래 transactions — 백엔드에서 MOLIT 호출 결과 주입 */
+  transactions?: import("@/lib/integrations/molit").MolitTransaction[];
+  /** 본인 부지의 법정동 (예: "역삼동") — 같은 동 표시용 */
+  parcelDong?: string;
 }
 
 export function computeProject(
@@ -91,11 +99,17 @@ export function computeProject(
   // PF schedule for the recommended scenario
   const pfSchedule = toCashflowVM(recommended.schedule);
 
+  // 실거래 변환 (옵션 — 백엔드에서 transactions 주입한 경우만)
+  const comps = options.transactions
+    ? toCompVMs(options.transactions, options.parcelDong ?? "")
+    : [];
+
   return {
     parcel: parcel_,
     scenarios: scenarioVMs,
     pfSchedule,
     parcelRisks,
+    comps,
     meta: {
       lastSyncedAt: new Date().toISOString(),
       version: "v218",
