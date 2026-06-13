@@ -17,7 +17,7 @@ import type { Parcel, Scenario } from "@/lib/finance/types";
 import { defaultAssumptions, defaultProgram } from "@/lib/finance/scenario";
 
 export interface GenerateOptions {
-  scenarioTypes?: Array<"officetel" | "urban-housing" | "retail" | "coliving" | "office">;
+  scenarioTypes?: Array<"officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family">;
 }
 
 type PricingTier =
@@ -74,7 +74,7 @@ function buildScenario(
   name: string,
   shortName: string,
   tag: string,
-  type: "officetel" | "urban-housing" | "retail" | "coliving" | "office",
+  type: "officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family",
   parcel: Parcel,
   tier: PricingTier
 ): Scenario {
@@ -108,6 +108,18 @@ function buildScenario(
     salePricePerSqM = 0;
     vacancyRate = 8.0;
     capRate = 5.5;
+  } else if (type === "single-house") {
+    // 단독주택 신축매매 — 100% 매매. 평당 1,800만 (지역 multiplier 별도 적용)
+    salePricePerSqM = 18_000_000;
+    rentPerSqMMonth = 0;
+    vacancyRate = 0;
+    capRate = 0;
+  } else if (type === "multi-family") {
+    // 다가구주택 신축매매 — 100% 매매. 평당 1,500만 (분양보다 약간 낮음 — 통매매)
+    salePricePerSqM = 15_000_000;
+    rentPerSqMMonth = 0;
+    vacancyRate = 0;
+    capRate = 0;
   }
 
   // Outer regions have higher vacancy risk
@@ -174,12 +186,77 @@ function pickScenariosForZoning(zoning: string): Array<{
   ];
 }
 
+
+/**
+ * 부지 크기에 맞는 시나리오 선택 (Smart Picker).
+ *
+ * 본인 도구의 진짜 차별화:
+ * - 작은 부지 (< 50평): 단독 + 다가구 + 근생
+ * - 중간 부지 (50-100평): 다가구 + 단독 + 도시형 + 근생
+ * - 큰 부지 (100-200평): 도시형 + 다가구 + 오피스텔 + 코리빙
+ * - 대형 부지 (200평+): 기존 다세대 4종
+ *
+ * 다른 PropTech는 부지 크기 무시하고 다세대만 시도 → 작은 부지에서 의미없는 답.
+ * 본인 도구는 부지에 맞는 사업만 제안 → 정직한 답.
+ */
+function pickScenariosForSize(
+  parcel: Parcel,
+  zoningPicks: Array<{
+    id: string;
+    name: string;
+    shortName: string;
+    tag: string;
+    type: "officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family";
+  }>
+): typeof zoningPicks {
+  const lotPyeong = parcel.lotArea / 3.305785;
+
+  // 주거지역에서만 단독/다가구 의미 있음
+  const isResidential = /주거지역/.test(parcel.zoning);
+  if (!isResidential) return zoningPicks;
+
+  if (lotPyeong < 50) {
+    // 작은 부지: 다세대 시행 거의 안 됨 → 단독/다가구 위주
+    return [
+      { id: "S1", name: "단독주택 신축매매", shortName: "S1", tag: "표준형", type: "single-house" },
+      { id: "S2", name: "다가구주택 신축매매", shortName: "S2", tag: "수익형", type: "multi-family" },
+      { id: "S3", name: "근린생활시설", shortName: "S3", tag: "보수형", type: "retail" },
+      { id: "S4", name: "단독주택 (다층형)", shortName: "S4", tag: "공격형", type: "single-house" },
+    ];
+  }
+
+  if (lotPyeong < 100) {
+    // 중간 부지: 다가구 + 단독 + 도시형 일부
+    return [
+      { id: "S1", name: "다가구주택 신축매매", shortName: "S1", tag: "수익형", type: "multi-family" },
+      { id: "S2", name: "단독주택 신축매매", shortName: "S2", tag: "안정형", type: "single-house" },
+      { id: "S3", name: "도시형생활주택", shortName: "S3", tag: "고수익형", type: "urban-housing" },
+      { id: "S4", name: "근린생활시설", shortName: "S4", tag: "보수형", type: "retail" },
+    ];
+  }
+
+  if (lotPyeong < 200) {
+    // 큰 부지: 다세대 위주 + 다가구 한 개
+    return [
+      { id: "S1", name: "도시형생활주택", shortName: "S1", tag: "안정형", type: "urban-housing" },
+      { id: "S2", name: "오피스텔 + 근생", shortName: "S2", tag: "고수익형", type: "officetel" },
+      { id: "S3", name: "다가구주택 신축매매", shortName: "S3", tag: "회수형", type: "multi-family" },
+      { id: "S4", name: "근린생활시설", shortName: "S4", tag: "보수형", type: "retail" },
+    ];
+  }
+
+  // 200평 이상: 기존 4종 그대로
+  return zoningPicks;
+}
+
 export function generateScenariosForParcel(
   parcel: Parcel,
   options: GenerateOptions = {}
 ): Scenario[] {
   const tier = pricingTier(parcel.address);
-  const picks = pickScenariosForZoning(parcel.zoning);
+  const zoningPicks = pickScenariosForZoning(parcel.zoning);
+  // Smart Picker: 부지 크기 따라 시나리오 자동 조정
+  const picks = pickScenariosForSize(parcel, zoningPicks);
 
   let filtered = picks;
   if (options.scenarioTypes && options.scenarioTypes.length > 0) {

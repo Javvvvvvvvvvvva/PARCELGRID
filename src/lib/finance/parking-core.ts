@@ -37,6 +37,8 @@ const PARKING_PER_SQM: Record<BuildingType, number> = {
   "urban-housing": 85,
   // 근린생활시설: 시설면적 134m²당 1대
   retail: 134,
+  "single-house": 250, // 단독: 1-2대 (가구당) — 가장 적음
+  "multi-family": 130, // 다가구: 호당 0.5-0.7대
   // 사무실/업무시설: 시설면적 134m²당 1대
   office: 134,
   // 복합용도: 가중평균 (주거+상가 절반씩 가정)
@@ -128,8 +130,49 @@ export interface CoreResult {
 
 export function calculateCore(
   floorsAbove: number,
-  gfa: number
+  gfa: number,
+  type?: BuildingType
 ): CoreResult {
+  // ─── 단독주택 — 엘리베이터 X, 계단 1개, 공용 거의 없음 ───
+  // 단독은 1가구라서 엘리베이터 의무 X, 공용 복도 없음, 화장실 1-2개만
+  if (type === "single-house") {
+    const stairArea = STAIR_AREA_PER_FLOOR * floorsAbove;
+    const commonArea = gfa * 0.03; // 공용 3% (현관, 기계실 약간)
+    const totalCoreArea = stairArea + commonArea;
+    return {
+      elevatorArea: 0,
+      stairArea,
+      commonArea,
+      totalCoreArea,
+      elevatorCount: 0,
+      stairCount: 1,
+      reasoning: `단독주택: 엘리베이터 X · 계단 1개 × ${floorsAbove}층 + 공용 3% (효율 ~95%)`,
+    };
+  }
+
+  // ─── 다가구주택 — 6층 미만 엘리베이터 X, 공용 7% ───
+  // 다가구는 1동 통매매, 호수 5-15개. 보통 3-5층이라 엘리베이터 의무 X
+  if (type === "multi-family") {
+    const needsElevator = floorsAbove >= 6 || gfa >= 2000;
+    const elevatorCount = needsElevator ? 1 : 0;
+    const elevatorArea = elevatorCount * ELEVATOR_AREA_PER_FLOOR * floorsAbove;
+    const stairArea = STAIR_AREA_PER_FLOOR * floorsAbove; // 계단 1개 (5층 이하)
+    const commonArea = gfa * 0.07; // 공용 7% (복도 + 화장실 + 기계실)
+    const totalCoreArea = elevatorArea + stairArea + commonArea;
+    return {
+      elevatorArea,
+      stairArea,
+      commonArea,
+      totalCoreArea,
+      elevatorCount,
+      stairCount: 1,
+      reasoning: needsElevator
+        ? `다가구: 엘리베이터 1대 + 계단 1개 × ${floorsAbove}층 + 공용 7% (효율 ~83%)`
+        : `다가구: 엘리베이터 X · 계단 1개 × ${floorsAbove}층 + 공용 7% (저층, 효율 ~88%)`,
+    };
+  }
+
+  // ─── 기존 다세대 (오피스텔/도시형/근생/코리빙/사무실) ───
   // 엘리베이터 의무: 6층 이상 또는 연면적 2,000m² 이상
   const needsElevator = floorsAbove >= 6 || gfa >= 2000;
   // 16층 이상: 비상용 엘리베이터 추가
@@ -189,7 +232,7 @@ export function calculateEffectiveGFA(
   rawGFA: number
 ): EffectiveGFAResult {
   const parking = calculateParking(program, rawGFA);
-  const core = calculateCore(program.floorsAbove, rawGFA);
+  const core = calculateCore(program.floorsAbove, rawGFA, program.type);
 
   // 보수적 계산: 주차 + 코어 + 공용 모두 GFA에서 차감
   const effectiveGFA = Math.max(0, rawGFA - parking.parkingArea - core.totalCoreArea);

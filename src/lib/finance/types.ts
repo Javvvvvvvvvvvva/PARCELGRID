@@ -56,7 +56,9 @@ export type BuildingType =
   | "retail" // 근린생활시설
   | "coliving" // 공유주거
   | "office"
-  | "mixed";
+  | "mixed"
+  | "single-house" // 단독주택 (신축매매) — 작은 부지 30-80평
+  | "multi-family"; // 다가구주택 (신축매매) — 중간 부지 50-150평
 
 export interface BuildingProgram {
   type: BuildingType;

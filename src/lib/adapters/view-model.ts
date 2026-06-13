@@ -35,6 +35,8 @@ const BUILDING_TYPE_KR: Record<BuildingType, string> = {
   coliving: "공유주거",
   office: "업무시설",
   mixed: "복합용도",
+  "single-house": "단독주택",
+  "multi-family": "다가구주택",
 };
 
 const RISK_LABEL_KR = {

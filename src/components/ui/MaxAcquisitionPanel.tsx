@@ -111,15 +111,15 @@ export function MaxAcquisitionPanel({
                   </span>
                 </Td>
                 <Td align="right" mono>
-                  {r20 ? won(r20.maxLandCost) : "—"}
+                  {r20 ? (r20.maxLandCost > 0 ? won(r20.maxLandCost) : <span style={{ color: "var(--fg-faint)" }}>불가</span>) : "—"}
                 </Td>
                 <Td align="right" mono>
-                  <span style={{ color: "var(--fg)", fontWeight: 500 }}>
-                    {r15 ? won(r15.maxLandCost) : "—"}
+                  <span style={{ color: r15 && r15.maxLandCost > 0 ? "var(--fg)" : "var(--fg-faint)", fontWeight: 500 }}>
+                    {r15 ? (r15.maxLandCost > 0 ? won(r15.maxLandCost) : "불가") : "—"}
                   </span>
                 </Td>
                 <Td align="right" mono>
-                  {r10 ? won(r10.maxLandCost) : "—"}
+                  {r10 ? (r10.maxLandCost > 0 ? won(r10.maxLandCost) : <span style={{ color: "var(--fg-faint)" }}>불가</span>) : "—"}
                 </Td>
                 <Td align="right" mono>
                   <span

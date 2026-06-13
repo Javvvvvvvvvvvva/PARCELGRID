@@ -203,7 +203,23 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   }
 
   // ─── 8. Metrics ─────────────────────────────────────────────────────
-  const monthlyIRR = irr(monthlyCF, 0.01) ?? ZERO;
+  // IRR이 수렴 안 하면 (보통 손실 시나리오) — 손실률 기반 음수 IRR 추정.
+  // 손실 시나리오에서 IRR을 0이 아닌 진짜 음수로 표시해야 정직.
+  let monthlyIRR = irr(monthlyCF, 0.01);
+  if (monthlyIRR === null || monthlyIRR === undefined) {
+    // Fallback: equity 회수율로 음수 IRR 추정
+    const totalPositiveFlows = monthlyCF.filter((cf) => cf.gt(0)).reduce((s, cf) => s.plus(cf), ZERO);
+    const recoveryRate = equity.gt(0) ? totalPositiveFlows.div(equity).toNumber() : 0;
+    // recoveryRate < 1 = 손실. 연 IRR 추정: (recoveryRate)^(1/years) - 1
+    const totalMonths = monthlyCF.length;
+    const years = totalMonths / 12;
+    if (recoveryRate > 0 && years > 0) {
+      const annualRate = Math.pow(recoveryRate, 1 / years) - 1;
+      monthlyIRR = D(Math.pow(1 + annualRate, 1 / 12) - 1);
+    } else {
+      monthlyIRR = D(-0.99 / 12); // 거의 -100% (최악)
+    }
+  }
   const annualIRR = annualizeIRR(monthlyIRR, 12).times(HUNDRED);
 
   // Equity multiple = total positive flows / equity
@@ -332,6 +348,26 @@ export function defaultProgram(
         floorsBelow: 1,
         units: { residential: 46, retail: 2 },
         mix: { residentialSale: 0, residentialLease: 0.92, retail: 0.08 },
+      };
+    case "single-house":
+      return {
+        type,
+        far: Math.min(maxFAR, 180), // 단독: 150-200%
+        bcr: Math.min(maxBCR, 50),
+        floorsAbove: 3, // 단독 2-4층
+        floorsBelow: 0,
+        units: { residential: 1, retail: 0 },
+        mix: { residentialSale: 1.0, residentialLease: 0, retail: 0 }, // 100% 매매
+      };
+    case "multi-family":
+      return {
+        type,
+        far: Math.min(maxFAR, 220), // 다가구: 200-250%
+        bcr: Math.min(maxBCR, 55),
+        floorsAbove: 4, // 다가구 3-5층
+        floorsBelow: 1,
+        units: { residential: 10, retail: 0 }, // 호수 5-15
+        mix: { residentialSale: 1.0, residentialLease: 0, retail: 0 }, // 통매매
       };
     case "office":
       return {
