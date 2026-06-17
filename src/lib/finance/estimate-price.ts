@@ -38,10 +38,16 @@ export interface EstimatePriceResult {
   estimatedPricePerPyeong: number;
   method: EstimateMethod;
   confidence: EstimateConfidence;
+  /** 실거래 중앙값 평당 (만원/평) — 참고용 */
+  marketMedianPerPyeong?: number;
+  /** 실거래 중앙값 × 부지 평수 (만원) — 추정가와 비교용 */
+  marketMedianManwon?: number;
   details: {
     fromPublicValue: number;
     fromComps: number;
     locationMultiplier: number;
+    sizeMultiplier: number;
+    finalMultiplier: number;
     locationTier: string;
     sampleSize: number;
     medianPricePerPyeong: number;
@@ -126,6 +132,25 @@ function locationMultiplier(address: string): {
   return { multiplier: 1.5, tier: "rural" };
 }
 
+/**
+ * 부지 크기별 size multiplier — 작은 부지는 시장가 추정 낮춤.
+ *
+ * 이유: 시군구 multiplier는 시행 가능 부지(200평+) 기준으로 calibrated.
+ * 작은 부지는:
+ * - 매도자/매수자 수 적음 → 거래 빈도 낮음
+ * - 단독/다가구 신축매매만 가능 → 다세대보다 매출 작음
+ * - 시장 프리미엄 적게 적용됨
+ */
+function sizeMultiplier(lotPyeong: number): number {
+  if (lotPyeong < 20) return 0.55;   // 매우 작은 부지: 매도가 어려움
+  if (lotPyeong < 30) return 0.65;   // 작은 부지 (단독 1동 최소 크기)
+  if (lotPyeong < 50) return 0.78;   // 단독 신축매매 주 영역
+  if (lotPyeong < 80) return 0.88;   // 다가구 신축매매 영역
+  if (lotPyeong < 150) return 0.96;  // 중간 부지
+  if (lotPyeong < 300) return 1.00;  // 표준 (시군구 multiplier 그대로)
+  return 1.05;                        // 큰 부지: 시행 프리미엄
+}
+
 export function estimateMarketPrice(
   input: EstimatePriceInput
 ): EstimatePriceResult {
@@ -139,10 +164,12 @@ export function estimateMarketPrice(
 
   const lotPyeong = lotAreaSqm / SQM_PER_PYEONG;
 
-  // 추정 A: 공시지가 × 시군구 배율
-  const { multiplier, tier } = locationMultiplier(address);
+  // 추정 A: 공시지가 × 시군구 배율 × 부지 크기 보정
+  const { multiplier: locationMult, tier } = locationMultiplier(address);
+  const sizeMult = sizeMultiplier(lotPyeong);
+  const finalMultiplier = locationMult * sizeMult;
   // 공시가가 만원/m² 단위이므로 lotAreaSqm을 곱해서 부지 전체 가격으로 변환
-  const fromPublicValue = Math.round(publicLandValueManwon * lotAreaSqm * multiplier);
+  const fromPublicValue = Math.round(publicLandValueManwon * lotAreaSqm * finalMultiplier);
 
   // 추정 B: 같은 지목 평당 중앙값 × 평수
   const targetCategory: JimokCategory =
@@ -174,20 +201,38 @@ export function estimateMarketPrice(
   let method: EstimateMethod;
   let confidence: EstimateConfidence;
 
+  // 결합 로직: 실거래가 많을수록 comps 가중치 높임 (max 대신 가중평균)
   if (sameJimokTxns.length < 5) {
     estimatedPriceManwon = fromPublicValue;
     method = "by-publicvalue";
     confidence = "low";
+  } else if (fromComps <= 0) {
+    estimatedPriceManwon = fromPublicValue;
+    method = "by-publicvalue";
+    confidence = "medium";
   } else {
     const ratio = fromComps / fromPublicValue;
     if (ratio < 0.3 || ratio > 3.0) {
+      // 이상치: 공시가 기반 사용 (실거래가 너무 튐)
       estimatedPriceManwon = fromPublicValue;
       method = "by-publicvalue";
       confidence = "medium";
     } else {
-      estimatedPriceManwon = Math.max(fromComps, fromPublicValue);
+      // 정상: 가중평균 (거래 많을수록 comps 가중치 높임)
+      const compsWeight = Math.min(0.7, sameJimokTxns.length / 30);
+      const pubWeight = 1 - compsWeight;
+      estimatedPriceManwon = Math.round(
+        fromComps * compsWeight + fromPublicValue * pubWeight
+      );
       method = "hybrid";
-      confidence = sameJimokTxns.length >= 20 ? "high" : "medium";
+      // 신뢰도: 거래 수 + 부지 크기 둘 다 고려
+      if (sameJimokTxns.length >= 20 && lotPyeong >= 50) {
+        confidence = "high";
+      } else if (lotPyeong < 30) {
+        confidence = "low"; // 작은 부지는 항상 신뢰도 낮음
+      } else {
+        confidence = "medium";
+      }
     }
   }
 
@@ -197,12 +242,16 @@ export function estimateMarketPrice(
   return {
     estimatedPriceManwon,
     estimatedPricePerPyeong,
+    marketMedianPerPyeong: medianPricePerPyeong, // 실거래 중앙값 평당 (참고용)
+    marketMedianManwon: medianPricePerPyeong > 0 ? Math.round(medianPricePerPyeong * lotPyeong) : 0,
     method,
     confidence,
     details: {
       fromPublicValue,
       fromComps,
-      locationMultiplier: multiplier,
+      locationMultiplier: locationMult,
+      sizeMultiplier: sizeMult,
+      finalMultiplier,
       locationTier: tier,
       sampleSize: sameJimokTxns.length,
       medianPricePerPyeong: Math.round(medianPricePerPyeong),
