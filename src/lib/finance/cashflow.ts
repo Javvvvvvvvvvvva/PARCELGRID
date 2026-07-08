@@ -145,12 +145,14 @@ export function generatePFSchedule(input: ScheduleInput): PFSchedule {
 
 function addQuarters(d: Date, q: number): Date {
   const out = new Date(d);
-  out.setMonth(out.getMonth() + q * 3);
+  out.setUTCMonth(out.getUTCMonth() + q * 3);
   return out;
 }
 
 function formatQuarter(d: Date): string {
-  const y = d.getFullYear();
-  const q = Math.floor(d.getMonth() / 3) + 1;
+  // UTC 기준 — 서버 타임존과 무관하게 동일한 분기 라벨 보장.
+  // (예: "2025-07-01"은 어떤 타임존에서도 항상 2025-Q3)
+  const y = d.getUTCFullYear();
+  const q = Math.floor(d.getUTCMonth() / 3) + 1;
   return `${y}-Q${q}`;
 }

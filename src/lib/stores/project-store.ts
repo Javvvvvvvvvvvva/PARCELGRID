@@ -29,6 +29,9 @@ export interface EnvelopePlan {
   scenarioType: "single-house" | "multi-family" | "retail" | null;
   floors: number;
   units: number;
+  /** 선택한 신축 상품 유형 기준 세대당 면적 (㎡) — 세대수 산정 기준 */
+  unitAreaSqm: number;
+  /** 실제 평균 세대당 면적 (연면적 ÷ 세대수) — 결과값 */
   avgUnitAreaSqm: number;
   requiredCars: number;
 }
