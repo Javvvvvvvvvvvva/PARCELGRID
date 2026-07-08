@@ -74,8 +74,18 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   const effective = calculateEffectiveGFA(program, gfa.toNumber());
   const usableGFA = D(effective.effectiveGFA);
 
-  // Allocate USABLE GFA across use types (revenue side)
-  const gfaSale = usableGFA.times(D(program.mix.residentialSale));
+  // 안전망: 분양가능면적이 0/음수면 이 규모로는 시행 불가 (조용한 0원 매출 방지)
+  const viable = effective.effectiveGFA > 0;
+  const viabilityNote = viable
+    ? undefined
+    : "주차·코어가 연면적을 초과 — 이 층수/규모로는 분양가능면적이 없습니다";
+
+  // Allocate GFA across use types (revenue side)
+  // 통매각(sale): 전체 연면적 기준 — Comparable 매각 단가가 실거래 "전체 연면적"
+  //   기준으로 산정되므로 면적 기준을 일치시킴 (C 확정). 복도·계단·코어 포함 —
+  //   시장에서 통매각은 연면적 기준으로 거래됨. usable을 곱하면 이중 할인(매출 과소).
+  // 임대·근생: usable 기준 유지 (실사용 면적이 수익 창출 — 분양·임대 모델 개념).
+  const gfaSale = gfa.times(D(program.mix.residentialSale));
   const gfaLease = usableGFA.times(D(program.mix.residentialLease));
   const gfaRetail = usableGFA.times(D(program.mix.retail));
 
@@ -258,6 +268,8 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
 
   return {
     scenarioId: scenario.id,
+    viable,
+    viabilityNote,
     gfa: toManWon(gfa),
     effectiveGFA: effective.effectiveGFA,
     efficiencyRatio: effective.efficiencyRatio,
@@ -279,6 +291,15 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     totalCost: toManWon(totalCost),
 
     profit: toManWon(profit),
+    // 공사비 범위 손익 (Low -15% / High +20% — 상방 리스크 비대칭, 금융비 2차 효과 미반영)
+    profitAtLowCost: toManWon(
+      profit.plus(constructionCost.times(D(1 - CONST_COST_RANGE.low)))
+    ),
+    profitAtHighCost: toManWon(
+      profit.minus(constructionCost.times(D(CONST_COST_RANGE.high - 1)))
+    ),
+    constructionCostLow: toManWon(constructionCost.times(D(CONST_COST_RANGE.low))),
+    constructionCostHigh: toManWon(constructionCost.times(D(CONST_COST_RANGE.high))),
     profitMargin: toPct(profitMargin),
     equity: toManWon(equity),
     pfLoan: toManWon(pfLoan),
@@ -402,18 +423,38 @@ export function defaultProgram(
  *   - PF rate → main bank indication
  *   - const cost → 건설기술연구원 quarterly + RFQ
  */
+/**
+ * 공사비 범위 계수 (C 실무 기준: Low -15% / High +20%).
+ * 비대칭 — 마감·지하·흙막이·인건비·민원·현장 접근성으로 상방 리스크가 더 큼.
+ * softCost·contingency는 hardCost 비율이라 자동 연동. 금융비 2차 효과는 미반영(근사).
+ */
+export const CONST_COST_RANGE = { low: 0.85, high: 1.2 } as const;
+
+/**
+ * 기본 가정값 — 서울 외곽 소형 주거(다가구·다세대) 신축 기준.
+ * 모든 값은 "가정값"이며 출처·성격은 ASSUMPTION_META 참조 (C 원칙: 근거 없는 숫자 금지).
+ * 사용자가 overrides 화면에서 조정 가능. 정확한 견적·시세 아님.
+ */
 export function defaultAssumptions(): AssumptionSet {
   return {
-    rentPerSqMMonth: 41_000,
-    salePricePerSqM: 18_500_000,
+    // 임대료: 서울 외곽 소형주택 월세 수준 (33㎡ 원룸 월 약 70만) — 지역 시세로 조정 필요
+    rentPerSqMMonth: 21_000,
+    // 매각 단가(통매각 기준): 다가구는 구분분양 불가 — 건물 전체 통매각 평단가.
+    // 도봉 쌍문동 다가구 매매 사례 평당 약 1,050~1,621만 참고한 보수값 (평당 약 1,490만).
+    // 주변 신축 실거래 기반 자동 보정 예정 (C단계).
+    salePricePerSqM: 4_500_000,
     vacancyRate: 4.5,
-    capRate: 4.8,
+    // Cap rate: 서울 주거 수익률 수준
+    capRate: 4.5,
 
-    constCostPerSqM: 4_850_000,
-    softCostRate: 12, // 12% of hard cost
-    contingencyRate: 5,
+    // 공사비: 한국부동산원 건물신축단가표 주거용 RC 평균 + 2026 자재·인건비 상승 반영
+    // (평당 약 760만). 구조·마감·지하·ELV로 달라짐 — 견적 아님, 범위 산정 참고값.
+    constCostPerSqM: 2_300_000,
+    softCostRate: 12, // 설계·감리·인허가 등 — 공사비 대비 비율 (공공 요율 참고)
+    contingencyRate: 5, // 예비비 5~10% 범위의 하단
 
-    ltcTarget: 73,
+    // PF: 통상 LTC 60~70%
+    ltcTarget: 70,
     interestRate: 5.8,
     equityIRR: 15,
 
@@ -425,3 +466,71 @@ export function defaultAssumptions(): AssumptionSet {
     saleOutMonths: 6,
   };
 }
+
+/** 가정값의 성격 분류 (C 원칙 — 하드코딩 숨김 금지, 출처·계산식 표시) */
+export interface AssumptionMeta {
+  label: string;
+  unit: string;
+  /** 참고단가=공공 단가표 기반 / 시장값권장=실거래·시세로 대체해야 / 가정값=실무 관행 */
+  kind: "참고 단가" | "시장값 권장" | "가정값";
+  basis: string;
+}
+
+export const ASSUMPTION_META: Partial<Record<keyof AssumptionSet, AssumptionMeta>> = {
+  constCostPerSqM: {
+    label: "공사비",
+    unit: "원/㎡",
+    kind: "참고 단가",
+    basis:
+      "한국부동산원 건물신축단가표(주거용 RC 평균) + 2026 자재·인건비 상승 반영. 구조·마감·지하 여부에 따라 달라지는 개략값 — 시공사 견적 아님.",
+  },
+  salePricePerSqM: {
+    label: "매각 단가 (통매각)",
+    unit: "원/㎡",
+    kind: "시장값 권장",
+    basis:
+      "다가구주택은 단독주택 분류로 구분분양 불가 — 건물 전체 통매각 기준 연면적 평단가. 도봉 쌍문동 다가구 매매 사례(평당 약 1,050~1,621만)를 참고한 보수값. 주변 신축 실거래 기반 자동 보정 예정.",
+  },
+  rentPerSqMMonth: {
+    label: "임대료",
+    unit: "원/㎡·월",
+    kind: "시장값 권장",
+    basis: "서울 외곽 소형주택 월세 수준 가정. 지역 시세 기준으로 조정 필요.",
+  },
+  vacancyRate: {
+    label: "공실률",
+    unit: "%",
+    kind: "가정값",
+    basis: "임대 안정화 후 통상 공실 가정.",
+  },
+  capRate: {
+    label: "Cap rate",
+    unit: "%",
+    kind: "가정값",
+    basis: "서울 주거 수익률 수준 가정. 매각가 산정에 사용.",
+  },
+  softCostRate: {
+    label: "설계·감리 등",
+    unit: "% of 공사비",
+    kind: "참고 단가",
+    basis: "설계·감리·인허가 부대비 — 공공 대가 요율 참고한 비율값.",
+  },
+  contingencyRate: {
+    label: "예비비",
+    unit: "% of 공사비",
+    kind: "가정값",
+    basis: "물가·설계변경 대응 5~10% 관행 범위의 하단.",
+  },
+  ltcTarget: {
+    label: "PF 비율(LTC)",
+    unit: "%",
+    kind: "가정값",
+    basis: "통상 60~70% 범위. 사업·신용에 따라 달라짐.",
+  },
+  interestRate: {
+    label: "PF 금리",
+    unit: "%",
+    kind: "시장값 권장",
+    basis: "브릿지·PF 금리는 시점·신용별 변동 — 금융기관 조건으로 조정 필요.",
+  },
+};

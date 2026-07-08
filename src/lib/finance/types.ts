@@ -1,3 +1,4 @@
+import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 /**
  * Core domain types for the PARCELGRID financial engine.
  *
@@ -25,6 +26,10 @@ export interface Parcel {
 
   // Geometry
   lotArea: SqM;
+  /** 필지 경계 폴리곤 [lng, lat][] (WGS84). 3D 매싱용. 옛 데이터엔 없을 수 있음 */
+  boundary?: [number, number][];
+  /** 부지 주변 도로 중심선 — 전면 식별용 */
+  roads?: { name: string | null; points: [number, number][] }[];
 
   // Zoning
   zoning: string; // e.g. "제3종일반주거지역"
@@ -38,6 +43,8 @@ export interface Parcel {
     side: number; // m
     rear: number; // m
   };
+  /** 기존 건물 정보 (MOLIT 건축물대장, 세대당 면적 산정용) */
+  currentBuilding?: BuildingLookupResult | null;
 
   landPrice: Won; // 공시지가 원/m²
   estMarketPrice: Won; // 실거래 추정 원/m²
@@ -168,6 +175,12 @@ export interface ScenarioResult {
 
   // Profitability
   profit: ManWon;
+  /** 공사비 Low(-15%) 적용 시 손익 — 근사 (금융비 2차 효과 미반영) */
+  profitAtLowCost?: ManWon;
+  /** 공사비 High(+20%) 적용 시 손익 — 근사 */
+  profitAtHighCost?: ManWon;
+  constructionCostLow?: ManWon;
+  constructionCostHigh?: ManWon;
   profitMargin: Pct;
   equity: ManWon;
   pfLoan: ManWon;
@@ -185,6 +198,10 @@ export interface ScenarioResult {
 
   // Timeline
   totalMonths: Months;
+
+  // Viability — effectiveGFA<=0 (코어/주차가 면적을 다 잡아먹음) 이면 false
+  viable: boolean;
+  viabilityNote?: string;
 }
 
 export interface CashflowRow {

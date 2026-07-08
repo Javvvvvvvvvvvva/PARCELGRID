@@ -20,9 +20,18 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools } from "zustand/middleware";
+import { devtools, persist } from "zustand/middleware";
 import type { AssumptionSet } from "@/lib/finance/types";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+
+export interface EnvelopePlan {
+  farPct: number;
+  scenarioType: "single-house" | "multi-family" | "retail" | null;
+  floors: number;
+  units: number;
+  avgUnitAreaSqm: number;
+  requiredCars: number;
+}
 
 export interface PendingOverride {
   scenarioId: string;
@@ -45,13 +54,20 @@ interface ProjectStore {
   clearOverride: (scenarioId: string, field: keyof AssumptionSet) => void;
   clearAllOverrides: () => void;
 
+  // envelope 건축 기획 (단일 진실 소스)
+  envelopePlan: EnvelopePlan | null;
+  setEnvelopePlan: (plan: EnvelopePlan) => void;
+  clearEnvelopePlan: () => void;
+
   // Which scenario is "focused" across screens
   activeScenarioId: string | null;
   setActiveScenarioId: (id: string | null) => void;
 }
 
 export const useProjectStore = create<ProjectStore>()(
-  devtools((set) => ({
+  devtools(
+    persist(
+      (set) => ({
     data: null,
     setData: (data) => set({ data }),
 
@@ -83,8 +99,18 @@ export const useProjectStore = create<ProjectStore>()(
     clearAllOverrides: () => set({ pendingOverrides: [] }),
 
     activeScenarioId: null,
+    envelopePlan: null,
+    setEnvelopePlan: (envelopePlan) => set({ envelopePlan }),
+    clearEnvelopePlan: () => set({ envelopePlan: null }),
+
     setActiveScenarioId: (id) => set({ activeScenarioId: id }),
-  }))
+      }),
+      {
+        name: "parcelgrid-envelope",
+        partialize: (state) => ({ envelopePlan: state.envelopePlan }),
+      }
+    )
+  )
 );
 
 /** Get the override for a specific (scenario, field), if any. */

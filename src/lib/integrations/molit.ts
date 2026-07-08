@@ -28,6 +28,9 @@ const ENDPOINTS = {
     "https://apis.data.go.kr/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent",
   aptRent:
     "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent",
+  // 단독/다가구 매매 — 다가구 통매각 실거래 (연면적 totalFloorAr 기준 평당가)
+  house:
+    "https://apis.data.go.kr/1613000/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade",
 } as const;
 
 export type PropertyType = keyof typeof ENDPOINTS;
@@ -47,6 +50,10 @@ export interface MolitTransaction {
   dealingGbn?: string;
   /** 지목 (land transactions only): "대", "임야", "전", "답", "잡종지", etc */
   jimok?: string;
+  /** 주택유형 (house only): "단독" | "다가구" */
+  houseType?: string;
+  /** 대지면적 m2 (house only) — exclusiveArea에는 연면적(totalFloorAr)이 들어감 */
+  plottageAr?: number;
 }
 
 export interface FetchOptions {
@@ -149,19 +156,22 @@ function parseTxn(
   const jimok = type === "land" ? str("jimok") || undefined : undefined;
 
   const buildingName =
-    str("offiNm") || str("aptNm") || str("bldgNm") || jimok || "—";
+    str("offiNm") || str("aptNm") || str("bldgNm") || str("houseType") || jimok || "—";
 
   const jibun = str("jibun");
   const dongName = str("umdNm");
 
   const exclusiveArea =
     numFrom(str("excluUseAr")) ||
+    numFrom(str("totalFloorAr")) || // 단독/다가구: 연면적 (통매각 평단가 기준)
     numFrom(str("dealArea")) ||
     numFrom(str("lndAr"));
   const priceManwon = numFrom(str("dealAmount"));
   const floor = numFrom(str("floor")) || 0;
   const buildYear = numFrom(str("buildYear")) || undefined;
   const dealingGbn = str("dealingGbn") || undefined;
+  const houseType = str("houseType") || undefined;
+  const plottageArV = numFrom(str("plottageAr")) || undefined;
 
   const externalId = [
     lawdCd,
@@ -176,7 +186,9 @@ function parseTxn(
     .join("-");
 
   const typeLabel =
-    type === "officetel"
+    type === "house"
+      ? "단독다가구"
+      : type === "officetel"
       ? "오피스텔"
       : type === "apartment"
         ? "아파트"
@@ -204,6 +216,8 @@ function parseTxn(
     type: typeLabel,
     dealingGbn,
     jimok,
+    houseType,
+    plottageAr: plottageArV,
   };
 }
 

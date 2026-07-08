@@ -18,7 +18,11 @@ import { use } from "react";
 import { useRouter } from "next/navigation";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { DecisionBanner, KPI } from "@/components/ui/KPI";
+import { ScenarioComparisonCard } from "@/components/ui/ScenarioComparisonCard";
+import { ScenarioComparisonTable } from "@/components/ui/ScenarioComparisonTable";
+import { WhyRecommendPanel } from "@/components/ui/WhyRecommendPanel";
 import { InvestmentSummary } from "@/components/ui/InvestmentSummary";
+import { SaleBasisNote } from "@/components/ui/SaleBasisNote";
 import { ScenarioTable } from "@/components/ui/ScenarioTable";
 import { RiskMatrix } from "@/components/ui/RiskMatrix";
 import { CompsTable } from "@/components/ui/CompsTable";
@@ -78,6 +82,21 @@ export default function DashboardPage({
           }
         />
 
+        {/* 권장 vs 법적 최대 — 의사결정 도구 */}
+        {data.scenarioComparison && (
+          <ScenarioComparisonCard comparison={data.scenarioComparison} />
+        )}
+
+        {/* 상세 비교표 */}
+        {data.scenarioComparison && (
+          <ScenarioComparisonTable comparison={data.scenarioComparison} />
+        )}
+
+        {/* 왜 권장? AI 분석 (핵심 차별점) */}
+        {data.scenarioComparison && (
+          <WhyRecommendPanel comparison={data.scenarioComparison} />
+        )}
+
         {/* KPI strip */}
         <div
           style={{
@@ -120,12 +139,20 @@ export default function DashboardPage({
 
         {/* 투자 요약 박스 (살아있는 InvestmentSummary) */}
         <InvestmentSummary scenarios={data.scenarios} defaultScenarioId={rec.id} />
+        <SaleBasisNote saleEstimate={data.saleEstimate} />
 
         {/* 최대 시행 가능 인수가 — 본인 도구의 진짜 차별화 */}
         {data.maxAcquisition && data.maxAcquisition.length > 0 && (
           <MaxAcquisitionPanel
             analyses={data.maxAcquisition}
             marketPrice={data.parcel.acquiredPrice}
+            marketProxyPrice={
+              data.parcel.estMarketPrice && data.parcel.lotArea
+                ? Math.round(
+                    (data.parcel.estMarketPrice * data.parcel.lotArea) / 10_000
+                  )
+                : undefined
+            }
           />
         )}
 

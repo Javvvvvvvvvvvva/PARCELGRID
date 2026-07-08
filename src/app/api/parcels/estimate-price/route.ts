@@ -65,18 +65,67 @@ export async function POST(req: NextRequest) {
       return [];
     });
 
+    // 구축 단독/다가구 (토지 proxy — 인수가 추정 C)
+    const houseTransactionsRaw = await fetchMolitRange({
+      lawdCd,
+      type: "house",
+      startYearMonth: start,
+      endYearMonth: end,
+    }).catch((err) => {
+      console.warn("MOLIT 단독/다가구 실거래 조회 실패:", err);
+      return [];
+    });
+    const houseTransactions = houseTransactionsRaw.map((t) => ({
+      type: t.type,
+      priceManwon: t.priceManwon,
+      plottageAr: t.plottageAr,
+      buildYear: t.buildYear,
+      sameDong: t.dongName ? address.includes(t.dongName) : false,
+      address: `${t.dongName} ${t.jibun}`.trim(),
+      date: t.date,
+    }));
+
     // 추정 호출
     const result = estimateMarketPrice({
       publicLandValueManwon: landPrice / WON_TO_MANWON,
       lotAreaSqm: lotArea,
       landTransactions,
+      houseTransactions,
       jimokCategory: jimokCategory ?? "buildable",
       address,
     });
 
+    if (result.houseEstimate) {
+      console.log(
+        `인수가 토지 proxy: ${result.houseEstimate.basis} 대지 평당 ${result.houseEstimate.medianPPPLand.toLocaleString()}만 → 추정 ${(result.houseEstimate.estimateManwon / 10000).toFixed(1)}억`
+      );
+    }
+
     return NextResponse.json({
       ...result,
       transactionCount: landTransactions.length,
+      // Round H-2: 비건축 지목 제외(분포 오염 방지) + fallback
+      transactions: (() => {
+        const base = landTransactions.filter(
+          (t) => t.exclusiveArea > 0 && t.priceManwon > 0
+        );
+        const NON_BUILDABLE = [
+          "임야", "전", "답", "과수원", "목장용지",
+          "잡종지", "도로", "구거", "하천", "제방",
+        ];
+        const buildable = base.filter(
+          (t) => !t.jimok || !NON_BUILDABLE.includes(t.jimok)
+        );
+        // 대지성 거래가 너무 적으면(<10건) 필터 풀고 전체 사용
+        const rows = buildable.length >= 10 ? buildable : base;
+        return rows.map((t) => ({
+          priceManwon: t.priceManwon,
+          areaSqm: t.exclusiveArea,
+          date: t.date,
+          address: `${t.dongName} ${t.jibun}`,
+          jimok: t.jimok ?? null,
+        }));
+      })(),
     });
   } catch (err) {
     console.error("estimate-price 실패:", err);

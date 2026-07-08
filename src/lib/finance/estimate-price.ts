@@ -25,12 +25,20 @@ export interface EstimatePriceInput {
   publicLandValueManwon: number;
   lotAreaSqm: number;
   landTransactions: MolitTransaction[];
+  /** 구축 단독/다가구 (토지 proxy 추정 C용, optional) */
+  houseTransactions?: import("@/lib/finance/land-price-from-comps").LandProxyTxLike[];
   jimokCategory: JimokCategory;
   /** 전체 주소 (예: "서울 강남구 역삼동 824-11"). 시군구 추출에 사용 */
   address: string;
 }
 
-export type EstimateMethod = "by-comps" | "by-publicvalue" | "hybrid";
+export type EstimateMethod = "house-comps" | "by-comps" | "by-publicvalue" | "hybrid";
+import {
+  estimateLandPriceFromHouseComps,
+  type LandPriceEstimate,
+  type LandProxyTxLike,
+} from "@/lib/finance/land-price-from-comps";
+
 export type EstimateConfidence = "high" | "medium" | "low";
 
 export interface EstimatePriceResult {
@@ -40,6 +48,8 @@ export interface EstimatePriceResult {
   confidence: EstimateConfidence;
   /** 실거래 중앙값 평당 (만원/평) — 참고용 */
   marketMedianPerPyeong?: number;
+  /** 추정 C: 구축 단독/다가구 토지 proxy (사례·근거 포함) */
+  houseEstimate?: LandPriceEstimate;
   /** 실거래 중앙값 × 부지 평수 (만원) — 추정가와 비교용 */
   marketMedianManwon?: number;
   details: {
@@ -158,6 +168,7 @@ export function estimateMarketPrice(
     publicLandValueManwon,
     lotAreaSqm,
     landTransactions,
+    houseTransactions = [],
     jimokCategory,
     address,
   } = input;
@@ -196,13 +207,27 @@ export function estimateMarketPrice(
       ? Math.round(medianPricePerPyeong * lotPyeong)
       : 0;
 
+  // 추정 C: 구축 단독/다가구 대지면적 기준 평당 (토지 proxy — C 설계, 1순위)
+  const houseEst = estimateLandPriceFromHouseComps(
+    houseTransactions as LandProxyTxLike[],
+    lotAreaSqm
+  );
+  const fromHouse = houseEst ? houseEst.estimateManwon : 0;
+
   // 결합 로직
   let estimatedPriceManwon: number;
   let method: EstimateMethod;
   let confidence: EstimateConfidence;
 
-  // 결합 로직: 실거래가 많을수록 comps 가중치 높임 (max 대신 가중평균)
-  if (sameJimokTxns.length < 5) {
+  // 1순위: 구축 다가구 토지 proxy (이상치 방어 — 공시가 기반 대비 0.3~3.0배)
+  const houseRatio = fromHouse > 0 ? fromHouse / fromPublicValue : 0;
+  if (houseEst && fromHouse > 0 && houseRatio >= 0.3 && houseRatio <= 3.0) {
+    estimatedPriceManwon = fromHouse;
+    method = "house-comps";
+    confidence = houseEst.confidence;
+  }
+  // 이하 기존 A/B 결합 (fallback)
+  else if (sameJimokTxns.length < 5) {
     estimatedPriceManwon = fromPublicValue;
     method = "by-publicvalue";
     confidence = "low";
@@ -243,6 +268,7 @@ export function estimateMarketPrice(
     estimatedPriceManwon,
     estimatedPricePerPyeong,
     marketMedianPerPyeong: medianPricePerPyeong, // 실거래 중앙값 평당 (참고용)
+    houseEstimate: houseEst ?? undefined,
     marketMedianManwon: medianPricePerPyeong > 0 ? Math.round(medianPricePerPyeong * lotPyeong) : 0,
     method,
     confidence,

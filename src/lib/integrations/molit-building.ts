@@ -50,6 +50,12 @@ export interface BuildingInfo {
   ageYears: number;
   /** 주건축물 여부 (부속건물 아닌 본 건물) */
   isMainBuilding: boolean;
+  /** 세대수 (다세대·공동주택 구분소유). 없으면 0 */
+  householdCount: number;
+  /** 가구수 (다가구 단독소유 임대). 없으면 0 */
+  familyCount: number;
+  /** 호수 (근생·오피스텔 등). 없으면 0 */
+  unitCount: number;
 }
 
 export interface PnuParts {
@@ -78,6 +84,84 @@ export interface BuildingLookupResult {
   signalLabel: string;
   /** 시그널 설명 */
   signalReasoning: string;
+}
+
+/**
+ * 기존 건물의 용도별 세대당 면적 산정 (하드코딩 50㎡ 대체용).
+ * 다가구 → 가구수, 다세대·공동주택 → 세대수, 근생·오피스텔 → 호수.
+ * 계산 불가(건물 없음·세대수 0)면 null → 호출부에서 기본값 사용.
+ */
+export function estimateUnitAreaSqm(
+  result: BuildingLookupResult | null
+): { unitAreaSqm: number; basis: string; count: number; sourceBuilding: string } | null {
+  if (!result || !result.hasBuilding || result.buildings.length === 0) {
+    return null;
+  }
+
+  // 주건축물 우선, 없으면 연면적 가장 큰 동
+  const main =
+    result.buildings.find((b) => b.isMainBuilding) ??
+    result.buildings.reduce((a, b) => (b.totalArea > a.totalArea ? b : a));
+
+  const purpose = `${main.detailPurpose} ${main.mainPurpose}`;
+
+  let count = 0;
+  let basis = "";
+  if (purpose.includes("다가구")) {
+    count = main.familyCount;
+    basis = "가구수";
+  } else if (
+    purpose.includes("다세대") ||
+    purpose.includes("공동주택") ||
+    purpose.includes("아파트") ||
+    purpose.includes("연립")
+  ) {
+    count = main.householdCount;
+    basis = "세대수";
+  } else if (purpose.includes("오피스텔") || purpose.includes("근린생활")) {
+    count = main.unitCount;
+    basis = "호수";
+  } else {
+    // 기타 — 세대수 > 가구수 > 호수 순으로 존재하는 값
+    if (main.householdCount > 0) {
+      count = main.householdCount;
+      basis = "세대수";
+    } else if (main.familyCount > 0) {
+      count = main.familyCount;
+      basis = "가구수";
+    } else {
+      count = main.unitCount;
+      basis = "호수";
+    }
+  }
+
+  if (count <= 0 || main.totalArea <= 0) return null;
+
+  return {
+    unitAreaSqm: Math.round((main.totalArea / count) * 10) / 10,
+    basis,
+    count,
+    sourceBuilding: main.name || main.detailPurpose || "기존 건물",
+  };
+}
+
+/**
+ * 기존 건물의 층고 참고값 (하드코딩 3.0m 대체용).
+ * 주건축물 높이(heit) ÷ 지상층수. 합리 범위(2.4~4.5m) 밖이면 null (옥탑 등 이상값 방지).
+ */
+export function estimateFloorHeightM(
+  result: BuildingLookupResult | null
+): number | null {
+  if (!result || !result.hasBuilding || result.buildings.length === 0) {
+    return null;
+  }
+  const main =
+    result.buildings.find((b) => b.isMainBuilding) ??
+    result.buildings.reduce((a, b) => (b.totalArea > a.totalArea ? b : a));
+  if (main.height <= 0 || main.groundFloors <= 0) return null;
+  const fh = main.height / main.groundFloors;
+  if (fh < 2.4 || fh > 4.5) return null;
+  return Math.round(fh * 10) / 10;
 }
 
 /* ─────────────────────────── PNU helpers ─────────────────────────── */
@@ -320,6 +404,9 @@ function parseBuilding(item: string): BuildingInfo {
     approvalDate,
     ageYears: yearsSince(approvalDate),
     isMainBuilding,
+    householdCount: num("hhldCnt"),
+    familyCount: num("fmlyCnt"),
+    unitCount: num("hoCnt"),
   };
 }
 

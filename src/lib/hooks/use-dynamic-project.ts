@@ -23,6 +23,8 @@ export interface StoredParcel {
   lawdCd: string;
   pnu: string | null;
   lotArea: number;
+  boundary?: [number, number][];
+  roads?: { name: string | null; points: [number, number][] }[];
   zoning: string;
   zoneCode: string;
   maxFAR: number;
@@ -95,6 +97,8 @@ export function useDynamicProject(projectId: string) {
           lat: stored.lat,
           lng: stored.lng,
           lotArea: stored.lotArea,
+          boundary: stored.boundary,
+          roads: stored.roads,
           zoning: stored.zoning,
           zoneCode: stored.zoneCode,
           maxFAR: stored.maxFAR,

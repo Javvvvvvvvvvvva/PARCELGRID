@@ -3,6 +3,7 @@
 import { Tag, Dot } from "./Tag";
 import { won, num, pyeong } from "@/lib/utils/format";
 import type { ParcelVM } from "@/lib/adapters/view-model";
+import { useProjectStore } from "@/lib/stores/project-store";
 
 interface ParcelRailProps {
   parcel: ParcelVM;
@@ -17,6 +18,15 @@ export function ParcelRail({
   syncedMinutesAgo = 14,
   version = "v218",
 }: ParcelRailProps) {
+  const plan = useProjectStore((s) => s.envelopePlan);
+  const scenarioLabel =
+    plan?.scenarioType === "single-house"
+      ? "단독주택"
+      : plan?.scenarioType === "multi-family"
+      ? "다가구주택"
+      : plan?.scenarioType === "retail"
+      ? "근린생활시설"
+      : null;
   return (
     <aside
       style={{
@@ -69,12 +79,22 @@ export function ParcelRail({
         <div className="ui-kv"><span className="ui-kv__k">대지면적</span><span className="ui-kv__v">{pyeong(parcel.lotArea)}</span></div>
         <div className="ui-kv"><span className="ui-kv__k">건폐율 상한</span><span className="ui-kv__v">{parcel.maxBCR}%</span></div>
         <div className="ui-kv"><span className="ui-kv__k">용적률 상한</span><span className="ui-kv__v">{parcel.maxFAR}%</span></div>
-        <div className="ui-kv"><span className="ui-kv__k">최고고도</span><span className="ui-kv__v">{parcel.heightLimit} m</span></div>
 
-        <div className="ui-sb-section" style={{ padding: "14px 0 6px" }}>이격거리</div>
-        <div className="ui-kv"><span className="ui-kv__k">전면도로</span><span className="ui-kv__v">{parcel.setback.road} m</span></div>
-        <div className="ui-kv"><span className="ui-kv__k">측면</span><span className="ui-kv__v">{parcel.setback.side} m</span></div>
-        <div className="ui-kv"><span className="ui-kv__k">후면</span><span className="ui-kv__v">{parcel.setback.rear} m</span></div>
+        {plan && scenarioLabel && (
+          <>
+            <div className="ui-sb-section" style={{ padding: "14px 0 6px" }}>건축 기획</div>
+            <div className="ui-kv"><span className="ui-kv__k">계획 용적률</span><span className="ui-kv__v">{plan.farPct}%</span></div>
+            <div className="ui-kv"><span className="ui-kv__k">시나리오</span><span className="ui-kv__v">{scenarioLabel} {plan.floors}층</span></div>
+            {plan.units > 1 && (
+              <div className="ui-kv"><span className="ui-kv__k">세대수</span><span className="ui-kv__v">{plan.units}세대</span></div>
+            )}
+            <div className="ui-kv"><span className="ui-kv__k">필요 주차</span><span className="ui-kv__v">{plan.requiredCars}대</span></div>
+          </>
+        )}
+        <div className="ui-sb-section" style={{ padding: "14px 0 6px" }}>이격거리 (건축법 기준)</div>
+        <div className="ui-kv"><span className="ui-kv__k">정북 일조</span><span className="ui-kv__v">건물높이별 §86</span></div>
+        <div className="ui-kv"><span className="ui-kv__k">측면·후면</span><span className="ui-kv__v">민법 0.5m+조례</span></div>
+        <div className="ui-kv"><span className="ui-kv__k">도로후퇴</span><span className="ui-kv__v" style={{ opacity: 0.5 }}>실폭 데이터 필요</span></div>
 
         <div className="ui-sb-section" style={{ padding: "14px 0 6px" }}>인수 정보</div>
         <div className="ui-kv"><span className="ui-kv__k">인수일</span><span className="ui-kv__v">{parcel.acquired}</span></div>

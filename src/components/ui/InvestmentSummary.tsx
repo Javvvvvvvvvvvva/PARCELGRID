@@ -48,7 +48,7 @@ export function InvestmentSummary({ scenarios, defaultScenarioId }: Props) {
   ].filter((r) => r.value > 0);
 
   const revenueRows = [
-    { label: "분양", value: active.revenueSale },
+    { label: "매각 수입", value: active.revenueSale },
     { label: "임대 가치", value: active.revenueLease },
     { label: "상가 가치", value: active.revenueRetail },
   ].filter((r) => r.value > 0);
@@ -256,6 +256,19 @@ export function InvestmentSummary({ scenarios, defaultScenarioId }: Props) {
               {profitMargin.toFixed(1)}%)
             </span>
           </div>
+          {active.profitAtLowCost != null && active.profitAtHighCost != null && (
+            <div style={{ fontSize: 11.5, marginTop: 4, opacity: 0.85 }}>
+              공사비 범위 손익 — Low(-15%) {active.profitAtLowCost >= 0 ? "+" : ""}
+              <span className="mono">{won(active.profitAtLowCost)}</span> · High(+20%){" "}
+              {active.profitAtHighCost >= 0 ? "+" : ""}
+              <span className="mono">{won(active.profitAtHighCost)}</span>
+              {active.constructionCostLow != null && active.constructionCostHigh != null && (
+                <span style={{ marginLeft: 8, opacity: 0.75 }}>
+                  (공사비 {won(active.constructionCostLow)}~{won(active.constructionCostHigh)} — 견적 아님)
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
           <div>

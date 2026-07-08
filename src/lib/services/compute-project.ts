@@ -29,6 +29,9 @@ import {
 } from "@/lib/adapters/view-model";
 import type { Parcel, Scenario } from "@/lib/finance/types";
 
+import type { ScenarioComparison } from "@/lib/finance/scenario-verdict";
+import type { SalePriceEstimate } from "@/lib/finance/sale-price-from-comps";
+
 export interface ProjectComputed {
   parcel: ParcelVM;
   scenarios: ScenarioVM[];
@@ -38,6 +41,10 @@ export interface ProjectComputed {
   parcelRisks: RiskVM[];
   /** 실거래 비교 — 같은 법정동 / 시군구 최근 12개월. 백엔드에서 MOLIT 호출 후 주입. */
   comps: CompVM[];
+  /** 매각 단가 산정 근거 (Comparable 알고리즘 분석) — 화면 표시용. 주입식. */
+  saleEstimate?: SalePriceEstimate;
+  /** 권장+최대 시나리오 비교 (의사결정 도구) */
+  scenarioComparison?: ScenarioComparison;
   /** 시나리오별 최대 시행 가능 인수가 (IRR 10/15/20% 역산). 백엔드에서 계산 후 주입. */
   maxAcquisition: import("@/lib/finance/max-acquisition").ScenarioMaxAcquisition[];
   meta: {

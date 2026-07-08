@@ -24,6 +24,8 @@
  */
 
 import type { Parcel, BuildingProgram } from "./types";
+import { calcSunSetback } from "@/lib/geo/sun-setback";
+import { calcParking } from "./parking";
 
 export type RiskLevel = "ok" | "low" | "med" | "high";
 
@@ -93,67 +95,101 @@ export function checkCompliance(input: ComplianceInput): RiskCheck[] {
     });
   }
 
-  // ─── GFA-03 고도 ───────────────────────────────────────────────────
-  // Conservative estimate: 9 floors at 3m typical + 1.4m parapet → 28.4m
-  const estimatedHeight = program.floorsAbove * 3.0 + 1.4;
-  if (estimatedHeight > parcel.heightLimit) {
+  // ─── GFA-03 층수 여유 (용적률 기준) ──────────────────────────────────
+  // 제2종일반주거 등에 법적 절대고도 22m는 없음 (고도지구 지정시만).
+  // 진짜 한계는 용적률 — 최대 층수 = 용적률상한 / 건폐율상한 (국토계획법 §85).
+  // 건폐율을 꽉 채운 가정의 상한 가능치 (실제는 일조·주차로 더 낮을 수 있음).
+  const maxFloorsByFAR =
+    parcel.maxBCR > 0
+      ? Math.floor(parcel.maxFAR / parcel.maxBCR)
+      : program.floorsAbove;
+  const floorHeadroom = maxFloorsByFAR - program.floorsAbove;
+  if (floorHeadroom < 0) {
     checks.push({
       code: "GFA-03",
-      label: "최고고도 초과 우려",
-      level: "med",
-      finding: `추정 ${estimatedHeight.toFixed(1)}m / 한계 ${parcel.heightLimit}m`,
-      reference: "지구단위계획 / 도시계획 조례",
+      label: "용적률 상한 초과 우려",
+      level: "high",
+      finding: `현재 ${program.floorsAbove}층 / 용적률 ${parcel.maxFAR}% 기준 약 ${maxFloorsByFAR}층`,
+      reference: "국토계획법 시행령 §85 (용적률)",
       headroom: {
-        actual: estimatedHeight,
-        limit: parcel.heightLimit,
-        unit: "m",
+        actual: program.floorsAbove,
+        limit: maxFloorsByFAR,
+        unit: "층",
       },
     });
   } else {
     checks.push({
       code: "GFA-03",
-      label: "고도 적합",
-      level: "ok",
-      finding: `추정 ${estimatedHeight.toFixed(1)}m / 한계 ${parcel.heightLimit}m`,
-      reference: "지구단위계획 / 도시계획 조례",
+      label: floorHeadroom === 0 ? "용적률 상한 근접" : "층수 여유",
+      level: floorHeadroom === 0 ? "med" : "ok",
+      finding: `현재 ${program.floorsAbove}층 / 용적률 ${parcel.maxFAR}% 기준 약 ${maxFloorsByFAR}층 가능`,
+      reference: "국토계획법 시행령 §85 (용적률)",
+      headroom: {
+        actual: program.floorsAbove,
+        limit: maxFloorsByFAR,
+        unit: "층",
+      },
     });
   }
 
-  // ─── SUN-02 일조권 ─────────────────────────────────────────────────
-  // North-side setback ramp: floor 4+ needs ≥ 2.0m setback per floor of height above 9m.
-  // Mid-rise (8+ floors) on a tight 645m² lot triggers attention.
-  if (program.floorsAbove >= 8) {
+  // ─── SUN-02 정북 일조 사선제한 (건축법 §86) ──────────────────────────
+  // 진짜 계산: 건물높이 → 필요 북측이격 (10m↓ 1.5m, 초과분 높이/2).
+  // 준수여부는 북측 인접대지경계선 거리 필요 — 현재 인접필지 데이터 없어 미판정.
+  // 가짜 "8층 임계값" 제거.
+  const sunHeight = program.floorsAbove * 3.0 + 1.4;
+  const sun = calcSunSetback(sunHeight, null);
+  if (sun.exemptPossible) {
     checks.push({
       code: "SUN-02",
-      label: "일조권 사선제한",
-      level: "med",
-      finding: `${program.floorsAbove}층 규모 — 북측 사선제한 영향 가능`,
-      reference: "건축법 제61조, 시행령 제86조",
+      label: "정북 일조 — 완화 대상",
+      level: "ok",
+      finding: `${sunHeight.toFixed(1)}m (2층·8m 이하) — 조례로 사선제한 배제 가능`,
+      reference: "건축법 §61④, 시행령 §86",
     });
   } else {
     checks.push({
       code: "SUN-02",
-      label: "일조권 양호",
-      level: "ok",
-      finding: "저층 — 사선제한 영향 미미",
-      reference: "건축법 제61조",
+      label: "정북 일조 — 북측 이격 필요",
+      level: "med",
+      finding: `건물 ${sunHeight.toFixed(1)}m → 북측 ${sun.requiredSetbackM.toFixed(1)}m 이격 필요 (준수여부는 인접대지 거리 확인 필요)`,
+      reference: "건축법 §61, 시행령 §86 (10m↓ 1.5m, 초과분 높이÷2)",
     });
   }
 
-  // ─── PRK-04 주차 ───────────────────────────────────────────────────
-  // 도시형생활주택: 0.6대/세대, 오피스텔: 0.8대/세대, 근린생활: 1대/134㎡
-  const requiredParking =
-    Math.ceil(program.units.residential * 0.7) +
-    Math.ceil((program.units.retail * 50) / 134); // assume 50㎡/retail unit
-  const plannedParking = Math.ceil(requiredParking * 1.1); // typical 10% buffer
-  checks.push({
-    code: "PRK-04",
-    label: "주차 대수 충족",
-    level: "low",
-    finding: `법정 ${requiredParking}대 / 계획 ${plannedParking}대`,
-    reference: "주차장법 시행령 별표1",
-    headroom: { actual: plannedParking, limit: requiredParking, unit: "대" },
-  });
+  // ─── PRK-04 주차 (유형별·규모별 — 주차장법 별표1, 주택건설기준 §27) ──
+  // 가짜 제거: 유형무관 0.7대 일률 + 계획 1.1배 임의생성 삭제.
+  // 진짜: 건물유형 + 연면적/세대당전용면적으로 법정대수. 단독 소규모 면제.
+  // 연면적 = 대지면적 × 용적률 (BuildingProgram에 gfa 직접 없음)
+  const grossFloorArea = parcel.lotArea * (program.far / 100);
+  const parking = calcParking(
+    program.type,
+    grossFloorArea,
+    program.units.residential,
+    program.units.retail
+  );
+  if (parking.exemptPossible) {
+    checks.push({
+      code: "PRK-04",
+      label: "주차 — 면제 가능",
+      level: "ok",
+      finding: `${parking.basis} (조례 확인 필요)`,
+      reference: parking.reference,
+    });
+  } else {
+    const note = parking.estimated ? " (전용면적 추정)" : "";
+    checks.push({
+      code: "PRK-04",
+      label: "법정 주차대수",
+      level: "low",
+      finding: `${parking.requiredCars}대 필요 — ${parking.basis}${note}`,
+      reference: parking.reference,
+      headroom: {
+        actual: parking.requiredCars,
+        limit: parking.requiredCars,
+        unit: "대",
+      },
+    });
+  }
 
   // ─── CUL-01 문화재 ────────────────────────────────────────────────
   const distM = context.nearCulturalHeritageM;

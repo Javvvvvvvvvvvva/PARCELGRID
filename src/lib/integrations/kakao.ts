@@ -157,3 +157,62 @@ export async function lookupLawdCd(address: string): Promise<string | null> {
   const result = await geocodeAddress(address);
   return result?.lawdCd ?? null;
 }
+
+/* ─────────────────────────── 지하철역 검색 ─────────────────────────── */
+
+export interface NearbyStation {
+  /** 역명 (예: "쌍문역 4호선") */
+  name: string;
+  lat: number;
+  lng: number;
+  /** 대지에서 직선거리 (m) */
+  distanceM: number;
+}
+
+/**
+ * 좌표 기준 반경 내 지하철역 검색 (Kakao 카테고리 SW8).
+ * 역세권 판단용 — 가까운 순 정렬.
+ */
+export async function searchNearbyStations(
+  lat: number,
+  lng: number,
+  radiusM = 1000
+): Promise<NearbyStation[]> {
+  if (!KEY) {
+    throw new Error("KAKAO_REST_API_KEY not set. Add it to .env.local.");
+  }
+
+  const url = new URL(`${BASE}/v2/local/search/category.json`);
+  url.searchParams.set("category_group_code", "SW8"); // 지하철역
+  url.searchParams.set("x", String(lng));
+  url.searchParams.set("y", String(lat));
+  url.searchParams.set("radius", String(Math.min(radiusM, 20000)));
+  url.searchParams.set("sort", "distance");
+  url.searchParams.set("size", "5");
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `KakaoAK ${KEY}` },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Kakao station search HTTP ${res.status}: ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    documents?: Array<{
+      place_name: string;
+      x: string;
+      y: string;
+      distance: string;
+    }>;
+  };
+
+  return (data.documents ?? []).map((d) => ({
+    name: d.place_name,
+    lat: Number(d.y),
+    lng: Number(d.x),
+    distanceM: Number(d.distance),
+  }));
+}

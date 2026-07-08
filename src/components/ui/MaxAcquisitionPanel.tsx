@@ -17,11 +17,14 @@ interface MaxAcquisitionPanelProps {
   analyses: ScenarioMaxAcquisition[];
   /** 시장가 (parcel.acquiredPrice, 만원 단위) */
   marketPrice: number;
+  /** 시장 토지 proxy (구축 다가구 실거래 기반, 만원 단위) — 있으면 병기 */
+  marketProxyPrice?: number;
 }
 
 export function MaxAcquisitionPanel({
   analyses,
   marketPrice,
+  marketProxyPrice,
 }: MaxAcquisitionPanelProps) {
   if (analyses.length === 0) return null;
 
@@ -56,7 +59,13 @@ export function MaxAcquisitionPanel({
           최대 시행 가능 인수가
         </div>
         <span style={{ fontSize: 11.5, color: "var(--fg-subtle)" }}>
-          시장가 {won(marketPrice)} 대비 · IRR 목표별 역산
+          {marketProxyPrice != null && marketProxyPrice > 0 ? (
+            <>
+              시장 토지 proxy {won(marketProxyPrice)} (실거래 기반) · 내 인수가 {won(marketPrice)} · IRR 목표별 역산
+            </>
+          ) : (
+            <>시장가 {won(marketPrice)} 대비 · IRR 목표별 역산</>
+          )}
         </span>
       </div>
 

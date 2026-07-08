@@ -17,7 +17,7 @@ import {
   lookupCadastral,
   lookupZoningByPNU,
 } from "@/lib/integrations/vworld";
-import { lookupBuildingByJibun } from "@/lib/integrations/molit-building";
+import { lookupBuildingByJibun, estimateUnitAreaSqm } from "@/lib/integrations/molit-building";
 
 export const runtime = "nodejs";
 
@@ -98,6 +98,8 @@ export async function POST(req: NextRequest) {
       // V월드 지적
       pnu: cadastral.pnu,
       lotArea: cadastral.lotAreaSqm,
+      boundary: cadastral.boundary,
+      roads: cadastral.roads,
       jimok: cadastral.jimok,
       jimokCode: cadastral.jimokCode,
       jimokCategory: cadastral.jimokCategory,
@@ -114,6 +116,8 @@ export async function POST(req: NextRequest) {
 
       // MOLIT 건축물대장 (있으면)
       currentBuilding,
+      // 기존 건물 기반 세대당 면적 (하드코딩 50㎡ 대체, 없으면 null)
+      existingUnitArea: estimateUnitAreaSqm(currentBuilding),
     });
   } catch (err) {
     console.error("lookup 실패:", err);

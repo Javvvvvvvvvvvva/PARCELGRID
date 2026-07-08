@@ -13,7 +13,7 @@
  *   rural           0.45×  지방
  */
 
-import type { Parcel, Scenario } from "@/lib/finance/types";
+import type { Parcel, Scenario, BuildingProgram } from "@/lib/finance/types";
 import { defaultAssumptions, defaultProgram } from "@/lib/finance/scenario";
 
 export interface GenerateOptions {
@@ -67,6 +67,28 @@ function tierMultipliers(tier: PricingTier): {
     case "rural":
       return { saleMult: 0.45, rentMult: 0.55, capDelta: 0.7, interestDelta: 0.3 };
   }
+}
+
+/**
+ * 부지 크기에 맞춰 program 보정.
+ * 작은 부지(<50평)에서 retail 6층은 코어/주차가 면적을 다 잡아먹어
+ * 분양가능면적이 0이 됨. 저층(3층)으로 낮춰 현실적인 매출이 나오게 한다.
+ */
+function adjustProgramForLot(
+  program: BuildingProgram,
+  type: string,
+  parcel: Parcel
+): BuildingProgram {
+  const lotPyeong = parcel.lotArea / 3.305785;
+  if (type === "retail" && lotPyeong < 50) {
+    return {
+      ...program,
+      floorsAbove: 3,
+      floorsBelow: 0,
+      far: Math.min(program.far, 150),
+    };
+  }
+  return program;
 }
 
 function buildScenario(
@@ -132,7 +154,11 @@ function buildScenario(
     name,
     shortName,
     tag,
-    program: defaultProgram(type, parcel.maxFAR, parcel.maxBCR),
+    program: adjustProgramForLot(
+      defaultProgram(type, parcel.maxFAR, parcel.maxBCR),
+      type,
+      parcel
+    ),
     assumptions: {
       ...baseA,
       salePricePerSqM: Math.round(salePricePerSqM * saleMult),
@@ -220,8 +246,7 @@ function pickScenariosForSize(
     return [
       { id: "S1", name: "단독주택 신축매매", shortName: "S1", tag: "표준형", type: "single-house" },
       { id: "S2", name: "다가구주택 신축매매", shortName: "S2", tag: "수익형", type: "multi-family" },
-      { id: "S3", name: "근린생활시설", shortName: "S3", tag: "보수형", type: "retail" },
-      { id: "S4", name: "단독주택 (다층형)", shortName: "S4", tag: "공격형", type: "single-house" },
+      { id: "S3", name: "근린생활시설 (저층)", shortName: "S3", tag: "보수형", type: "retail" },
     ];
   }
 

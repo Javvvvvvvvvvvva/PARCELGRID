@@ -78,6 +78,11 @@ export interface ScenarioVM {
   revenueRetail: number;
 
   profit: number;
+  /** 공사비 Low(-15%)/High(+20%) 적용 시 손익 (근사) */
+  profitAtLowCost?: number;
+  profitAtHighCost?: number;
+  constructionCostLow?: number;
+  constructionCostHigh?: number;
   profitMargin: number;
   equity: number;
   pf: number;
@@ -90,6 +95,8 @@ export interface ScenarioVM {
   regulatory: number;
 
   recommended: boolean;
+  viable: boolean;
+  viabilityNote?: string;
   assumptions: {
     rent: number;
     sale: number;
@@ -97,6 +104,8 @@ export interface ScenarioVM {
     capRate: number;
     intRate: number;
   };
+  /** 원본 시나리오 (가정편집 재계산용 — program + 전체 assumptions). */
+  _raw: Scenario;
 }
 
 export function toScenarioVM(
@@ -141,6 +150,10 @@ export function toScenarioVM(
     revenueRetail: result.revenueRetail,
 
     profit: result.profit,
+    profitAtLowCost: result.profitAtLowCost,
+    profitAtHighCost: result.profitAtHighCost,
+    constructionCostLow: result.constructionCostLow,
+    constructionCostHigh: result.constructionCostHigh,
     profitMargin: result.profitMargin,
     equity: result.equity,
     pf: result.pfLoan,
@@ -160,6 +173,9 @@ export function toScenarioVM(
       capRate: scenario.assumptions.capRate,
       intRate: scenario.assumptions.interestRate,
     },
+    _raw: scenario,
+    viable: result.viable,
+    viabilityNote: result.viabilityNote,
   };
 }
 
@@ -226,6 +242,9 @@ export interface CompVM {
   pricePerPyeong: number;  // 만원/평
   distanceKm: number | null; // null = MOLIT가 좌표 없음
   sameDong: boolean;       // 본인 부지와 같은 법정동인가
+  lawdCd: string;          // 법정동코드 10자리 (앞5=시군구, 같은 구 판별용)
+  /** 준공년도 (단독/다가구 등 — 신축 필터용) */
+  buildYear?: number;
 }
 
 const TYPE_KR: Record<string, string> = {
@@ -259,6 +278,8 @@ export function toCompVMs(
         pricePerPyeong,
         distanceKm: null, // MOLIT가 좌표 없음
         sameDong,
+        lawdCd: t.lawdCd,
+        buildYear: t.buildYear,
       };
     })
     .sort((a, b) => b.date.localeCompare(a.date)); // 최신 순

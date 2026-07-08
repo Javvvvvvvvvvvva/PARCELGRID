@@ -11,7 +11,6 @@ interface WorkRailProps {
 const ITEMS = [
   { id: "dashboard",  icon: Icons.layers, label: "대시보드",       path: "" },
   { id: "comparison", icon: Icons.diff,   label: "시나리오 비교",  path: "comparison" },
-  { id: "detail",     icon: Icons.bar,    label: "상세 분석",       path: "scenarios/S1" },
   { id: "comps",      icon: Icons.table,  label: "실거래 비교",     path: "comps" },
   { id: "override",   icon: Icons.edit,   label: "가정 편집",       path: "overrides" },
   { id: "pdf",        icon: Icons.doc,    label: "투자 보고서",     path: "report" },

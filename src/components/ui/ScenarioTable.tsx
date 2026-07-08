@@ -12,7 +12,7 @@
 
 import Link from "next/link";
 import type { ScenarioVM } from "@/lib/adapters/view-model";
-import { won, num, pct } from "@/lib/utils/format";
+import { won, num, pct, scenarioViable } from "@/lib/utils/format";
 import { Tag } from "@/components/ui/Tag";
 
 interface ScenarioTableProps {
@@ -206,6 +206,11 @@ export function ScenarioTable({
                   >
                     {won(s.profit)}
                   </span>
+                  {!scenarioViable(s).ok && (
+                    <div style={{ fontSize: 10.5, color: "var(--neg-fg)", marginTop: 2 }}>
+                      {scenarioViable(s).label}
+                    </div>
+                  )}
                 </Td>
 
                 {/* DSCR */}

@@ -33,7 +33,10 @@ export const TAX_RATES = {
   acquisitionBuilding: 0.028, // 2.8% — 원시취득 (신축)
   propertyTaxBase: 0.004, // 0.4% — 재산세 base
   propertyTaxYears: 4, // hold period during dev
-  corporateTax: 0.20, // 20% — 법인세 (2억 초과 구간 단순화)
+  corporateTaxLow: 0.09, // 9% — 법인세 과표 2억 이하
+  corporateTaxHigh: 0.19, // 19% — 법인세 과표 2억 초과
+  corporateBracket: 200_000_000, // 2억 (원) 과표 구간
+  acquisitionBuildingTotal: 0.0316, // 3.16% — 원시취득 + 농특세·지방교육세
   vat: 0.10, // 10% — 부가세
   vatExemptResidentialShare: 0.85, // 주거 비과세 비중
 } as const;
@@ -66,57 +69,45 @@ export function calculateTaxes(input: TaxInput): TaxBreakdown {
   // ─── 취득세 (건물) ─────────────────────────────────────────────────
   // Base: total hard + soft cost (the value of the building being created).
   const buildingBase = D(result.hardCost).plus(D(result.softCost));
-  const acqBuilding = buildingBase.times(TAX_RATES.acquisitionBuilding);
+  const acqBuilding = buildingBase.times(TAX_RATES.acquisitionBuildingTotal);
   lines.push({
     tax: "취득세",
     base: "건물",
-    rate: `${(TAX_RATES.acquisitionBuilding * 100).toFixed(1)}%`,
+    rate: `${(TAX_RATES.acquisitionBuildingTotal * 100).toFixed(2)}%`,
     amount: toManWon(acqBuilding),
-    note: "원시취득",
+    note: "원시취득 (농특세·교육세 포함)",
   });
 
   // ─── 재산세 (holding) ──────────────────────────────────────────────
   // Annual × dev hold years; biannual installments but reported as annual here.
+  const holdYears = Math.max(1, result.totalMonths / 12);
   const propertyTaxAnnual = D(parcel.acquiredPrice).times(TAX_RATES.propertyTaxBase);
-  const propertyTaxTotal = propertyTaxAnnual.times(TAX_RATES.propertyTaxYears);
+  const propertyTaxTotal = propertyTaxAnnual.times(D(holdYears));
   lines.push({
     tax: "재산세",
     base: "보유",
     rate: `${(TAX_RATES.propertyTaxBase * 100).toFixed(1)}%`,
     amount: toManWon(propertyTaxTotal),
-    note: `연 2회 부과 (${TAX_RATES.propertyTaxYears}년)`,
-  });
-
-  // ─── 종부세 ────────────────────────────────────────────────────────
-  // Corporate-owned development land is generally excluded.
-  lines.push({
-    tax: "종부세",
-    base: "보유",
-    rate: "—",
-    amount: 0,
-    note: "법인 소유 제외 적용",
+    note: `시행기간 ${result.totalMonths}개월 (${holdYears.toFixed(1)}년)`,
   });
 
   // ─── 법인세 ────────────────────────────────────────────────────────
   // Base: pre-tax profit. Simplified to single bracket (the 2억 초과 구간);
   // in production we apply tiered rates 9%/19%/21%/24% by income band.
-  const corporateTax = D(Math.max(result.profit, 0)).times(TAX_RATES.corporateTax);
+  // 과표 구간: 2억 이하 9%, 초과분 19% (원 단위로 환산해 계산)
+  const profitWon = Math.max(result.profit, 0) * 10_000;
+  const bracket = TAX_RATES.corporateBracket;
+  const corpTaxWon =
+    profitWon <= bracket
+      ? profitWon * TAX_RATES.corporateTaxLow
+      : bracket * TAX_RATES.corporateTaxLow +
+        (profitWon - bracket) * TAX_RATES.corporateTaxHigh;
   lines.push({
     tax: "법인세",
-    base: "이익",
-    rate: `${(TAX_RATES.corporateTax * 100).toFixed(0)}%`,
-    amount: toManWon(corporateTax),
-    note: "당기순이익 추정",
-  });
-
-  // ─── 양도소득세 ───────────────────────────────────────────────────
-  // For a 분양 model, gains are realized as operating revenue, not 양도.
-  lines.push({
-    tax: "양도소득세",
-    base: "양도",
-    rate: "—",
-    amount: 0,
-    note: "분양 매출로 처리",
+    base: "처분이익",
+    rate: profitWon <= bracket ? "9%" : "9~19%",
+    amount: Math.round(corpTaxWon / 10_000),
+    note: "2억 이하 9% · 초과 19% (분양 익금)",
   });
 
   // ─── 부가세 ────────────────────────────────────────────────────────
@@ -127,12 +118,13 @@ export function calculateTaxes(input: TaxInput): TaxBreakdown {
     ? ZERO
     : D(1).minus(residentialShare).times(TAX_RATES.vat);
   const vat = saleRevenue.times(vatableShare);
+  const vatAmount = toManWon(vat);
   lines.push({
     tax: "부가세",
     base: "분양",
-    rate: `${(TAX_RATES.vat * 100).toFixed(0)}%`,
-    amount: toManWon(vat),
-    note: "주거 비과세분 제외",
+    rate: vatAmount > 0 ? `${(TAX_RATES.vat * 100).toFixed(0)}%` : "면세",
+    amount: vatAmount,
+    note: vatAmount > 0 ? "비주거분 과세" : "국민주택 면세",
   });
 
   const total = lines.reduce((sum, l) => sum + l.amount, 0);

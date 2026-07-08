@@ -145,6 +145,70 @@ export interface CadastralInfo {
   jimokCode: string;
   /** 그룹 분류 (buildable / farmland / forest / other) */
   jimokCategory: JimokCategory;
+  /** 필지 경계 폴리곤 [lng, lat][] (WGS84) — 3D 매싱·면적 계산용. 없으면 빈 배열 */
+  boundary: [number, number][];
+  /** 부지 주변 도로 중심선 — 전면/측면/후면 식별용. 없으면 빈 배열 */
+  roads: RoadLine[];
+}
+
+/** 도로 중심선 1개 (새주소도로 LT_L_SPRD) */
+export interface RoadLine {
+  /** 도로명 (예: "노해로41길") */
+  name: string | null;
+  /** 중심선 좌표 [lng, lat][] (WGS84) */
+  points: [number, number][];
+}
+
+/**
+ * 부지 주변 도로 중심선 조회 (LT_L_SPRD 새주소도로).
+ * 전면 식별용 — 도로 폭은 이 레이어에 없음.
+ */
+async function fetchRoads(lat: number, lng: number): Promise<RoadLine[]> {
+  if (!KEY) return [];
+  // 부지 주변 약 ±60m (도로까지 닿게)
+  const buf = 0.0006;
+  const bbox = `${lng - buf},${lat - buf},${lng + buf},${lat + buf}`;
+  const url = new URL(DATA_BASE);
+  url.searchParams.set("service", "data");
+  url.searchParams.set("request", "GetFeature");
+  url.searchParams.set("data", "LT_L_SPRD");
+  url.searchParams.set("key", KEY);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("size", "30");
+  url.searchParams.set("geomFilter", `BOX(${bbox})`);
+  url.searchParams.set("crs", "EPSG:4326");
+  url.searchParams.set("domain", "http://localhost:3000");
+
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      response?: { result?: { featureCollection?: { features?: unknown[] } } };
+    };
+    const features = data.response?.result?.featureCollection?.features ?? [];
+    const roads: RoadLine[] = [];
+    for (const fRaw of features) {
+      const f = fRaw as {
+        geometry?: { type?: string; coordinates?: unknown };
+        properties?: { rn?: string };
+      };
+      const name = f.properties?.rn ?? null;
+      const geom = f.geometry;
+      if (!geom) continue;
+      // MultiLineString → 모든 점 평탄화
+      let pts: [number, number][] = [];
+      if (geom.type === "MultiLineString") {
+        const co = geom.coordinates as number[][][];
+        pts = co.flat() as [number, number][];
+      } else if (geom.type === "LineString") {
+        pts = geom.coordinates as [number, number][];
+      }
+      if (pts.length >= 2) roads.push({ name, points: pts });
+    }
+    return roads;
+  } catch {
+    return [];
+  }
 }
 
 export async function lookupCadastral(
@@ -214,6 +278,8 @@ export async function lookupCadastral(
     jimok: jimokName,
     jimokCode,
     jimokCategory: jimokToCategory(jimokName),
+    boundary: ring,
+    roads: await fetchRoads(lat, lng),
   };
 }
 

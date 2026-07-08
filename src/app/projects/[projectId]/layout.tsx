@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
+import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
 import { TopBar } from "@/components/ui/TopBar";
 import { WorkRail } from "@/components/ui/WorkRail";
 import { ParcelRail } from "@/components/ui/ParcelRail";
@@ -39,11 +40,34 @@ function ProjectShell({
   const { projectId } = useUnwrappedParams(params);
   const { data, isLoading, error } = useDynamicProject(projectId);
   const setData = useProjectStore((s) => s.setData);
+  const storeData = useProjectStore((s) => s.data);
+  const envelopePlan = useProjectStore((s) => s.envelopePlan);
   const pathname = usePathname();
+  const lastKeyRef = useRef<string>("");
 
   useEffect(() => {
-    if (data) setData(data);
-  }, [data, setData]);
+    if (!data) return;
+
+    // 이미 envelope 기반 결과면 그대로 (재계산 불필요 — 무한루프 차단)
+    const firstId = data.scenarios?.[0]?.id;
+    if (firstId === "ENV-MAIN") {
+      setData(data);
+      return;
+    }
+
+    // 같은 (API data + 계획) 조합은 1번만 처리 (무한루프 차단)
+    const key = `${data.meta?.lastSyncedAt ?? ""}|${envelopePlan?.scenarioType ?? ""}|${envelopePlan?.farPct ?? ""}|${envelopePlan?.floors ?? ""}|${envelopePlan?.units ?? ""}`;
+    if (lastKeyRef.current === key) return;
+    lastKeyRef.current = key;
+
+    // envelope 계획이 있으면 그 값으로 재계산 (단일 진실 소스)
+    if (envelopePlan && envelopePlan.scenarioType && data.parcel) {
+      const recomputed = recomputeFromEnvelope(data.parcel, envelopePlan, data);
+      setData(recomputed ?? data);
+    } else {
+      setData(data);
+    }
+  }, [data, envelopePlan, setData]);
 
   if (isLoading) {
     return (
@@ -67,7 +91,7 @@ function ProjectShell({
       <TopBar crumb={crumb} />
       <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
         <WorkRail projectId={projectId} />
-        <ParcelRail parcel={data.parcel} compact={pathname.includes("/scenarios/")} />
+        <ParcelRail parcel={storeData?.parcel ?? data.parcel} compact={pathname.includes("/scenarios/")} />
         <main className="scroll-host" style={{ flex: 1, minWidth: 0 }}>
           {children}
         </main>

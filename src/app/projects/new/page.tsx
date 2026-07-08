@@ -1,5 +1,9 @@
 "use client";
 
+
+import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
+import { LandProxyNote } from "@/components/ui/LandProxyNote";
+import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
 /**
  * /projects/new — 새 부지 분석 페이지
  *
@@ -43,6 +47,9 @@ interface LookupResult {
 
   pnu: string;
   lotArea: number;
+  /** 필지 경계 폴리곤 [lng, lat][] (WGS84). 3D 매싱용 */
+  boundary?: [number, number][];
+  roads?: { name: string | null; points: [number, number][] }[];
   jimok: string;
   jimokCode: string;
   jimokCategory: "buildable" | "farmland" | "forest" | "other";
@@ -71,9 +78,17 @@ interface LookupResult {
 interface EstimateResult {
   estimatedPriceManwon: number;
   estimatedPricePerPyeong: number;
-  method: "by-comps" | "by-publicvalue" | "hybrid";
+  method: "house-comps" | "by-comps" | "by-publicvalue" | "hybrid";
   confidence: "high" | "medium" | "low";
+  /** 추정 C: 구축 단독/다가구 토지 proxy (사례·근거) */
+  houseEstimate?: import("@/lib/finance/land-price-from-comps").LandPriceEstimate;
   transactionCount?: number;
+  transactions?: Array<{
+    priceManwon: number;
+    areaSqm: number;
+    date: string;
+    address: string;
+  }>;
 }
 
 /* ─────────────────────────── 페이지 ─────────────────────────── */
@@ -136,7 +151,8 @@ export default function NewParcelPage() {
       if (estRes.ok) {
         const estData: EstimateResult = await estRes.json();
         setEstimate(estData);
-        setAcquiredPrice(estData.estimatedPriceManwon);
+        // Round H: 자동 pre-fill 제거 — 추정값은 참고 칩으로만
+        // setAcquiredPrice(estData.estimatedPriceManwon);
       } else {
         // 추정 실패는 비치명적
         console.warn("인수가 추정 실패 — 사용자가 직접 입력해야 함");
@@ -170,6 +186,8 @@ export default function NewParcelPage() {
       lawdCd: parcel.lawdCd,
       pnu: parcel.pnu,
       lotArea: parcel.lotArea,
+      boundary: parcel.boundary,
+      roads: parcel.roads,
       zoning: parcel.zoning,
       zoneCode: parcel.zoneCode,
       maxFAR: parcel.maxFAR,
@@ -187,7 +205,7 @@ export default function NewParcelPage() {
     };
 
     sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(storedParcel));
-    router.push(`/projects/${parcel.pnu}`);
+    router.push(`/projects/${parcel.pnu}/envelope`);
   }
 
   // ─── UI ───────────────────────────────────────────────────────────
@@ -429,38 +447,41 @@ export default function NewParcelPage() {
             <div style={{ marginTop: 16 }}>
               <Panel
                 title="인수 정보"
-                source={estimate ? `시군구별 시장 추정 · ${estimate.method}` : "수동 입력"}
+                source={
+                  estimate
+                    ? estimate.method === "house-comps"
+                      ? "구축 다가구 실거래 토지 proxy · 알고리즘 분석"
+                      : `시군구별 시장 추정 · ${estimate.method}`
+                    : "수동 입력"
+                }
               >
+                {/* Round H: 분포 기반 인수가 입력 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                   <div>
-                    <Label>인수가 (만원)</Label>
-                    <input
-                      type="number"
-                      value={acquiredPrice || ""}
-                      onChange={(e) => setAcquiredPrice(parseInt(e.target.value) || 0)}
-                      style={{
-                        width: "100%",
-                        height: 32,
-                        padding: "0 8px",
-                        background: "var(--bg-elev)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 5,
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 14,
-                        color: "var(--fg)",
-                      }}
+                    <AcquisitionPriceInput
+                      subjectAreaPyeong={sqmToPyeong(parcel.lotArea)}
+                      transactions={
+                        estimate?.transactions?.map<RawTransaction>((t) => ({
+                          amount: t.priceManwon * 10_000,
+                          areaSqm: t.areaSqm,
+                          date: t.date,
+                          label: t.address,
+                        })) ?? []
+                      }
+                      value={acquiredPrice > 0 ? acquiredPrice * 10_000 : null}
+                      onChange={(won) =>
+                        setAcquiredPrice(won == null ? 0 : Math.round(won / 10_000))
+                      }
+                      estimatedTotalWon={
+                        estimate ? estimate.estimatedPriceManwon * 10_000 : null
+                      }
                     />
-                    {acquiredPrice > 0 && (
-                      <div style={{ fontSize: 11.5, color: "var(--fg-muted)", marginTop: 4 }}>
-                        ≈ {won(acquiredPrice)}
-                        {estimate && (
-                          <span style={{ marginLeft: 8 }}>
-                            {confidenceLabel(estimate.confidence)}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <LandProxyNote
+                      est={estimate?.houseEstimate}
+                      onApply={(manwon) => setAcquiredPrice(manwon)}
+                    />
                   </div>
+
                   <div>
                     <Label>인수일</Label>
                     <input
@@ -484,30 +505,6 @@ export default function NewParcelPage() {
                     </div>
                   </div>
                 </div>
-
-                {/* 추정 근거 */}
-                {estimate && (
-                  <div
-                    style={{
-                      marginTop: 14,
-                      padding: 12,
-                      background: "var(--bg-sunken)",
-                      borderRadius: 5,
-                      fontSize: 12,
-                      color: "var(--fg-muted)",
-                    }}
-                  >
-                    <div style={{ fontWeight: 500, color: "var(--fg)", marginBottom: 4 }}>
-                      추정 인수가 약 {won(estimate.estimatedPriceManwon)}
-                    </div>
-                    <div>
-                      평당 {num(estimate.estimatedPricePerPyeong)}만원 ·{" "}
-                      {methodLabel(estimate.method)}
-                      {estimate.transactionCount != null &&
-                        ` · 최근 12개월 토지 거래 ${estimate.transactionCount}건`}
-                    </div>
-                  </div>
-                )}
               </Panel>
             </div>
 
