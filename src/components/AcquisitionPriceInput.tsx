@@ -7,7 +7,7 @@
 //   - 사용자가 직접 입력 (총액 억 ↔ 평당가 만원/평 토글, 부지면적으로 동기화)
 //   - 입력하는 즉시 "주변 시세 대비 N%ile" 컨텍스트 + 분포 위 위치
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import PriceDistributionChart from './PriceDistributionChart';
 import {
   buildDistribution,
@@ -31,6 +31,8 @@ interface Props {
   onChange: (totalWon: number | null) => void;
   /** 참고용 자동추정 (총액, 원). 있으면 칩으로만 노출 */
   estimatedTotalWon?: number | null;
+  /** 분포 차트 높이(px). 좁은 컬럼/무스크롤 레이아웃에서 축소용 */
+  chartHeight?: number;
   className?: string;
 }
 
@@ -46,9 +48,13 @@ export default function AcquisitionPriceInput({
   value,
   onChange,
   estimatedTotalWon = null,
+  chartHeight = 320,
   className,
 }: Props) {
   const [mode, setMode] = useState<Mode>('total');
+  // 입력창 표시용 로컬 텍스트 — 편집 중엔 사용자가 친 그대로 보존(재포맷 X)
+  const [draft, setDraft] = useState('');
+  const [focused, setFocused] = useState(false);
 
   const dist = useMemo(() => buildDistribution(transactions, { trim: { method: 'iqr' } }), [transactions]);
 
@@ -57,15 +63,24 @@ export default function AcquisitionPriceInput({
   const ctx = perPyeong != null && dist.values.length ? describeContext(perPyeong, dist.values, dist.stats) : null;
   const estPerPyeong = estimatedTotalWon != null ? totalToPerPyeong(estimatedTotalWon, subjectAreaPyeong) : null;
 
-  // 입력 핸들링: 표시값 ↔ 총액(원)
-  const displayValue =
-    value == null
-      ? ''
-      : mode === 'total'
-        ? (value / 1e8).toFixed(1) // 억
-        : Math.round(perPyeong! / 1e4).toString(); // 만원/평
+  // 표시값 동기화: 편집 중이 아닐 때만 부모 value로 재포맷.
+  // (외부 '이 값으로 입력' 적용 / 모드 전환 / 블러 시 반영. 편집 중엔 건드리지 않음)
+  useEffect(() => {
+    if (focused) return;
+    if (value == null) {
+      setDraft('');
+      return;
+    }
+    setDraft(
+      mode === 'total'
+        ? String(Math.round((value / 1e8) * 100) / 100) // 억 (불필요한 소수 0 제거)
+        : String(Math.round(totalToPerPyeong(value, subjectAreaPyeong) / 1e4)) // 만원/평
+    );
+  }, [value, mode, subjectAreaPyeong, focused]);
 
+  // 입력 핸들링: 사용자가 친 텍스트는 그대로 draft에 보존, 숫자만 부모로 전달
   const handleInput = (raw: string) => {
+    setDraft(raw);
     const num = parseFloat(raw.replace(/,/g, ''));
     if (raw.trim() === '' || Number.isNaN(num)) {
       onChange(null);
@@ -107,8 +122,10 @@ export default function AcquisitionPriceInput({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <input
           inputMode="decimal"
-          value={displayValue}
+          value={draft}
           onChange={(e) => handleInput(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={mode === 'total' ? '예: 35.0' : '예: 4500'}
           style={{
             flex: 1,
@@ -136,23 +153,13 @@ export default function AcquisitionPriceInput({
             : `부지 ${subjectAreaPyeong.toFixed(1)}평`}
         </span>
         {estimatedTotalWon != null && (
-          <button
-            type="button"
-            onClick={() => onChange(estimatedTotalWon)}
-            style={{
-              fontSize: 12,
-              padding: '3px 8px',
-              borderRadius: 999,
-              border: '1px dashed var(--pg-border, #d1d5db)',
-              background: 'transparent',
-              color: 'var(--pg-muted, #6b7280)',
-              cursor: 'pointer',
-            }}
-            title="자동 추정값을 입력란에 적용 (참고용)"
+          <span
+            style={{ fontSize: 12, color: 'var(--pg-muted, #6b7280)' }}
+            title="참고 추정값 — 적용은 아래 '이 값으로 입력'"
           >
             참고 추정 {formatEok(estimatedTotalWon)}
-            {estPerPyeong ? ` · ${formatManwonPerPyeong(estPerPyeong)}` : ''} → 적용
-          </button>
+            {estPerPyeong ? ` · ${formatManwonPerPyeong(estPerPyeong)}` : ''}
+          </span>
         )}
       </div>
 
@@ -176,7 +183,7 @@ export default function AcquisitionPriceInput({
       )}
 
       {/* 분포 차트 */}
-      <PriceDistributionChart values={dist.values} marker={perPyeong} height={320} />
+      <PriceDistributionChart values={dist.values} marker={perPyeong} height={chartHeight} />
     </div>
   );
 }

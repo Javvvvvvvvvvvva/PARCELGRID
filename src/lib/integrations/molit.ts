@@ -80,6 +80,49 @@ function extractField(xml: string, tag: string): string {
   return m ? m[1].trim() : "";
 }
 
+/* ───────── 동시성 제한 (전역 세마포어) ─────────
+ * MOLIT 호출을 월별·타입별로 병렬로 던져도, 동시에 날아가는 in-flight 요청 수를
+ * 이 값으로 제한한다 → rate-limit / WAF 차단 위험 회피. */
+const MOLIT_MAX_CONCURRENCY = 6;
+let molitActive = 0;
+const molitQueue: (() => void)[] = [];
+
+function acquireMolitSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (molitActive < MOLIT_MAX_CONCURRENCY) {
+      molitActive++;
+      resolve();
+    } else {
+      molitQueue.push(() => {
+        molitActive++;
+        resolve();
+      });
+    }
+  });
+}
+
+function releaseMolitSlot(): void {
+  molitActive--;
+  const next = molitQueue.shift();
+  if (next) next();
+}
+
+/* ───────── 캐시 (type + lawdCd + 월 단위) ─────────
+ * 과거 월 실거래는 확정되어 변하지 않으므로 오래 캐시, 이번 달만 짧은 TTL.
+ * in-flight Promise를 저장해 동시 중복 호출(estimate-price ↔ dynamic)도 1회로 합친다. */
+const PAST_MONTH_TTL_MS = 24 * 60 * 60_000; // 24h — 프로세스 수명 내 사실상 불변
+const CURRENT_MONTH_TTL_MS = 10 * 60_000; // 10m — 신규 거래 반영 여지
+interface MolitCacheEntry {
+  promise: Promise<MolitTransaction[]>;
+  expires: number;
+}
+const molitCache = new Map<string, MolitCacheEntry>();
+
+function currentYearMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 /* ─────────────────────────── Fetch ─────────────────────────── */
 
 export async function fetchMolitTransactions(
@@ -92,45 +135,76 @@ export async function fetchMolitTransactions(
   }
 
   const type = opts.type ?? "officetel";
+  const cacheKey = `${type}:${opts.lawdCd}:${opts.dealYearMonth}:${opts.page ?? 1}:${opts.pageSize ?? 100}`;
+  const now = Date.now();
+
+  const cached = molitCache.get(cacheKey);
+  if (cached && cached.expires > now) return cached.promise;
+
+  const promise = fetchMolitUncached(opts, type);
+
+  const ttl =
+    opts.dealYearMonth === currentYearMonth()
+      ? CURRENT_MONTH_TTL_MS
+      : PAST_MONTH_TTL_MS;
+  molitCache.set(cacheKey, { promise, expires: now + ttl });
+  // 실패는 캐시하지 않음 → 다음 호출에서 재시도 가능
+  promise.catch(() => {
+    if (molitCache.get(cacheKey)?.promise === promise) molitCache.delete(cacheKey);
+  });
+
+  return promise;
+}
+
+/** 실제 MOLIT HTTP 호출 (캐시 미스 시). 전역 세마포어로 동시성 제한. */
+async function fetchMolitUncached(
+  opts: FetchOptions,
+  type: PropertyType
+): Promise<MolitTransaction[]> {
   const baseUrl = ENDPOINTS[type];
 
   const qs = new URLSearchParams({
-    serviceKey: SERVICE_KEY,
+    serviceKey: SERVICE_KEY as string,
     LAWD_CD: opts.lawdCd,
     DEAL_YMD: opts.dealYearMonth,
     pageNo: String(opts.page ?? 1),
     numOfRows: String(opts.pageSize ?? 100),
   });
 
-  const res = await fetch(`${baseUrl}?${qs.toString()}`, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; PARCELGRID/2.4; +https://parcelgrid.app)",
-      Accept: "application/xml",
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
+  await acquireMolitSlot();
+  try {
+    const res = await fetch(`${baseUrl}?${qs.toString()}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; PARCELGRID/2.4; +https://parcelgrid.app)",
+        Accept: "application/xml",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(
-      `MOLIT HTTP ${res.status}: ${body.slice(0, 200) || res.statusText}`
-    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `MOLIT HTTP ${res.status}: ${body.slice(0, 200) || res.statusText}`
+      );
+    }
+
+    const xml = await res.text();
+
+    const resultCode = extractField(xml, "resultCode");
+    if (resultCode && resultCode !== "000" && resultCode !== "00") {
+      const msg = extractField(xml, "resultMsg");
+      throw new Error(`MOLIT API error ${resultCode}: ${msg}`);
+    }
+
+    const totalCount = extractField(xml, "totalCount");
+    if (totalCount === "0") return [];
+
+    const items = extractAll(xml, "item");
+    return items.map((item) => parseTxn(item, opts.lawdCd, type));
+  } finally {
+    releaseMolitSlot();
   }
-
-  const xml = await res.text();
-
-  const resultCode = extractField(xml, "resultCode");
-  if (resultCode && resultCode !== "000" && resultCode !== "00") {
-    const msg = extractField(xml, "resultMsg");
-    throw new Error(`MOLIT API error ${resultCode}: ${msg}`);
-  }
-
-  const totalCount = extractField(xml, "totalCount");
-  if (totalCount === "0") return [];
-
-  const items = extractAll(xml, "item");
-  return items.map((item) => parseTxn(item, opts.lawdCd, type));
 }
 
 /* ─────────────────────────── Field parsing ─────────────────────────── */
@@ -230,16 +304,19 @@ export async function fetchMolitRange(
   }
 ): Promise<MolitTransaction[]> {
   const months = monthsBetween(opts.startYearMonth, opts.endYearMonth);
-  const all: MolitTransaction[] = [];
-  for (const ym of months) {
-    try {
-      const page = await fetchMolitTransactions({ ...opts, dealYearMonth: ym });
-      all.push(...page);
-    } catch (err) {
-      console.warn(`MOLIT ${ym} failed:`, err);
-    }
-  }
-  return all;
+  // 월별 호출을 병렬로 (동시성은 fetchMolitTransactions 내부 전역 세마포어가 제한).
+  // 한 달 실패는 비치명적 → 빈 배열로 처리하고 나머지는 계속.
+  const pages = await Promise.all(
+    months.map(async (ym) => {
+      try {
+        return await fetchMolitTransactions({ ...opts, dealYearMonth: ym });
+      } catch (err) {
+        console.warn(`MOLIT ${ym} failed:`, err);
+        return [] as MolitTransaction[];
+      }
+    })
+  );
+  return pages.flat();
 }
 
 function monthsBetween(startYM: string, endYM: string): string[] {

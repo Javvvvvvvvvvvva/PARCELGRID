@@ -52,29 +52,31 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // 최근 12개월 토지 실거래 가져오기
+    // 최근 12개월 토지 + 구축 단독/다가구 실거래를 병렬로 조회
+    // (land / house 두 범위를 동시에 — 내부 월별 호출도 병렬, 동시성은 전역 세마포어가 제한)
     const start = recentYearMonth(12);
     const end = recentYearMonth(0);
-    const landTransactions = await fetchMolitRange({
-      lawdCd,
-      type: "land",
-      startYearMonth: start,
-      endYearMonth: end,
-    }).catch((err) => {
-      console.warn("MOLIT 토지 실거래 조회 실패:", err);
-      return [];
-    });
-
-    // 구축 단독/다가구 (토지 proxy — 인수가 추정 C)
-    const houseTransactionsRaw = await fetchMolitRange({
-      lawdCd,
-      type: "house",
-      startYearMonth: start,
-      endYearMonth: end,
-    }).catch((err) => {
-      console.warn("MOLIT 단독/다가구 실거래 조회 실패:", err);
-      return [];
-    });
+    const [landTransactions, houseTransactionsRaw] = await Promise.all([
+      fetchMolitRange({
+        lawdCd,
+        type: "land",
+        startYearMonth: start,
+        endYearMonth: end,
+      }).catch((err) => {
+        console.warn("MOLIT 토지 실거래 조회 실패:", err);
+        return [];
+      }),
+      // 구축 단독/다가구 (토지 proxy — 인수가 추정 C)
+      fetchMolitRange({
+        lawdCd,
+        type: "house",
+        startYearMonth: start,
+        endYearMonth: end,
+      }).catch((err) => {
+        console.warn("MOLIT 단독/다가구 실거래 조회 실패:", err);
+        return [];
+      }),
+    ]);
     const houseTransactions = houseTransactionsRaw.map((t) => ({
       type: t.type,
       priceManwon: t.priceManwon,

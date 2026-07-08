@@ -24,35 +24,53 @@
   --border-strong: oklch(0.85 0.005 250);
   --border-faint:  oklch(0.94 0.003 250);
 
-  /* Accent */
-  --accent:        oklch(0.42 0.075 250);
-  --accent-hover:  oklch(0.36 0.08 250);
-  --accent-soft:   oklch(0.95 0.02 250);
-  --accent-fg:     oklch(0.35 0.09 250);
+  /* Accent — 잉크(무채색). 강조는 색이 아니라 명도·굵기로. */
+  --accent:        oklch(0.24 0.006 255);
+  --accent-hover:  oklch(0.15 0.006 255);
+  --accent-soft:   oklch(0.955 0.002 255);
+  --accent-fg:     oklch(0.24 0.006 255);
 
-  /* Semantic */
-  --pos:        oklch(0.48 0.10 155);
-  --pos-soft:   oklch(0.96 0.025 155);
-  --pos-fg:     oklch(0.40 0.10 155);
+  /* Semantic — 흑백 원칙: 긍정·주의는 무채색, '부정(손실·고위험)'만 절제된 적색 1개 */
+  --pos:        oklch(0.42 0.006 255);
+  --pos-soft:   oklch(0.962 0.002 255);
+  --pos-fg:     oklch(0.34 0.006 255);
 
-  --neg:        oklch(0.50 0.13 25);
-  --neg-soft:   oklch(0.96 0.025 25);
-  --neg-fg:     oklch(0.45 0.13 25);
+  --neg:        oklch(0.52 0.11 25);
+  --neg-soft:   oklch(0.966 0.018 25);
+  --neg-fg:     oklch(0.48 0.12 25);
 
-  --warn:       oklch(0.62 0.13 75);
-  --warn-soft:  oklch(0.96 0.04 80);
-  --warn-fg:    oklch(0.50 0.13 60);
+  --warn:       oklch(0.55 0.008 255);
+  --warn-soft:  oklch(0.958 0.002 255);
+  --warn-fg:    oklch(0.44 0.008 255);
 
   /* Typography */
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-serif: "IBM Plex Serif", "Noto Serif KR", Georgia, serif;
 
-  /* Sizing */
-  --r-sm: 3px;
-  --r:    5px;
-  --r-md: 7px;
-  --r-lg: 10px;
+  /* Radius */
+  --r-sm: 4px;
+  --r:    6px;
+  --r-md: 6px;
+  --r-lg: 8px;
+
+  /* Spacing scale (4px base) — 하드코딩 여백 대신 이 토큰 사용 */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+
+  /* Type scale */
+  --t-micro: 11px;
+  --t-xs:    12px;
+  --t-sm:    13px;
+  --t-md:    15px;
+  --t-lg:    18px;
+  --t-xl:    22px;
 }
 
 * { box-sizing: border-box; }
@@ -165,12 +183,12 @@ html, body {
   --pg-muted: var(--fg-muted);
   --pg-fg: var(--fg);
   --pg-border: var(--border);
-  --pg-caution-bg: color-mix(in srgb, var(--fg) 6%, transparent);
-  --pg-caution-fg: #b91c1c;
+  --pg-caution-bg: var(--neg-soft);
+  --pg-caution-fg: var(--neg-fg);
   --pg-neutral-bg: var(--bg-sunken);
   --pg-neutral-fg: var(--fg-muted);
   --pg-good-bg: var(--bg-sunken);
-  --pg-good-fg: #15803d;
+  --pg-good-fg: var(--fg);
 }
 
 /* ───────────────────────────────────────────────
@@ -326,9 +344,74 @@ html, body {
   color: var(--fg-onaccent, #fff);
 }
 .ui-btn--primary:hover { background: var(--accent-hover, var(--accent)); border-color: var(--accent-hover, var(--accent)); }
+.ui-btn--lg { height: 40px; padding: 0 20px; font-size: var(--t-md); font-weight: 600; }
+.ui-btn--block { width: 100%; }
+.ui-btn:disabled,
+.ui-btn--primary:disabled {
+  background: var(--bg-active);
+  color: var(--fg-faint);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+.ui-btn:disabled:hover { background: var(--bg-active); border-color: var(--border); }
 
 /* 숫자/단위 인라인 */
 .unit { font-size: 0.7em; font-weight: 500; color: var(--fg-muted); margin-left: 2px; }
+
+/* ───────── 새 부지 분석: 좌(사실)/우(의사결정) 2단 ───────── */
+.newp-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  gap: var(--s4);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .newp-grid { grid-template-columns: 1fr; }
+}
+
+/* ───────── Atomic: Tag / Dot / Source / Bar (컴포넌트 Tag.tsx 매칭) ───────── */
+.ui-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border-radius: var(--r-sm);
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+}
+.ui-tag--accent { background: var(--accent-soft); color: var(--fg); border-color: var(--border-strong); }
+.ui-tag--pos    { background: var(--pos-soft); color: var(--pos-fg); }
+.ui-tag--neg    { background: var(--neg-soft); color: var(--neg-fg); border-color: color-mix(in oklch, var(--neg) 28%, var(--border)); }
+.ui-tag--warn   { background: var(--warn-soft); color: var(--warn-fg); }
+.ui-tag--solid  { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
+.ui-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-subtle); flex-shrink: 0; }
+.ui-dot--pos { background: var(--pos); }
+.ui-dot--neg { background: var(--neg); }
+.ui-dot--warn { background: var(--warn); }
+.ui-dot--accent { background: var(--accent); }
+
+.ui-src {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.ui-bar { position: relative; height: 5px; border-radius: 999px; background: var(--bg-active); overflow: hidden; }
+.ui-bar__fill { position: absolute; left: 0; top: 0; bottom: 0; right: 100%; background: var(--fg-subtle); border-radius: 999px; }
+.ui-bar__fill--accent { background: var(--accent); }
+.ui-bar__fill--pos { background: var(--pos); }
+.ui-bar__fill--neg { background: var(--neg); }
+.ui-bar__fill--warn { background: var(--warn); }
 
 
 /* KPI strip 안전장치 — 폭 부족 시 줄바꿈(인라인 grid 우선) */

@@ -24,6 +24,26 @@ export function LandProxyNote({
   const confLabel =
     est.confidence === "high" ? "높음" : est.confidence === "medium" ? "보통" : "낮음";
 
+  // 평당가 오름차순 정렬 + 추정 근거(중앙값)에 가장 가까운 사례 하이라이트
+  const sortedCases = [...est.cases].sort(
+    (a, b) => a.pricePerPyeongLand - b.pricePerPyeongLand
+  );
+  const minPPP = sortedCases.length ? sortedCases[0].pricePerPyeongLand : 0;
+  const maxPPP = sortedCases.length
+    ? sortedCases[sortedCases.length - 1].pricePerPyeongLand
+    : 0;
+  let medianIdx = -1;
+  let bestDiff = Infinity;
+  sortedCases.forEach((c, i) => {
+    const d = Math.abs(c.pricePerPyeongLand - est.medianPPPLand);
+    if (d < bestDiff) {
+      bestDiff = d;
+      medianIdx = i;
+    }
+  });
+
+  const COLS = "1.5fr 0.8fr 0.7fr 0.8fr 1fr";
+
   return (
     <div
       style={{
@@ -87,33 +107,99 @@ export function LandProxyNote({
       </button>
 
       {open && (
-        <div style={{ marginTop: 8, borderTop: "1px solid var(--border-faint, var(--border))", paddingTop: 6 }}>
-          {est.cases.map((c, i) => (
-            <div
-              key={i}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "2px 0",
-                gap: 8,
-                flexWrap: "wrap",
-              }}
-            >
-              <span>
-                <span style={{ color: "var(--fg-muted)", marginRight: 4 }}>{i + 1}.</span>
-                {c.address}
-                {c.sameDong && (
-                  <span style={{ marginLeft: 5, fontSize: 10, color: "var(--accent, #2563eb)", fontWeight: 600 }}>
-                    같은 동
-                  </span>
-                )}
-              </span>
-              <span className="mono" style={{ color: "var(--fg-muted)" }}>
-                {c.buildYear ? `${c.buildYear} · ` : ""}대지 {Math.round(c.lotAreaSqm)}㎡ ·{" "}
-                {(c.priceManwon / 10_000).toFixed(1)}억 · 평당 {c.pricePerPyeongLand.toLocaleString()}만
-              </span>
-            </div>
-          ))}
+        <div style={{ marginTop: 8, borderTop: "1px solid var(--border-faint, var(--border))", paddingTop: 8 }}>
+          {/* 요약 */}
+          <div style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 6 }}>
+            {est.cases.length}건 · 평당 {minPPP.toLocaleString()}~{maxPPP.toLocaleString()}만
+            <span style={{ marginLeft: 6, color: "var(--fg-faint)" }}>
+              · 중앙값 {est.medianPPPLand.toLocaleString()}만 (평당가순)
+            </span>
+          </div>
+
+          {/* 헤더 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: COLS,
+              gap: 8,
+              padding: "0 6px 4px",
+              fontSize: 10,
+              letterSpacing: "0.03em",
+              textTransform: "uppercase",
+              color: "var(--fg-faint)",
+              borderBottom: "1px solid var(--border-faint, var(--border))",
+            }}
+          >
+            <span>위치</span>
+            <span style={{ textAlign: "right" }}>거래일</span>
+            <span style={{ textAlign: "right" }}>대지</span>
+            <span style={{ textAlign: "right" }}>거래가</span>
+            <span style={{ textAlign: "right" }}>평당가</span>
+          </div>
+
+          {/* 행 */}
+          {sortedCases.map((c, i) => {
+            const isMed = i === medianIdx;
+            return (
+              <div
+                key={i}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: COLS,
+                  gap: 8,
+                  padding: "5px 6px",
+                  alignItems: "center",
+                  fontSize: 11.5,
+                  borderLeft: isMed ? "2px solid var(--fg)" : "2px solid transparent",
+                  background: isMed ? "var(--bg-sunken)" : "transparent",
+                  borderBottom: "1px dashed var(--border-faint, var(--border))",
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: "var(--fg)",
+                      }}
+                    >
+                      {c.address}
+                    </span>
+                    {isMed && (
+                      <span
+                        className="ui-tag ui-tag--solid"
+                        style={{ height: 15, fontSize: 9, padding: "0 4px", flexShrink: 0 }}
+                      >
+                        중앙값
+                      </span>
+                    )}
+                  </div>
+                  {c.buildYear != null && (
+                    <div style={{ fontSize: 9.5, color: "var(--fg-faint)" }}>
+                      준공 {c.buildYear}
+                    </div>
+                  )}
+                </div>
+                <span className="mono" style={{ textAlign: "right", color: "var(--fg-muted)" }}>
+                  {fmtDealDate(c.date)}
+                </span>
+                <span className="mono" style={{ textAlign: "right", color: "var(--fg-muted)" }}>
+                  {Math.round(c.lotAreaSqm)}㎡
+                </span>
+                <span className="mono" style={{ textAlign: "right", color: "var(--fg-muted)" }}>
+                  {(c.priceManwon / 10_000).toFixed(1)}억
+                </span>
+                <span
+                  className="mono"
+                  style={{ textAlign: "right", fontWeight: 600, color: "var(--fg)" }}
+                >
+                  {c.pricePerPyeongLand.toLocaleString()}만
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -122,4 +208,13 @@ export function LandProxyNote({
       </div>
     </div>
   );
+}
+
+/** 실거래 거래일 문자열 → "YYYY.MM" (형식 불확실해도 견고하게) */
+function fmtDealDate(d?: string): string {
+  if (!d || d === "—") return "—";
+  const digits = d.replace(/[^0-9]/g, "");
+  if (digits.length >= 6) return `${digits.slice(0, 4)}.${digits.slice(4, 6)}`;
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return d;
 }

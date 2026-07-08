@@ -28,7 +28,7 @@ interface Props {
   className?: string;
 }
 
-const PAD = { top: 34, right: 20, bottom: 44, left: 20 };
+const PAD = { top: 44, right: 20, bottom: 44, left: 20 };
 
 export default function PriceDistributionChart({
   values,
@@ -87,7 +87,7 @@ export default function PriceDistributionChart({
           x1={xOf(stats.median)} x2={xOf(stats.median)} y1={PAD.top} y2={PAD.top + plotH}
           stroke="var(--pg-grid, #d1d5db)" strokeWidth={1} strokeDasharray="3 3"
         />
-        <text x={xOf(stats.median)} y={PAD.top - 14} textAnchor="middle"
+        <text x={xOf(stats.median)} y={14} textAnchor="middle"
           fontSize={11} fill="var(--pg-muted, #9ca3af)">
           중간값 {formatManwonPerPyeong(stats.median)}
         </text>
@@ -124,7 +124,7 @@ export default function PriceDistributionChart({
             <circle cx={markerX} cy={PAD.top - 6} r={3.5} fill="var(--pg-accent, #2563eb)" />
             <text
               x={markerLabelRight ? markerX - 8 : markerX + 8}
-              y={PAD.top + 8}
+              y={30}
               textAnchor={markerLabelRight ? 'end' : 'start'}
               fontSize={12} fontWeight={600} fill="var(--pg-accent, #2563eb)">
               {marker != null ? formatManwonPerPyeong(marker) : ''}
@@ -134,13 +134,13 @@ export default function PriceDistributionChart({
         )}
 
         {/* x축 라벨 (min / median / max) */}
-        <text x={PAD.left} y={height - 14} textAnchor="start" fontSize={11} fill="var(--pg-muted, #9ca3af)">
+        <text x={PAD.left} y={height - 24} textAnchor="start" fontSize={11} fill="var(--pg-muted, #9ca3af)">
           {formatManwonPerPyeong(domainMin)}
         </text>
-        <text x={VB_W - PAD.right} y={height - 14} textAnchor="end" fontSize={11} fill="var(--pg-muted, #9ca3af)">
+        <text x={VB_W - PAD.right} y={height - 24} textAnchor="end" fontSize={11} fill="var(--pg-muted, #9ca3af)">
           {formatManwonPerPyeong(domainMax)}
         </text>
-        <text x={PAD.left} y={height - 0} textAnchor="start" fontSize={10} fill="var(--pg-muted, #9ca3af)">
+        <text x={PAD.left} y={height - 8} textAnchor="start" fontSize={10} fill="var(--pg-muted, #9ca3af)">
           n={stats.n}건{trim.method !== 'none' ? ' · 이상치 제외' : ''}
         </text>
       </svg>

@@ -21,10 +21,10 @@ import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { Tag, Dot, Source } from "@/components/ui/Tag";
-import { Icons } from "@/components/ui/Icons";
-import { won, num, pyeong, koreanDate } from "@/lib/utils/format";
+import { Tag, Dot } from "@/components/ui/Tag";
+import { TopBar } from "@/components/ui/TopBar";
+import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui/primitives";
+import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
 import type { BuildingInfo, RedevelopmentSignal } from "@/lib/integrations/molit-building";
 
@@ -218,84 +218,24 @@ export default function NewParcelPage() {
         background: "var(--bg)",
       }}
     >
-      {/* Top bar */}
-      <div
-        style={{
-          height: 44,
-          padding: "0 14px",
-          background: "var(--bg-elev)",
-          borderBottom: "1px solid var(--border)",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          fontSize: 12.5,
-        }}
-      >
-        <Link
-          href="/"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            textDecoration: "none",
-            color: "var(--fg)",
-          }}
-        >
-          <div
-            style={{
-              width: 22,
-              height: 22,
-              background: "var(--fg)",
-              color: "var(--bg)",
-              display: "grid",
-              placeItems: "center",
-              fontWeight: 700,
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              borderRadius: 3,
-            }}
-          >
-            PG
-          </div>
-          <span style={{ fontWeight: 600 }}>PARCELGRID</span>
-          <span style={{ color: "var(--fg-subtle)", fontWeight: 500 }}>
-            v2.4 · 한국
-          </span>
-        </Link>
-        <div style={{ marginLeft: 16, color: "var(--fg-muted)" }}>
-          <span>프로젝트</span>
-          <span style={{ margin: "0 8px", color: "var(--fg-faint)" }}>/</span>
-          <span style={{ color: "var(--fg)", fontWeight: 500 }}>새 부지 분석</span>
-        </div>
-      </div>
+      <TopBar crumb={["새 부지 분석"]} />
 
       {/* Content */}
       <div
         style={{
           flex: 1,
-          maxWidth: 920,
+          maxWidth: 1160,
           margin: "0 auto",
-          padding: "32px 24px",
+          padding: "var(--s8) var(--s6)",
           width: "100%",
         }}
       >
-        {/* Title */}
-        <div style={{ marginBottom: 24 }}>
-          <h1
-            style={{
-              fontSize: 22,
-              fontWeight: 600,
-              letterSpacing: "-0.01em",
-              margin: 0,
-              marginBottom: 6,
-            }}
-          >
-            새 부지 분석
-          </h1>
-          <p style={{ fontSize: 13, color: "var(--fg-muted)", margin: 0 }}>
-            지번 입력 → Kakao + V월드 + MOLIT 5개 API 자동 조회 → 시나리오 4종 자동 생성
-          </p>
-        </div>
+        <SectionTitle
+          size="lg"
+          title="새 부지 분석"
+          desc="지번 입력 → Kakao + V월드 + MOLIT 5개 API 자동 조회 → 시나리오 4종 자동 생성"
+          style={{ marginBottom: "var(--s6)" }}
+        />
 
         {/* Address input */}
         <Panel title="주소 검색">
@@ -319,23 +259,14 @@ export default function NewParcelPage() {
                 fontFamily: "inherit",
               }}
             />
-            <button
+            <Button
+              variant="primary"
               onClick={handleLookup}
               disabled={isLookingUp || !address.trim()}
-              style={{
-                height: 36,
-                padding: "0 20px",
-                background: isLookingUp || !address.trim() ? "var(--bg-active)" : "var(--fg)",
-                color: isLookingUp || !address.trim() ? "var(--fg-muted)" : "var(--bg)",
-                border: 0,
-                borderRadius: 5,
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: isLookingUp || !address.trim() ? "not-allowed" : "pointer",
-              }}
+              style={{ height: 36 }}
             >
               {isLookingUp ? "조회중..." : "조회 →"}
-            </button>
+            </Button>
           </div>
 
           {/* 진행 상태 / 에러 */}
@@ -379,7 +310,7 @@ export default function NewParcelPage() {
         {parcel && (
           <>
             {/* 부지 헤더 */}
-            <div style={{ marginTop: 24, marginBottom: 16 }}>
+            <div style={{ marginTop: "var(--s6)", marginBottom: "var(--s4)" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
                 <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>
                   {parcel.sido} {parcel.sigungu} {parcel.dong} {parcel.jibun ?? ""}
@@ -400,51 +331,54 @@ export default function NewParcelPage() {
               </div>
             </div>
 
-            {/* 부지 정보 + 현재 건물 (2-column) */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              {/* 부지 정보 */}
-              <Panel title="부지 정보" source="V월드">
-                <KV label="대지면적" value={`${num(parcel.lotArea, 2)} m²`} />
-                <KV label="대지면적" value={pyeong(parcel.lotArea)} />
-                <KV label="건폐율 상한" value={`${parcel.maxBCR}%`} />
-                <KV label="용적률 상한" value={`${parcel.maxFAR}%`} />
-                <KV label="최고고도" value={`${parcel.heightLimit} m`} />
-                <KV
-                  label="공시지가"
-                  value={`${num(parcel.landPrice / 10_000)}만원/m²`}
-                  sub={`${parcel.landPriceYear}년 기준`}
-                />
-              </Panel>
-
-              {/* 현재 건물 */}
-              <Panel title="현재 건물" source="MOLIT 건축물대장">
-                {parcel.currentBuilding && parcel.currentBuilding.hasBuilding ? (
-                  <CurrentBuildingBox
-                    info={parcel.currentBuilding}
-                    demolitionCost={demolitionCost}
+            {/* 좌: 이 땅의 사실(부지·건물) / 우: 인수 의사결정 — 한 화면 2단 */}
+            <div className="newp-grid">
+              {/* 좌 컬럼 — 사실 정보 */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
+                <Panel title="부지 정보" source="V월드">
+                  <DataRow
+                    label="대지면적"
+                    value={`${num(parcel.lotArea, 2)} m²`}
+                    sub={pyeong(parcel.lotArea)}
                   />
-                ) : (
-                  <div
-                    style={{
-                      padding: 14,
-                      background: "var(--bg-sunken)",
-                      borderRadius: 5,
-                      fontSize: 13,
-                      color: "var(--fg-muted)",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    <Dot kind="pos" />
-                    빈 토지 — 신축 가능
-                  </div>
-                )}
-              </Panel>
-            </div>
+                  <DataRow label="건폐율 상한" value={`${parcel.maxBCR}%`} />
+                  <DataRow label="용적률 상한" value={`${parcel.maxFAR}%`} />
+                  <DataRow label="최고고도" value={`${parcel.heightLimit} m`} />
+                  <DataRow
+                    label="공시지가"
+                    value={`${num(parcel.landPrice / 10_000)}만원/m²`}
+                    sub={`${parcel.landPriceYear}년 기준`}
+                    divider={false}
+                  />
+                </Panel>
 
-            {/* 인수 정보 */}
-            <div style={{ marginTop: 16 }}>
+                <Panel title="현재 건물" source="MOLIT 건축물대장">
+                  {parcel.currentBuilding && parcel.currentBuilding.hasBuilding ? (
+                    <CurrentBuildingBox
+                      info={parcel.currentBuilding}
+                      demolitionCost={demolitionCost}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: "var(--s3)",
+                        background: "var(--bg-sunken)",
+                        borderRadius: "var(--r)",
+                        fontSize: "var(--t-sm)",
+                        color: "var(--fg-muted)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "var(--s2)",
+                      }}
+                    >
+                      <Dot kind="pos" />
+                      빈 토지 — 신축 가능
+                    </div>
+                  )}
+                </Panel>
+              </div>
+
+              {/* 우 컬럼 — 인수 의사결정 */}
               <Panel
                 title="인수 정보"
                 source={
@@ -455,78 +389,50 @@ export default function NewParcelPage() {
                     : "수동 입력"
                 }
               >
-                {/* Round H: 분포 기반 인수가 입력 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                  <div>
-                    <AcquisitionPriceInput
-                      subjectAreaPyeong={sqmToPyeong(parcel.lotArea)}
-                      transactions={
-                        estimate?.transactions?.map<RawTransaction>((t) => ({
-                          amount: t.priceManwon * 10_000,
-                          areaSqm: t.areaSqm,
-                          date: t.date,
-                          label: t.address,
-                        })) ?? []
-                      }
-                      value={acquiredPrice > 0 ? acquiredPrice * 10_000 : null}
-                      onChange={(won) =>
-                        setAcquiredPrice(won == null ? 0 : Math.round(won / 10_000))
-                      }
-                      estimatedTotalWon={
-                        estimate ? estimate.estimatedPriceManwon * 10_000 : null
-                      }
-                    />
-                    <LandProxyNote
-                      est={estimate?.houseEstimate}
-                      onApply={(manwon) => setAcquiredPrice(manwon)}
-                    />
-                  </div>
-
-                  <div>
-                    <Label>인수일</Label>
-                    <input
-                      type="date"
-                      value={acquiredDate}
-                      onChange={(e) => setAcquiredDate(e.target.value)}
-                      style={{
-                        width: "100%",
-                        height: 32,
-                        padding: "0 8px",
-                        background: "var(--bg-elev)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 5,
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 14,
-                        color: "var(--fg)",
-                      }}
-                    />
-                    <div style={{ fontSize: 11.5, color: "var(--fg-muted)", marginTop: 4 }}>
-                      {koreanDate(acquiredDate)}
-                    </div>
-                  </div>
+                <AcquisitionPriceInput
+                  subjectAreaPyeong={sqmToPyeong(parcel.lotArea)}
+                  chartHeight={200}
+                  transactions={
+                    estimate?.transactions?.map<RawTransaction>((t) => ({
+                      amount: t.priceManwon * 10_000,
+                      areaSqm: t.areaSqm,
+                      date: t.date,
+                      label: t.address,
+                    })) ?? []
+                  }
+                  value={acquiredPrice > 0 ? acquiredPrice * 10_000 : null}
+                  onChange={(won) =>
+                    setAcquiredPrice(won == null ? 0 : Math.round(won / 10_000))
+                  }
+                  estimatedTotalWon={
+                    estimate ? estimate.estimatedPriceManwon * 10_000 : null
+                  }
+                />
+                <LandProxyNote
+                  est={estimate?.houseEstimate}
+                  onApply={(manwon) => setAcquiredPrice(manwon)}
+                />
+                <div style={{ marginTop: "var(--s4)", maxWidth: 220 }}>
+                  <DateField
+                    label="인수일"
+                    value={acquiredDate}
+                    onChange={setAcquiredDate}
+                    hint={koreanDate(acquiredDate)}
+                  />
                 </div>
               </Panel>
             </div>
 
             {/* 분석 시작 */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 24 }}>
-              <button
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--s6)" }}>
+              <Button
+                variant="primary"
+                size="lg"
                 onClick={handleStart}
                 disabled={!acquiredPrice}
-                style={{
-                  padding: "0 24px",
-                  height: 40,
-                  background: !acquiredPrice ? "var(--bg-active)" : "var(--accent)",
-                  color: !acquiredPrice ? "var(--fg-muted)" : "var(--fg-onaccent)",
-                  border: 0,
-                  borderRadius: 5,
-                  fontSize: 14,
-                  fontWeight: 500,
-                  cursor: !acquiredPrice ? "not-allowed" : "pointer",
-                }}
               >
                 분석 시작 → 시나리오 4종 생성
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -536,97 +442,6 @@ export default function NewParcelPage() {
 }
 
 /* ─────────────────────────── 헬퍼 컴포넌트 ─────────────────────────── */
-
-function Panel({
-  title,
-  source,
-  children,
-}: {
-  title: string;
-  source?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        background: "var(--bg-elev)",
-        border: "1px solid var(--border)",
-        borderRadius: 7,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          height: 36,
-          padding: "0 14px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: "var(--fg-muted)",
-          }}
-        >
-          {title}
-        </div>
-        {source && (
-          <div style={{ marginLeft: "auto" }}>
-            <Source>{source}</Source>
-          </div>
-        )}
-      </div>
-      <div style={{ padding: 14 }}>{children}</div>
-    </div>
-  );
-}
-
-function KV({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 0",
-        fontSize: 12.5,
-        borderBottom: "1px dashed var(--border-faint)",
-      }}
-    >
-      <span style={{ color: "var(--fg-muted)" }}>{label}</span>
-      <div style={{ textAlign: "right" }}>
-        <div className="mono" style={{ color: "var(--fg)", fontWeight: 500 }}>{value}</div>
-        {sub && (
-          <div style={{ fontSize: 11, color: "var(--fg-faint)", marginTop: 1 }}>
-            {sub}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Label({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        color: "var(--fg-muted)",
-        fontWeight: 500,
-        marginBottom: 6,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
 
 function CurrentBuildingBox({
   info,
