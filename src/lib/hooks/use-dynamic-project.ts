@@ -9,6 +9,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import type { ProjectComputed } from "@/lib/services/compute-project";
 
 /**
@@ -36,6 +37,9 @@ export interface StoredParcel {
   estMarketPrice?: number;
   acquired: string;
   acquiredPrice: number;
+  demolitionCost?: number;
+  /** MOLIT 건축물대장 — Stage 1 현황 분석용 */
+  currentBuilding?: BuildingLookupResult | null;
 }
 
 /** Read the stored parcel. Returns null if nothing stored. */
@@ -109,7 +113,8 @@ export function useDynamicProject(projectId: string) {
           estMarketPrice: stored.estMarketPrice,
           acquired: stored.acquired,
           acquiredPrice: stored.acquiredPrice,
-          demolitionCost: (stored as { demolitionCost?: number }).demolitionCost,
+          demolitionCost: stored.demolitionCost,
+          currentBuilding: stored.currentBuilding ?? null,
         },
         lawdCd: stored.lawdCd,
         parcelDong,

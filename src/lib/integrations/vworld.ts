@@ -131,6 +131,12 @@ interface CadastralResponse {
   };
 }
 
+export interface CadastralMatchHint {
+  mainAddressNo?: string;
+  subAddressNo?: string;
+  mountainYn?: string;
+}
+
 export interface CadastralInfo {
   pnu: string;
   jibun: string;
@@ -147,6 +153,8 @@ export interface CadastralInfo {
   jimokCategory: JimokCategory;
   /** 필지 경계 폴리곤 [lng, lat][] (WGS84) — 3D 매싱·면적 계산용. 없으면 빈 배열 */
   boundary: [number, number][];
+  /** 필지 중심 (지도 핀·3D 원점) */
+  centroid: { lat: number; lng: number };
   /** 부지 주변 도로 중심선 — 전면/측면/후면 식별용. 없으면 빈 배열 */
   roads: RoadLine[];
 }
@@ -211,13 +219,136 @@ async function fetchRoads(lat: number, lng: number): Promise<RoadLine[]> {
   }
 }
 
+function normalizeLotNum(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed || trimmed === "0") return "";
+  const n = parseInt(trimmed, 10);
+  return Number.isFinite(n) ? String(n) : trimmed;
+}
+
+function jibunMatchesHint(
+  props: CadastralResponseFeature["properties"],
+  hint?: CadastralMatchHint
+): boolean {
+  if (!hint?.mainAddressNo) return false;
+  const bon = normalizeLotNum(props.bonbun);
+  const bub = normalizeLotNum(props.bubun);
+  const main = normalizeLotNum(hint.mainAddressNo);
+  const sub = normalizeLotNum(hint.subAddressNo || "");
+  if (bon !== main) return false;
+  if (!sub) return !bub;
+  return bub === sub;
+}
+
+function openRingCoords(ring: [number, number][]): [number, number][] {
+  if (
+    ring.length > 1 &&
+    ring[0][0] === ring[ring.length - 1][0] &&
+    ring[0][1] === ring[ring.length - 1][1]
+  ) {
+    return ring.slice(0, -1);
+  }
+  return ring;
+}
+
+function pointInPolygon(lng: number, lat: number, ring: [number, number][]): boolean {
+  const open = openRingCoords(ring);
+  let inside = false;
+  for (let i = 0, j = open.length - 1; i < open.length; j = i++) {
+    const [xi, yi] = open[i];
+    const [xj, yj] = open[j];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lng < ((xj - xi) * (lat - yi)) / (yj - yi + Number.EPSILON) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function ringCentroidLngLat(ring: [number, number][]): { lat: number; lng: number } {
+  const open = openRingCoords(ring);
+  let lng = 0;
+  let lat = 0;
+  for (const [x, y] of open) {
+    lng += x;
+    lat += y;
+  }
+  return { lng: lng / open.length, lat: lat / open.length };
+}
+
+function selectBestCadastralFeature(
+  features: CadastralResponseFeature[],
+  lat: number,
+  lng: number,
+  hint?: CadastralMatchHint
+): CadastralResponseFeature | null {
+  if (features.length === 0) return null;
+
+  type Scored = { f: CadastralResponseFeature; score: number };
+  const scored: Scored[] = [];
+
+  for (const f of features) {
+    const parsed = parseCadastralFeature(f);
+    if (!parsed) continue;
+
+    let score = 0;
+    if (jibunMatchesHint(f.properties, hint)) score += 1000;
+    if (pointInPolygon(lng, lat, parsed.boundary)) score += 100;
+    score -= distM(lat, lng, parsed.centroid.lat, parsed.centroid.lng) * 0.5;
+    scored.push({ f, score });
+  }
+
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].f;
+}
+
+async function featureToCadastralInfo(
+  f: CadastralResponseFeature,
+  roadsCenter: { lat: number; lng: number }
+): Promise<CadastralInfo> {
+  const props = f.properties;
+  let ring: [number, number][] = [];
+  if (f.geometry.type === "MultiPolygon") {
+    const coords = f.geometry.coordinates as number[][][][];
+    ring = (coords[0]?.[0] ?? []) as [number, number][];
+  } else if (f.geometry.type === "Polygon") {
+    const coords = f.geometry.coordinates as number[][][];
+    ring = (coords[0] ?? []) as [number, number][];
+  }
+  const lotAreaSqm = ring.length >= 3 ? polygonAreaSqm(ring) : 0;
+  const centroid = ringCentroidLngLat(ring);
+
+  const jigaRaw = props.jiga ?? "";
+  const landPrice = jigaRaw ? parseInt(jigaRaw, 10) : 0;
+  const jimokName = props.jimokName ?? "";
+  const jimokCode = props.jimokCd ?? "";
+
+  return {
+    pnu: props.pnu ?? "",
+    jibun: props.jibun ?? "",
+    address: props.addr ?? "",
+    lotAreaSqm: Math.round(lotAreaSqm * 100) / 100,
+    landPriceWonPerSqm: Number.isFinite(landPrice) ? landPrice : 0,
+    landPriceYear: props.gosi_year ?? "",
+    landPriceMonth: props.gosi_month ?? "",
+    jimok: jimokName,
+    jimokCode,
+    jimokCategory: jimokToCategory(jimokName),
+    boundary: ring,
+    centroid,
+    roads: await fetchRoads(roadsCenter.lat, roadsCenter.lng),
+  };
+}
+
 export async function lookupCadastral(
   lat: number,
-  lng: number
+  lng: number,
+  hint?: CadastralMatchHint
 ): Promise<CadastralInfo | null> {
   if (!KEY) throw new Error("VWORLD_API_KEY not set");
 
-  const buffer = 0.00005;
+  const buffer = 0.00008;
   const bbox = `${lng - buffer},${lat - buffer},${lng + buffer},${lat + buffer}`;
 
   const url = new URL(DATA_BASE);
@@ -226,7 +357,7 @@ export async function lookupCadastral(
   url.searchParams.set("data", "LP_PA_CBND_BUBUN");
   url.searchParams.set("key", KEY);
   url.searchParams.set("format", "json");
-  url.searchParams.set("size", "1");
+  url.searchParams.set("size", "25");
   url.searchParams.set("geomFilter", `BOX(${bbox})`);
   url.searchParams.set("crs", "EPSG:4326");
   url.searchParams.set("domain", "http://localhost:3000");
@@ -245,11 +376,23 @@ export async function lookupCadastral(
   if (data.response.status === "NOT_FOUND") return null;
 
   const features = data.response.result?.featureCollection?.features ?? [];
-  if (features.length === 0) return null;
+  const best = selectBestCadastralFeature(features, lat, lng, hint);
+  if (!best) return null;
 
-  const f = features[0];
+  const parsed = parseCadastralFeature(best);
+  if (!parsed) return null;
+
+  return featureToCadastralInfo(best, parsed.centroid);
+}
+
+function parseCadastralFeature(f: CadastralResponseFeature): {
+  pnu: string;
+  jibun: string;
+  lotAreaSqm: number;
+  boundary: [number, number][];
+  centroid: { lat: number; lng: number };
+} | null {
   const props = f.properties;
-
   let ring: [number, number][] = [];
   if (f.geometry.type === "MultiPolygon") {
     const coords = f.geometry.coordinates as number[][][][];
@@ -258,29 +401,91 @@ export async function lookupCadastral(
     const coords = f.geometry.coordinates as number[][][];
     ring = (coords[0] ?? []) as [number, number][];
   }
-  const lotAreaSqm = ring.length >= 3 ? polygonAreaSqm(ring) : 0;
-
-  const jigaRaw = props.jiga ?? "";
-  const landPrice = jigaRaw ? parseInt(jigaRaw, 10) : 0;
-
-  // NEW: jimok parsing
-  const jimokName = props.jimokName ?? "";
-  const jimokCode = props.jimokCd ?? "";
-
+  if (ring.length < 3) return null;
+  const lotAreaSqm = polygonAreaSqm(ring);
+  let lng = 0;
+  let lat = 0;
+  const n = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] ? ring.length - 1 : ring.length;
+  for (let i = 0; i < n; i++) {
+    lng += ring[i][0];
+    lat += ring[i][1];
+  }
   return {
     pnu: props.pnu ?? "",
     jibun: props.jibun ?? "",
-    address: props.addr ?? "",
     lotAreaSqm: Math.round(lotAreaSqm * 100) / 100,
-    landPriceWonPerSqm: Number.isFinite(landPrice) ? landPrice : 0,
-    landPriceYear: props.gosi_year ?? "",
-    landPriceMonth: props.gosi_month ?? "",
-    jimok: jimokName,
-    jimokCode,
-    jimokCategory: jimokToCategory(jimokName),
     boundary: ring,
-    roads: await fetchRoads(lat, lng),
+    centroid: { lat: lat / n, lng: lng / n },
   };
+}
+
+function distM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const dLat = (lat2 - lat1) * 111_000;
+  const dLng = (lng2 - lng1) * 111_000 * Math.cos((lat1 * Math.PI) / 180);
+  return Math.hypot(dLat, dLng);
+}
+
+export interface NearbyCadastralParcel {
+  pnu: string;
+  jibun: string;
+  lotAreaSqm: number;
+  boundary: [number, number][];
+  distanceM: number;
+}
+
+/**
+ * 대상지 주변 연속지적 필지 (3D 맥락용).
+ */
+export async function fetchNearbyCadastralParcels(
+  lat: number,
+  lng: number,
+  options: { excludePnu?: string; radiusM?: number; maxCount?: number } = {}
+): Promise<NearbyCadastralParcel[]> {
+  if (!KEY) return [];
+  const radiusM = options.radiusM ?? 75;
+  const maxCount = options.maxCount ?? 14;
+  const buf = radiusM / 111_000;
+  const bbox = `${lng - buf},${lat - buf},${lng + buf},${lat + buf}`;
+
+  const url = new URL(DATA_BASE);
+  url.searchParams.set("service", "data");
+  url.searchParams.set("request", "GetFeature");
+  url.searchParams.set("data", "LP_PA_CBND_BUBUN");
+  url.searchParams.set("key", KEY);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("size", String(Math.min(30, maxCount + 4)));
+  url.searchParams.set("geomFilter", `BOX(${bbox})`);
+  url.searchParams.set("crs", "EPSG:4326");
+  url.searchParams.set("domain", "http://localhost:3000");
+
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!res.ok) return [];
+    const data = (await res.json()) as CadastralResponse;
+    if (data.response.status !== "OK") return [];
+
+    const features = data.response.result?.featureCollection?.features ?? [];
+    const out: NearbyCadastralParcel[] = [];
+
+    for (const f of features) {
+      const parsed = parseCadastralFeature(f);
+      if (!parsed || !parsed.pnu) continue;
+      if (options.excludePnu && parsed.pnu === options.excludePnu) continue;
+      const distanceM = distM(lat, lng, parsed.centroid.lat, parsed.centroid.lng);
+      if (distanceM > radiusM) continue;
+      out.push({
+        pnu: parsed.pnu,
+        jibun: parsed.jibun,
+        lotAreaSqm: parsed.lotAreaSqm,
+        boundary: parsed.boundary,
+        distanceM: Math.round(distanceM),
+      });
+    }
+
+    return out.sort((a, b) => a.distanceM - b.distanceM).slice(0, maxCount);
+  } catch {
+    return [];
+  }
 }
 
 /* ─────────────────────────── 2. 용도지역 추출 (NED 토지이용계획) ─────────────────────────── */

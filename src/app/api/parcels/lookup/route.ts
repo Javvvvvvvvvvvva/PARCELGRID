@@ -44,8 +44,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. V월드 지적 정보 (좌표 기반) — PNU + 면적 + 지목 + 공시지가
-    const cadastral = await lookupCadastral(geo.lat, geo.lng);
+    // 2. V월드 지적 정보 — 지번 매칭으로 올바른 필지 선택
+    const cadastral = await lookupCadastral(geo.lat, geo.lng, {
+      mainAddressNo: geo.mainAddressNo,
+      subAddressNo: geo.subAddressNo,
+      mountainYn: geo.mountainYn,
+    });
     if (!cadastral) {
       return NextResponse.json(
         { error: "V월드 지적 정보 조회 실패" },
@@ -83,8 +87,8 @@ export async function POST(req: NextRequest) {
       // Kakao
       address: geo.address,
       addressRoad: geo.roadAddress,
-      lat: geo.lat,
-      lng: geo.lng,
+      lat: cadastral.centroid.lat,
+      lng: cadastral.centroid.lng,
       bCode: geo.bCode,
       lawdCd: geo.lawdCd,
       sido: geo.sido,

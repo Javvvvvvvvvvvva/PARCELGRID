@@ -65,6 +65,8 @@ export interface CompMarker {
   date: string;
   address: string;
   type: string;
+  /** 매각가 알고리즘이 참고한 사례 (saleEstimate.cases 매칭) — 지도 강조 */
+  referenced?: boolean;
 }
 
 /** 평당가 → 색상 (낮음 파랑 ↔ 높음 빨강). min~max 정규화. */
@@ -74,6 +76,19 @@ function priceColor(ppp: number, min: number, max: number): string {
   // 파랑(210) → 빨강(0) HSL 보간
   const hue = 210 - t * 210;
   return `hsl(${hue}, 75%, 52%)`;
+}
+
+/** 위경도 간 거리 (m) — 근사 */
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 export function KakaoMap({
@@ -86,6 +101,20 @@ export function KakaoMap({
   selectedId,
   onSelectComp,
   height = 420,
+  /** 필지 경계 폴리곤 [lng, lat][] */
+  boundary,
+  /** true면 대상지 중심 확대 유지 (실거래 전체 fit 안 함) */
+  focusSubject = false,
+  /** 초기 줌 (1=가장 가까움, 14=멀음). focusSubject 시 2~3 권장 */
+  zoomLevel = 5,
+  /** 인접 도로 중심선 (V월드) */
+  roads = [],
+  /** false면 도로선·도로명 미표시 */
+  showRoads = true,
+  /** focusSubject 시 주변 마커 포함 최대 줌 아웃 레벨 */
+  maxZoomOutLevel = 4,
+  /** 주변 실거래·역 포함 반경 (m) */
+  nearbyRadiusM = 550,
 }: {
   centerLat: number;
   centerLng: number;
@@ -100,8 +129,16 @@ export function KakaoMap({
   /** 점 클릭 콜백 (표 연동) */
   onSelectComp?: (id: string) => void;
   height?: number;
+  boundary?: [number, number][];
+  focusSubject?: boolean;
+  zoomLevel?: number;
+  roads?: { name: string | null; points: [number, number][] }[];
+  showRoads?: boolean;
+  maxZoomOutLevel?: number;
+  nearbyRadiusM?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<any>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -115,8 +152,65 @@ export function KakaoMap({
         const center = new kakao.maps.LatLng(centerLat, centerLng);
         const map = new kakao.maps.Map(containerRef.current, {
           center,
-          level: 5,
+          level: zoomLevel,
+          draggable: true,
+          scrollwheel: true,
+          disableDoubleClickZoom: false,
         });
+        mapRef.current = map;
+
+        const fitBounds = new kakao.maps.LatLngBounds();
+        fitBounds.extend(center);
+
+        // 필지 경계 폴리곤
+        if (boundary && boundary.length >= 3) {
+          const path = boundary.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
+          new kakao.maps.Polygon({
+            map,
+            path,
+            strokeWeight: 2.5,
+            strokeColor: "#2563eb",
+            strokeOpacity: 0.95,
+            fillColor: "#3b82f6",
+            fillOpacity: 0.15,
+          });
+          path.forEach((p: { getLat: () => number; getLng: () => number }) => fitBounds.extend(p));
+        }
+
+        // 인접 도로 + 도로명 (선택)
+        if (showRoads) {
+        roads.forEach((road) => {
+          if (!road.points || road.points.length < 2) return;
+          const path = road.points.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
+          new kakao.maps.Polyline({
+            map,
+            path,
+            strokeWeight: 5,
+            strokeColor: "#6b7280",
+            strokeOpacity: 0.85,
+          });
+          path.forEach((p: { getLat: () => number; getLng: () => number }) => {
+            if (haversineM(centerLat, centerLng, p.getLat(), p.getLng()) <= nearbyRadiusM + 200) {
+              fitBounds.extend(p);
+            }
+          });
+          const label = road.name?.trim();
+          if (label) {
+            const mid = path[Math.floor(path.length / 2)];
+            const el = document.createElement("div");
+            el.style.cssText =
+              "padding:2px 7px;border-radius:4px;background:rgba(255,255,255,0.92);border:1px solid #9ca3af;font-size:11px;font-weight:600;color:#475569;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,0.12);";
+            el.textContent = label;
+            new kakao.maps.CustomOverlay({
+              map,
+              position: mid,
+              content: el,
+              yAnchor: 0.5,
+              xAnchor: 0.5,
+            }).setMap(map);
+          }
+        });
+        }
 
         // 대상 대지 마커 (기본 핀 + 라벨)
         const subjectMarker = new kakao.maps.Marker({ position: center, zIndex: 10 });
@@ -133,14 +227,15 @@ export function KakaoMap({
           const prices = comps.map((c) => c.pricePerPyeong);
           const min = Math.min(...prices);
           const max = Math.max(...prices);
-          const bounds = new kakao.maps.LatLngBounds();
-          bounds.extend(center);
 
           let openInfo: any = null;
 
           comps.forEach((c) => {
+            const dist = haversineM(centerLat, centerLng, c.lat, c.lng);
+            if (focusSubject && dist > nearbyRadiusM) return;
+
             const pos = new kakao.maps.LatLng(c.lat, c.lng);
-            bounds.extend(pos);
+            fitBounds.extend(pos);
             const color = priceColor(c.pricePerPyeong, min, max);
 
             // 색상 점 — DOM 엘리먼트로 직접 생성 (클릭 리스너 부착 위해)
@@ -191,13 +286,14 @@ export function KakaoMap({
             });
           });
 
-          // 모든 점 보이게 범위 조정
-          map.setBounds(bounds);
         }
 
-        // 지하철역 마커 (역세권 — "왜 비싼지"의 핵심)
+        // 지하철역 — 근거리만 bounds 포함
         stations.forEach((st) => {
           const pos = new kakao.maps.LatLng(st.lat, st.lng);
+          if (!focusSubject || st.distanceM <= nearbyRadiusM + 300) {
+            fitBounds.extend(pos);
+          }
           const near = st.distanceM <= 500; // 역세권 기준
           const distLabel =
             st.distanceM >= 1000
@@ -217,6 +313,16 @@ export function KakaoMap({
           overlay.setMap(map);
         });
 
+        // 통합 줌 — 대상지 + 주변 실거래·도로
+        map.setBounds(fitBounds, 44, 44, 44, 44);
+        const lv = map.getLevel();
+        if (focusSubject) {
+          if (lv > maxZoomOutLevel) map.setLevel(maxZoomOutLevel);
+          if (lv < 2) map.setLevel(2);
+        } else if (boundary && boundary.length >= 3) {
+          if (lv > 5) map.setLevel(5);
+        }
+
         setStatus("ready");
       })
       .catch((err) => {
@@ -227,8 +333,55 @@ export function KakaoMap({
 
     return () => {
       cancelled = true;
+      mapRef.current = null;
     };
-  }, [centerLat, centerLng, subjectLabel, subjectPPP, comps, stations, selectedId, onSelectComp]);
+  }, [
+    centerLat,
+    centerLng,
+    subjectLabel,
+    subjectPPP,
+    comps,
+    stations,
+    selectedId,
+    onSelectComp,
+    boundary,
+    focusSubject,
+    zoomLevel,
+    roads,
+    showRoads,
+    maxZoomOutLevel,
+    nearbyRadiusM,
+  ]);
+
+  const zoomIn = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setLevel(Math.max(1, map.getLevel() - 1));
+  };
+  const zoomOut = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setLevel(Math.min(14, map.getLevel() + 1));
+  };
+  const recenter = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const kakao = window.kakao;
+    map.setCenter(new kakao.maps.LatLng(centerLat, centerLng));
+    const bounds = new kakao.maps.LatLngBounds();
+    bounds.extend(new kakao.maps.LatLng(centerLat, centerLng));
+    if (boundary && boundary.length >= 3) {
+      boundary.forEach(([lng, lat]) => bounds.extend(new kakao.maps.LatLng(lat, lng)));
+    }
+    comps.forEach((c) => {
+      if (haversineM(centerLat, centerLng, c.lat, c.lng) <= nearbyRadiusM) {
+        bounds.extend(new kakao.maps.LatLng(c.lat, c.lng));
+      }
+    });
+    map.setBounds(bounds, 44, 44, 44, 44);
+    if (map.getLevel() > maxZoomOutLevel) map.setLevel(maxZoomOutLevel);
+    if (map.getLevel() < 2) map.setLevel(2);
+  };
 
   return (
     <div
@@ -243,6 +396,23 @@ export function KakaoMap({
       }}
     >
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      {status === "ready" && (
+        <div
+          style={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            zIndex: 2,
+          }}
+        >
+          <MapZoomBtn label="+" onClick={zoomIn} title="확대" />
+          <MapZoomBtn label="−" onClick={zoomOut} title="축소" />
+          <MapZoomBtn label="◎" onClick={recenter} title="대상지로" small />
+        </div>
+      )}
       {comps.length > 0 && status === "ready" && (
         <div
           style={{
@@ -307,5 +477,40 @@ export function KakaoMap({
         </div>
       )}
     </div>
+  );
+}
+
+function MapZoomBtn({
+  label,
+  onClick,
+  title,
+  small,
+}: {
+  label: string;
+  onClick: () => void;
+  title: string;
+  small?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      style={{
+        width: small ? 30 : 30,
+        height: small ? 26 : 30,
+        borderRadius: 6,
+        border: "1px solid var(--border)",
+        background: "var(--bg-elev)",
+        color: "var(--fg)",
+        fontSize: small ? 13 : 16,
+        fontWeight: 600,
+        cursor: "pointer",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+        lineHeight: 1,
+      }}
+    >
+      {label}
+    </button>
   );
 }

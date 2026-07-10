@@ -82,54 +82,23 @@ export interface GeocodeResult {
   mountainYn: "Y" | "N" | "";
 }
 
-/* ─── Public API ────────────────────────────────────────────────────── */
+/** 주소 자동완성 후보 */
+export interface AddressSuggestion {
+  /** lookup에 넘길 주소 (지번 우선) */
+  address: string;
+  roadAddress: string | null;
+  sido: string;
+  sigungu: string;
+  dong: string;
+}
 
-export async function geocodeAddress(
-  query: string
-): Promise<GeocodeResult | null> {
-  if (!KEY) {
-    throw new Error(
-      "KAKAO_REST_API_KEY not set. Add it to .env.local."
-    );
-  }
+type AddressDoc = z.infer<typeof AddressDocSchema>;
 
-  const url = new URL(`${BASE}/v2/local/search/address.json`);
-  url.searchParams.set("query", query);
-  url.searchParams.set("size", "1");
-
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `KakaoAK ${KEY}` },
-    signal: AbortSignal.timeout(8_000),
-  });
-
-  // Single diagnostic log line
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error("KAKAO error body:", body);
-    throw new Error(`Kakao geocode HTTP ${res.status}: ${body}`);
-  }
-
-  const raw = await res.json();
-  const parsed = AddressSearchResponse.safeParse(raw);
-  if (!parsed.success) {
-    console.error("KAKAO parse error:", parsed.error.issues);
-    throw new Error(
-      `Kakao response shape unexpected: ${parsed.error.issues[0]?.message}`
-    );
-  }
-
-  if (parsed.data.documents.length === 0) {
-    console.log("KAKAO: no results for query:", query);
-    return null;
-  }
-
-  const doc = parsed.data.documents[0];
+function parseAddressDoc(doc: AddressDoc): GeocodeResult {
   const lat = Number(doc.y);
   const lng = Number(doc.x);
-
   const addr = doc.address;
   const road = doc.road_address;
-
   const bCode = addr?.b_code ?? "";
   const lawdCd = bCode.slice(0, 5);
 
@@ -151,6 +120,77 @@ export async function geocodeAddress(
     subAddressNo: addr?.sub_address_no ?? "",
     mountainYn: (addr?.mountain_yn as "Y" | "N" | undefined) ?? "",
   };
+}
+
+async function fetchAddressDocuments(
+  query: string,
+  size: number
+): Promise<AddressDoc[]> {
+  if (!KEY) {
+    throw new Error(
+      "KAKAO_REST_API_KEY not set. Add it to .env.local."
+    );
+  }
+
+  const url = new URL(`${BASE}/v2/local/search/address.json`);
+  url.searchParams.set("query", query);
+  url.searchParams.set("size", String(Math.min(Math.max(size, 1), 15)));
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `KakaoAK ${KEY}` },
+    signal: AbortSignal.timeout(8_000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error("KAKAO error body:", body);
+    throw new Error(`Kakao geocode HTTP ${res.status}: ${body}`);
+  }
+
+  const raw = await res.json();
+  const parsed = AddressSearchResponse.safeParse(raw);
+  if (!parsed.success) {
+    console.error("KAKAO parse error:", parsed.error.issues);
+    throw new Error(
+      `Kakao response shape unexpected: ${parsed.error.issues[0]?.message}`
+    );
+  }
+
+  return parsed.data.documents;
+}
+
+/* ─── Public API ────────────────────────────────────────────────────── */
+
+export async function geocodeAddress(
+  query: string
+): Promise<GeocodeResult | null> {
+  const docs = await fetchAddressDocuments(query, 1);
+  if (docs.length === 0) {
+    console.log("KAKAO: no results for query:", query);
+    return null;
+  }
+  return parseAddressDoc(docs[0]);
+}
+
+/** 주소 자동완성 — 입력 중 후보 목록 (지번·도로명) */
+export async function searchAddressSuggestions(
+  query: string,
+  size = 10
+): Promise<AddressSuggestion[]> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return [];
+
+  const docs = await fetchAddressDocuments(trimmed, size);
+  return docs.map((doc) => {
+    const parsed = parseAddressDoc(doc);
+    return {
+      address: parsed.address,
+      roadAddress: parsed.roadAddress,
+      sido: parsed.sido,
+      sigungu: parsed.sigungu,
+      dong: parsed.dong,
+    };
+  });
 }
 
 export async function lookupLawdCd(address: string): Promise<string | null> {

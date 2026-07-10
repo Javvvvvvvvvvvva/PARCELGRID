@@ -109,14 +109,14 @@ export function WhyRecommendPanel({
             padding: "3px 8px",
           }}
         >
-          AI 분석
+          계산 근거
         </span>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--fg)" }}>
           왜 {rec.floors}층을 권장하는가
         </span>
       </div>
       <div style={{ fontSize: 12, color: "var(--fg-subtle)", marginBottom: 14 }}>
-        건축법·정북일조·주차 규칙을 기반으로 검토한 근거입니다.
+        건축법·정북일조·주차 규칙을 수식으로 계산한 근거입니다. (추정 없음)
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

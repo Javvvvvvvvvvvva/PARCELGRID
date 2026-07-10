@@ -7,6 +7,12 @@
  *  - 따라서 V1은 상품 유형별 표준값을 기본값으로 두고, 사용자가 수정 가능.
  *  - 화면에 반드시 출처(UNIT_AREA_SOURCE) 표시 — "사실만" 철학.
  *
+ * ⚠️ areaSqm 은 "전용면적"이 아니라 "세대당 연면적 배분 기준"이다 (건축가 확정).
+ *  - 세대수 공식이 `연면적 ÷ 세대당면적` 이므로, 분모도 공용부(계단·복도·코어)가
+ *    배분된 연면적 기준이어야 분자·분모 기준이 일치한다.
+ *  - 전용면적 기준으로 쓰면 공용부가 이중 계산되어 세대수가 과대 산정된다.
+ *  - 실제 전용면적은 전용률(다가구 대략 75~85%)에 따라 더 작다 (netAreaLabel 참고).
+ *
  * 로드맵:
  *  - V2: RHTrade(다세대·연립) 지역 신축 실거래 전용면적 proxy 추천값.
  *  - V3: 추천값 적용 버튼 + 근거 사례 표시.
@@ -19,28 +25,37 @@ export type UnitProductType = "studio" | "two-room" | "family";
 export interface UnitProductStandard {
   /** 표시명 */
   label: string;
-  /** 세대당 면적 (㎡) */
+  /** 세대당 연면적 배분 기준 (㎡) — 전용 + 공용부(계단·복도·코어) 배분. 전용면적 아님. */
   areaSqm: number;
+  /** 전용면적 참고 범위 (전용률 약 75~85% 가정) */
+  netAreaLabel: string;
   /** 상품 전략 설명 */
   description: string;
 }
 
-/** 상품 유형별 표준 세대당 면적 (C 확정) */
+/**
+ * 상품 유형별 표준 세대당 연면적 배분 기준 (C 확정 + 건축가 확정).
+ * areaSqm 은 공용부 포함 연면적 배분 기준값 (전용면적 아님).
+ */
 export const UNIT_AREA_STANDARDS: Record<UnitProductType, UnitProductStandard> = {
-  studio: { label: "원룸형", areaSqm: 35, description: "세대수 극대화" },
-  "two-room": { label: "투룸형", areaSqm: 50, description: "일반적인 다가구" },
-  family: { label: "가족형", areaSqm: 65, description: "임대료 중심" },
+  studio: { label: "원룸형", areaSqm: 35, netAreaLabel: "전용 25~30㎡", description: "세대수 극대화" },
+  "two-room": { label: "투룸형", areaSqm: 50, netAreaLabel: "전용 38~42㎡", description: "일반적인 다가구" },
+  family: { label: "가족형", areaSqm: 65, netAreaLabel: "전용 50~55㎡", description: "임대료 중심" },
 };
 
 /** 기본 상품 유형 (C 확정 — 가장 일반적인 신축 다가구) */
 export const DEFAULT_UNIT_PRODUCT: UnitProductType = "two-room";
 
-/** 기본 세대당 면적 (㎡) — 표준값 fallback */
+/** 기본 세대당 연면적 배분 기준 (㎡) — 표준값 fallback */
 export const DEFAULT_UNIT_AREA_SQM = UNIT_AREA_STANDARDS[DEFAULT_UNIT_PRODUCT].areaSqm;
 
 /** 출처 문구 (화면 필수 표시 — C 확정) */
 export const UNIT_AREA_SOURCE =
-  "출처: 신축 소형주택 상품 유형 기본값 / 사용자 수정 가능";
+  "세대당 연면적 배분 기준(공용부 포함) · 전용면적 아님 / 사용자 수정 가능";
+
+/** 기준 설명 (전용면적과의 차이 — 화면 표시) */
+export const UNIT_AREA_BASIS_NOTE =
+  "전용면적이 아니라 계단·복도·코어 등 공용부가 배분된 세대당 연면적 기준입니다. 실제 전용면적은 전용률(약 75~85%)에 따라 더 작습니다.";
 
 /** 유형 배열 (UI 렌더 순서) */
 export const UNIT_PRODUCT_ORDER: UnitProductType[] = ["studio", "two-room", "family"];

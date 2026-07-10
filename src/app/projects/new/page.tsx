@@ -24,6 +24,7 @@ import { useRouter } from "next/navigation";
 import { Tag, Dot } from "@/components/ui/Tag";
 import { TopBar } from "@/components/ui/TopBar";
 import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui/primitives";
+import { AddressAutocomplete } from "@/components/ui/AddressAutocomplete";
 import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
 import type { BuildingInfo, RedevelopmentSignal } from "@/lib/integrations/molit-building";
@@ -202,10 +203,11 @@ export default function NewParcelPage() {
       acquired: acquiredDate,
       acquiredPrice,
       demolitionCost,
+      currentBuilding: parcel.currentBuilding ?? null,
     };
 
     sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(storedParcel));
-    router.push(`/projects/${parcel.pnu}/envelope`);
+    router.push(`/projects/${parcel.pnu}/status`);
   }
 
   // ─── UI ───────────────────────────────────────────────────────────
@@ -239,35 +241,32 @@ export default function NewParcelPage() {
 
         {/* Address input */}
         <Panel title="주소 검색">
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              type="text"
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <AddressAutocomplete
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLookup()}
-              placeholder="예: 서울 도봉구 쌍문동 281-23"
+              onChange={setAddress}
+              onSubmit={handleLookup}
               disabled={isLookingUp}
-              style={{
-                flex: 1,
-                height: 36,
-                padding: "0 12px",
-                background: "var(--bg-elev)",
-                border: "1px solid var(--border)",
-                borderRadius: 5,
-                fontSize: 14,
-                color: "var(--fg)",
-                fontFamily: "inherit",
-              }}
+              placeholder="예: 서울 도봉구 쌍문동 281-23"
             />
             <Button
               variant="primary"
               onClick={handleLookup}
               disabled={isLookingUp || !address.trim()}
-              style={{ height: 36 }}
+              style={{ height: 36, flexShrink: 0 }}
             >
               {isLookingUp ? "조회중..." : "조회 →"}
             </Button>
           </div>
+          <p
+            style={{
+              margin: "8px 0 0",
+              fontSize: 11.5,
+              color: "var(--fg-faint)",
+            }}
+          >
+            2글자 이상 입력 시 주소 후보가 표시됩니다. 목록에서 선택하거나 Enter로 조회하세요.
+          </p>
 
           {/* 진행 상태 / 에러 */}
           {isLookingUp && (
@@ -431,7 +430,7 @@ export default function NewParcelPage() {
                 onClick={handleStart}
                 disabled={!acquiredPrice}
               >
-                분석 시작 → 시나리오 4종 생성
+                분석 시작 → 현황 분석
               </Button>
             </div>
           </>

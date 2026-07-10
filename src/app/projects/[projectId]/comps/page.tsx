@@ -115,6 +115,12 @@ export default function CompsPage({
       .then((r) => r.json())
       .then((res: { coords: ({ lat: number; lng: number } | null)[] }) => {
         if (cancelled || !res.coords) return;
+        // 매각가 알고리즘 참고 사례 매칭 (주소·거래일·평당 3중 키 — cases와 동일 생성식)
+        const refSet = new Set(
+          (data?.saleEstimate?.cases ?? []).map(
+            (cs) => `${cs.address}|${cs.date}|${cs.pricePerPyeong}`
+          )
+        );
         const markers: CompMarker[] = [];
         filtered.forEach((c, i) => {
           const co = res.coords[i];
@@ -128,6 +134,9 @@ export default function CompsPage({
               date: c.date,
               address: c.address,
               type: c.type,
+              referenced: refSet.has(
+                `${c.address}|${c.date}|${c.pricePerPyeong}`
+              ),
             });
           }
         });

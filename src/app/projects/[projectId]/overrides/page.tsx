@@ -67,13 +67,20 @@ export default function OverridesPage({
 }) {
   use(params);
   const data = useProjectStore((s) => s.data);
+  const draftAssumptions = useProjectStore((s) => s.draftAssumptions);
+  const setDraftAssumption = useProjectStore((s) => s.setDraftAssumption);
+  const resetDraftAssumptions = useProjectStore((s) => s.resetDraftAssumptions);
 
   const scenarios = data?.scenarios ?? [];
-  const [activeId, setActiveId] = useState<string | null>(scenarios[0]?.id ?? null);
+  const [activeId, setActiveId] = useState<string | null>(
+    scenarios.find((s) => s.recommended)?.id ?? scenarios[0]?.id ?? null
+  );
   const active = scenarios.find((s) => s.id === activeId) ?? scenarios[0];
 
-  // 편집 중인 가정 (override). null이면 기본값.
-  const [overrides, setOverrides] = useState<Partial<AssumptionSet>>({});
+  // 편집 중인 가정 (스토어 draft). 대시보드 사이드바와 공유.
+  const overrides: Partial<AssumptionSet> = active
+    ? draftAssumptions[active.id] ?? {}
+    : {};
 
   const baseAssumptions = active?._raw?.assumptions;
 
@@ -120,8 +127,10 @@ export default function OverridesPage({
   }
 
   const dirty = Object.keys(overrides).length > 0;
-  const setKnob = (field: keyof AssumptionSet, value: number) =>
-    setOverrides((o) => ({ ...o, [field]: value }));
+  const setKnob = (field: keyof AssumptionSet, value: number) => {
+    if (!active) return;
+    setDraftAssumption(active.id, field, value);
+  };
 
   // IRR 근사 (ScenarioResult에 irr 없으면 profit/equity 기반) — 실제 필드명에 맞춤
   const irrOf = (r: typeof baseResult) => (r as { irr?: number }).irr ?? 0;
@@ -133,7 +142,7 @@ export default function OverridesPage({
       <div className="ui-tabs" style={{ marginBottom: 16, paddingLeft: 0 }}>
         {scenarios.map((s) => (
           <div key={s.id} className={`ui-tab ${s.id === active.id ? "ui-tab--active" : ""}`}
-            onClick={() => { setActiveId(s.id); setOverrides({}); }}>
+            onClick={() => setActiveId(s.id)}>
             {s.shortName} · {s.name}
           </div>
         ))}
@@ -176,7 +185,7 @@ export default function OverridesPage({
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>실시간 결과</span>
               {dirty && (
-                <button className="ui-btn ui-btn--sm" onClick={() => setOverrides({})}>기본값 복원</button>
+                <button className="ui-btn ui-btn--sm" onClick={() => resetDraftAssumptions(active.id)}>기본값 복원</button>
               )}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

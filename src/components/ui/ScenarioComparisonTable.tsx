@@ -24,15 +24,6 @@ function gradeColor(grade: string): string {
   return "var(--neg-fg)";
 }
 
-function Stars({ n }: { n: number }) {
-  return (
-    <span style={{ letterSpacing: 1 }}>
-      <span style={{ color: "var(--warn)" }}>{"★".repeat(n)}</span>
-      <span style={{ color: "var(--border-strong)" }}>{"★".repeat(5 - n)}</span>
-    </span>
-  );
-}
-
 type ColKind = "input" | "recommended" | "max";
 
 function Cell({
@@ -110,7 +101,22 @@ export function ScenarioComparisonTable({
   }[] = [
     { label: "층수", render: (o, k) => <Cell kind={k}>{o.floors}층</Cell> },
     { label: "연면적", render: (o, k) => <Cell kind={k}>{o.gfaPyeong}평</Cell> },
-    { label: "용적률", render: (o, k) => <Cell kind={k}>{o.farUsedPct}%</Cell> },
+    {
+      label: "용적률",
+      render: (o, k) => (
+        <Cell kind={k}>
+          <span
+            title={`실현 용적률 = 실제 연면적 ÷ 대지면적\n법정 상한 = 용도지역에서 허용되는 최대 용적률`}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            <span style={{ fontWeight: 600 }}>{o.farUsedPct}%</span>
+            <span style={{ color: "var(--fg-faint)", fontSize: 12 }}>
+              {" "}/ 상한 {o.farCapPct}%
+            </span>
+          </span>
+        </Cell>
+      ),
+    },
     {
       label: "세대수",
       render: (o, k) => <Cell kind={k}>{o.units > 0 ? `${o.units}세대` : "—"}</Cell>,
@@ -140,14 +146,6 @@ export function ScenarioComparisonTable({
         </Cell>
       ),
     },
-    {
-      label: "추천도",
-      render: (o, k) => (
-        <Cell kind={k}>
-          <Stars n={o.stars} />
-        </Cell>
-      ),
-    },
   ];
 
   return (
@@ -164,7 +162,7 @@ export function ScenarioComparisonTable({
         상세 비교 — {input ? "내 계획 vs 권장 vs 법적 최대" : "권장 vs 법적 최대"}
       </div>
       <div style={{ fontSize: 12, color: "var(--fg-subtle)", marginBottom: 12 }}>
-        세대당 기준면적 {comparison.unitAreaSqm}㎡ · 시나리오 산정 기본값
+        세대당 기준면적 {comparison.unitAreaSqm}㎡ · 수익성(IRR)은 대시보드 투자 분석에서 확인
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>

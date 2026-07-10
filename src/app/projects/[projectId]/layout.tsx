@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
@@ -44,6 +44,22 @@ function ProjectShell({
   const envelopePlan = useProjectStore((s) => s.envelopePlan);
   const pathname = usePathname();
   const lastKeyRef = useRef<string>("");
+  const [railCollapsed, setRailCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("pg-rail-collapsed") === "1") setRailCollapsed(true);
+    } catch {}
+  }, []);
+
+  const toggleRail = () =>
+    setRailCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem("pg-rail-collapsed", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
 
   useEffect(() => {
     if (!data) return;
@@ -91,7 +107,12 @@ function ProjectShell({
       <TopBar crumb={crumb} />
       <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
         <WorkRail projectId={projectId} />
-        <ParcelRail parcel={storeData?.parcel ?? data.parcel} compact={pathname.includes("/scenarios/")} />
+        <ParcelRail
+          parcel={storeData?.parcel ?? data.parcel}
+          compact={pathname.includes("/scenarios/")}
+          collapsed={railCollapsed}
+          onToggleCollapse={toggleRail}
+        />
         <main className="scroll-host" style={{ flex: 1, minWidth: 0 }}>
           {children}
         </main>
@@ -103,6 +124,8 @@ function ProjectShell({
 function makeCrumb(pathname: string, parcelLabel: string): string[] {
   const last = pathname.split("/").pop() ?? "";
   const map: Record<string, string> = {
+    status: "현황 분석",
+    envelope: "계획 스튜디오",
     comparison: "시나리오 비교",
     comps: "실거래 비교",
     overrides: "가정 편집",

@@ -369,6 +369,66 @@ html, body {
   .newp-grid { grid-template-columns: 1fr; }
 }
 
+/* ───────── 건축 기획: 좌(3D+요약 sticky) / 우(조작) 2단 ───────── */
+.env-grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 480px) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .env-grid { grid-template-columns: 1fr; }
+}
+
+/* ───────── ParcelRail 접기/펼치기 ───────── */
+.pg-parcel-rail {
+  position: relative;
+  border-right: 1px solid var(--border);
+  background: var(--bg-rail);
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pg-parcel-rail__collapsed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+.pg-parcel-rail--collapsed .pg-parcel-rail__collapsed {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pg-parcel-rail__expanded {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+.pg-parcel-rail--collapsed .pg-parcel-rail__expanded {
+  opacity: 0;
+  pointer-events: none;
+}
+.pg-parcel-rail__toggle-icon {
+  display: grid;
+  place-items: center;
+  transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pg-parcel-rail--collapsed .pg-parcel-rail__toggle-icon {
+  transform: rotate(0deg);
+}
+.pg-parcel-rail:not(.pg-parcel-rail--collapsed) .pg-parcel-rail__toggle-icon--collapse {
+  transform: rotate(180deg);
+}
+
 /* ───────── Atomic: Tag / Dot / Source / Bar (컴포넌트 Tag.tsx 매칭) ───────── */
 .ui-tag {
   display: inline-flex;

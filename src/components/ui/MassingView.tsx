@@ -14,6 +14,10 @@ import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { calcBuildableArea, type LngLat, type SunStep } from "@/lib/finance/buildable-area";
 import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import {
+  layoutParkingFromBoundary,
+  assessPilotiOverlap,
+} from "@/lib/geo/parking-layout";
 
 export type RoadLine = { name: string | null; points: [number, number][] };
 export type SetbackSpec = { road: number; side: number; rear: number };
@@ -42,12 +46,20 @@ function ringCentroid(ring: LngLat[]): LngLat {
   return [lng / n, lat / n];
 }
 
-/** 총 세대수를 층별 면적 비례로 배분 (합계 = 총 세대수 보장) */
-function distributeUnits(steps: SunStep[], totalUnits: number): number[] {
+/** 총 세대수를 층별 면적 비례로 배분 (합계 = 총 세대수 보장).
+ *  excludeFloor1: 필로티(1층 주차) 시 1층 제외하고 2층 이상에 재배분 — 총 세대수 유지 */
+function distributeUnits(
+  steps: SunStep[],
+  totalUnits: number,
+  excludeFloor1 = false
+): number[] {
   if (totalUnits <= 0 || steps.length === 0) return steps.map(() => 0);
-  const totalArea = steps.reduce((s, st) => s + st.floorPlateSqm, 0);
+  const weights = steps.map((st) =>
+    excludeFloor1 && st.floor === 1 ? 0 : st.floorPlateSqm
+  );
+  const totalArea = weights.reduce((s, w) => s + w, 0);
   if (totalArea <= 0) return steps.map(() => 0);
-  const raw = steps.map((st) => totalUnits * (st.floorPlateSqm / totalArea));
+  const raw = weights.map((w) => totalUnits * (w / totalArea));
   const base = raw.map(Math.floor);
   let remain = totalUnits - base.reduce((a, b) => a + b, 0);
   const order = raw
@@ -134,7 +146,9 @@ function FloorBox({
         <meshStandardMaterial
           color={active ? "#f59e0b" : color}
           transparent
-          opacity={active ? 0.85 : 0.6}
+          opacity={
+            active ? 0.85 : mass.floor === 1 && mass.units === 0 ? 0.15 : 0.6
+          }
           roughness={0.55}
           metalness={0.05}
         />
@@ -151,8 +165,43 @@ function FloorBox({
         anchorX="left"
         anchorY="middle"
       >
-        {`${mass.floor}F · ${mass.units}세대`}
+        {mass.floor === 1 && mass.units === 0
+          ? "1F · 필로티 (주차)"
+          : `${mass.floor}F · ${mass.units}세대`}
       </Text>
+    </group>
+  );
+}
+
+function ParkingStalls({ shapes }: { shapes: { x: number; z: number }[][] }) {
+  return (
+    <group>
+      {shapes.map((s, i) => {
+        const shape = new THREE.Shape();
+        s.forEach((p, j) => {
+          if (j === 0) shape.moveTo(p.x, p.z);
+          else shape.lineTo(p.x, p.z);
+        });
+        shape.closePath();
+        const geo = new THREE.ShapeGeometry(shape);
+        geo.rotateX(-Math.PI / 2);
+        return (
+          <group key={i}>
+            <mesh geometry={geo} position={[0, 0.02, 0]}>
+              <meshStandardMaterial
+                color="#64748b"
+                transparent
+                opacity={0.35}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+            <lineSegments position={[0, 0.03, 0]}>
+              <edgesGeometry args={[geo]} />
+              <lineBasicMaterial color="#334155" />
+            </lineSegments>
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -234,7 +283,7 @@ function Scene({
   onHover: (floor: number | null) => void;
   onData: (infos: FloorInfo[]) => void;
 }) {
-  const { masses, groundShape, extent } = useMemo(() => {
+  const { masses, groundShape, extent, parkingShapes, pilotiOn } = useMemo(() => {
     const sunApplies = /주거/.test(zoning);
     // 변별 이격 (엔진과 동일 로직 — 도로 접면 기반, 가정값 + 민법 0.5m 하한)
     const frontage =
@@ -244,8 +293,25 @@ function Scene({
     const origin = ringCentroid(boundary);
     const groundShape = ringToLocalMeters(boundary, origin);
 
+    // 주차 배치 + 필로티 자동 판정 (verdict와 동일 엔진 — 3D 표현용)
+    const parkingLayout = frontage
+      ? layoutParkingFromBoundary(boundary, frontage.frontIndex, 20)
+      : null;
+    const groundRingForPiloti =
+      ba.stepped3D.length > 0 && ba.stepped3D[0].ringLngLat
+        ? ba.stepped3D[0].ringLngLat
+        : ba.buildable2DRing;
+    const pilotiOn =
+      parkingLayout && groundRingForPiloti
+        ? assessPilotiOverlap(boundary, parkingLayout, groundRingForPiloti).recommended
+        : false;
+    const parkingShapes =
+      parkingLayout?.spots
+        .filter((s) => s.cornersLngLat)
+        .map((s) => ringToLocalMeters(s.cornersLngLat as LngLat[], origin)) ?? [];
+
     const steps = ba.stepped3D.filter((s) => s.ringLngLat);
-    const unitsByFloor = distributeUnits(steps, totalUnits);
+    const unitsByFloor = distributeUnits(steps, totalUnits, pilotiOn);
 
     let extent = 10;
     groundShape.forEach((p) => {
@@ -271,7 +337,7 @@ function Scene({
         shape,
         floorPlateSqm: step.floorPlateSqm,
         requiredSetbackM: step.requiredSetbackM,
-        units: unitsByFloor[i] ?? 0,
+        units: pilotiOn && step.floor === 1 ? 0 : unitsByFloor[i] ?? 0,
         labelPos: { x: maxX + extent * 0.08, z: zAtMax },
       };
     });
@@ -287,7 +353,7 @@ function Scene({
       }))
     );
 
-    return { masses, groundShape, extent };
+    return { masses, groundShape, extent, parkingShapes, pilotiOn };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boundary, zoning, floors, floorHeightM, totalUnits, roads, setback]);
 
@@ -298,6 +364,7 @@ function Scene({
       <directionalLight position={[-extent, extent, -extent]} intensity={0.4} />
 
       <GroundPlate shape={groundShape} />
+      {parkingShapes.length > 0 && <ParkingStalls shapes={parkingShapes} />}
       {masses.map((m) => (
         <FloorBox
           key={m.floor}
