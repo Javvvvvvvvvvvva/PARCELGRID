@@ -5,11 +5,12 @@
  *
  * 건축물대장의 면적·층수·높이를 사용하되 실제 건물 외곽선과 위치 데이터는
  * 제공되지 않으므로 대지 형상을 건폐율 비율로 축소한 개략 배치로 표현한다.
+ * 도로는 V월드 도로 중심선 중 대상지와 가장 가까운 선을 개략 리본으로 표시한다.
  */
 
 import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { ContactShadows, Edges, OrbitControls } from "@react-three/drei";
+import { ContactShadows, Edges, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
@@ -17,6 +18,8 @@ import { projectPolygon } from "@/lib/geo/project-polygon";
 
 type LngLat = [number, number];
 type Pt = { x: number; z: number };
+type RoadInput = { name: string | null; points: LngLat[] };
+type LocalRoad = { name: string | null; points: Pt[]; distanceM: number };
 
 const FLOOR_GAP = 0.06;
 const GRADE_Y = 0.08;
@@ -25,9 +28,17 @@ const LOT_EDGE = "#9a8767";
 const BUILDING_COLOR = "#d9e0e5";
 const BUILDING_EDGE = "#64748b";
 const BASEMENT_COLOR = "#566371";
+const ROAD_COLOR = "#59636e";
+const ROAD_CENTER_COLOR = "#d8dde1";
+const SCHEMATIC_ROAD_WIDTH_M = 1.45;
+const FRONT_ROAD_MAX_DISTANCE_M = 12;
 
 function openRing(boundary: LngLat[]): LngLat[] {
-  if (boundary.length > 1 && boundary[0][0] === boundary[boundary.length - 1][0]) {
+  if (
+    boundary.length > 1 &&
+    boundary[0][0] === boundary[boundary.length - 1][0] &&
+    boundary[0][1] === boundary[boundary.length - 1][1]
+  ) {
     return boundary.slice(0, -1);
   }
   return boundary;
@@ -43,7 +54,9 @@ function ringCentroidPt(ring: Pt[]): Pt {
   return { x: x / ring.length, z: z / ring.length };
 }
 
-function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[] } | null {
+function boundaryToLocalRing(
+  boundary: LngLat[]
+): { ring: Pt[]; center: { lng: number; lat: number } } | null {
   const open = openRing(boundary);
   if (open.length < 3) return null;
   const closed = [...open, open[0]] as LngLat[];
@@ -58,7 +71,47 @@ function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[] } | null {
       ? pts.slice(0, -1)
       : pts;
 
-  return { ring: openPts.map(([x, y]) => ({ x, z: -y })) };
+  return {
+    ring: openPts.map(([x, y]) => ({ x, z: -y })),
+    center: projected.center,
+  };
+}
+
+function projectRoadPoint(point: LngLat, center: { lng: number; lat: number }): Pt {
+  const lngMetersPerDeg = 111320 * Math.cos((center.lat * Math.PI) / 180);
+  const latMetersPerDeg = 110540;
+  return {
+    x: (point[0] - center.lng) * lngMetersPerDeg,
+    z: -(point[1] - center.lat) * latMetersPerDeg,
+  };
+}
+
+function distanceOriginToSegment(a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const lengthSq = dx * dx + dz * dz;
+  const t = lengthSq > 0 ? Math.max(0, Math.min(1, (-a.x * dx - a.z * dz) / lengthSq)) : 0;
+  return Math.hypot(a.x + t * dx, a.z + t * dz);
+}
+
+function findPrimaryRoad(boundary: LngLat[], roads: RoadInput[]): LocalRoad | null {
+  const local = boundaryToLocalRing(boundary);
+  if (!local || roads.length === 0) return null;
+
+  let selected: LocalRoad | null = null;
+  for (const road of roads) {
+    if (!road.points || road.points.length < 2) continue;
+    const points = road.points.map((point) => projectRoadPoint(point, local.center));
+    let distanceM = Infinity;
+    for (let i = 0; i < points.length - 1; i++) {
+      distanceM = Math.min(distanceM, distanceOriginToSegment(points[i], points[i + 1]));
+    }
+    if (!selected || distanceM < selected.distanceM) {
+      selected = { name: road.name, points, distanceM };
+    }
+  }
+
+  return selected && selected.distanceM <= FRONT_ROAD_MAX_DISTANCE_M ? selected : null;
 }
 
 function scaleRingTowardCenter(ring: Pt[], areaRatio: number): Pt[] {
@@ -125,13 +178,105 @@ function FloorMass({
   );
 }
 
+function RoadRibbon({ road, extent }: { road: LocalRoad; extent: number }) {
+  const segments = useMemo(() => {
+    const result: { key: string; x: number; z: number; length: number; angle: number }[] = [];
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const a = road.points[i];
+      const b = road.points[i + 1];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const length = Math.hypot(dx, dz);
+      const x = (a.x + b.x) / 2;
+      const z = (a.z + b.z) / 2;
+      if (length < 0.1 || Math.hypot(x, z) > extent * 2.3) continue;
+      result.push({
+        key: `${i}-${x.toFixed(2)}-${z.toFixed(2)}`,
+        x,
+        z,
+        length,
+        angle: -Math.atan2(dz, dx),
+      });
+    }
+    return result;
+  }, [road, extent]);
+
+  return (
+    <group>
+      {segments.map((segment) => (
+        <group
+          key={segment.key}
+          position={[segment.x, 0.025, segment.z]}
+          rotation={[0, segment.angle, 0]}
+        >
+          <mesh receiveShadow>
+            <boxGeometry args={[segment.length, 0.055, SCHEMATIC_ROAD_WIDTH_M]} />
+            <meshStandardMaterial color={ROAD_COLOR} roughness={0.94} metalness={0} />
+          </mesh>
+          <mesh position={[0, 0.034, 0]}>
+            <boxGeometry args={[segment.length, 0.018, 0.055]} />
+            <meshBasicMaterial color={ROAD_CENTER_COLOR} transparent opacity={0.8} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function NorthMarker({ extent }: { extent: number }) {
+  const origin = useMemo(
+    () => new THREE.Vector3(extent * 0.62, 0.28, extent * 0.55),
+    [extent]
+  );
+  const arrow = useMemo(
+    () =>
+      new THREE.ArrowHelper(
+        new THREE.Vector3(0, 0, -1),
+        origin,
+        Math.max(2.2, extent * 0.25),
+        "#334155",
+        0.55,
+        0.28
+      ),
+    [extent, origin]
+  );
+
+  return (
+    <group>
+      <primitive object={arrow} />
+      <Html
+        position={[origin.x, origin.y + 0.2, origin.z - Math.max(2.5, extent * 0.28)]}
+        center
+        style={{ pointerEvents: "none" }}
+      >
+        <div
+          style={{
+            padding: "3px 6px",
+            borderRadius: 999,
+            background: "rgba(255,255,255,0.92)",
+            border: "1px solid rgba(100,116,139,0.38)",
+            color: "#334155",
+            fontSize: 10,
+            fontWeight: 800,
+            lineHeight: 1,
+          }}
+        >
+          N
+        </div>
+      </Html>
+    </group>
+  );
+}
+
 function SceneContent({
   boundary,
+  roads,
   currentBuilding,
   lotArea,
   showBasement,
 }: {
   boundary: LngLat[];
+  roads: RoadInput[];
   currentBuilding: BuildingLookupResult | null | undefined;
   lotArea: number;
   showBasement: boolean;
@@ -142,6 +287,7 @@ function SceneContent({
 
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
   const lotRing = local?.ring ?? [];
+  const primaryRoad = useMemo(() => findPrimaryRoad(boundary, roads), [boundary, roads]);
   const footprint = useMemo(() => {
     if (lotRing.length < 3) return [];
     const ratio =
@@ -211,6 +357,7 @@ function SceneContent({
         position={[0, 0, 0]}
       />
 
+      {primaryRoad && <RoadRibbon road={primaryRoad} extent={extent} />}
       <SubjectLot ring={lotRing} cutaway={showBasement} />
 
       {belowSlabs.map((s) => (
@@ -219,6 +366,8 @@ function SceneContent({
       {aboveSlabs.map((s) => (
         <FloorMass key={`a${s.floor}`} ring={footprint} {...s} kind="above" />
       ))}
+
+      <NorthMarker extent={extent} />
 
       <ContactShadows
         position={[0, 0.02, 0]}
@@ -250,12 +399,21 @@ function ModelHud({
   basementFloors,
   buildingAreaSqm,
   bcrPct,
+  roadName,
 }: {
   groundFloors: number;
   basementFloors: number;
   buildingAreaSqm: number;
   bcrPct: number;
+  roadName: string | null;
 }) {
+  const labels = [
+    "개략 형상",
+    `지상 ${groundFloors}층`,
+    ...(basementFloors > 0 ? [`지하 ${basementFloors}층`] : []),
+    ...(roadName !== null ? [roadName || "전면도로"] : []),
+  ];
+
   return (
     <div
       style={{
@@ -268,25 +426,23 @@ function ModelHud({
         pointerEvents: "none",
       }}
     >
-      {["개략 형상", `지상 ${groundFloors}층`, ...(basementFloors > 0 ? [`지하 ${basementFloors}층`] : [])].map(
-        (label) => (
-          <span
-            key={label}
-            style={{
-              padding: "5px 8px",
-              borderRadius: 999,
-              background: "rgba(255,255,255,0.94)",
-              border: "1px solid rgba(148,163,184,0.42)",
-              color: "#475569",
-              fontSize: 11,
-              fontWeight: 600,
-              boxShadow: "0 1px 4px rgba(15,23,42,0.05)",
-            }}
-          >
-            {label}
-          </span>
-        )
-      )}
+      {labels.map((label) => (
+        <span
+          key={label}
+          style={{
+            padding: "5px 8px",
+            borderRadius: 999,
+            background: "rgba(255,255,255,0.94)",
+            border: "1px solid rgba(148,163,184,0.42)",
+            color: "#475569",
+            fontSize: 11,
+            fontWeight: 600,
+            boxShadow: "0 1px 4px rgba(15,23,42,0.05)",
+          }}
+        >
+          {label}
+        </span>
+      ))}
       <div
         style={{
           flexBasis: "100%",
@@ -308,11 +464,13 @@ function ModelHud({
 
 export function ExistingBuildingMass({
   boundary,
+  roads = [],
   currentBuilding,
   lotArea,
   height = 360,
 }: {
   boundary?: LngLat[];
+  roads?: RoadInput[];
   currentBuilding?: BuildingLookupResult | null;
   lotArea: number;
   height?: number;
@@ -331,6 +489,11 @@ export function ExistingBuildingMass({
     if (!boundary || boundary.length < 3) return null;
     return openRing(boundary);
   }, [boundary]);
+
+  const primaryRoad = useMemo(
+    () => (openBoundary ? findPrimaryRoad(openBoundary, roads) : null),
+    [openBoundary, roads]
+  );
 
   const ratios = useMemo(() => {
     if (!main || lotArea <= 0) return undefined;
@@ -392,6 +555,7 @@ export function ExistingBuildingMass({
         <Suspense fallback={null}>
           <SceneContent
             boundary={openBoundary}
+            roads={roads}
             currentBuilding={hasBuilding ? currentBuilding : null}
             lotArea={lotArea}
             showBasement={showBasement}
@@ -405,6 +569,7 @@ export function ExistingBuildingMass({
           basementFloors={main.undergroundFloors}
           buildingAreaSqm={ratios.buildingAreaSqm}
           bcrPct={ratios.bcrPct}
+          roadName={primaryRoad ? primaryRoad.name ?? "" : null}
         />
       )}
 
@@ -460,7 +625,7 @@ export function ExistingBuildingMass({
             position: "absolute",
             right: 12,
             bottom: 12,
-            maxWidth: 310,
+            maxWidth: 340,
             padding: "7px 9px",
             borderRadius: 7,
             background: "rgba(255,255,255,0.94)",
@@ -471,7 +636,7 @@ export function ExistingBuildingMass({
             pointerEvents: "none",
           }}
         >
-          대지 형상을 건폐율 비율로 축소한 개략 배치입니다. 실제 건물 외곽선·위치와 다를 수 있습니다.
+          대지·건물은 개략 형상이며, 도로는 V월드 중심선 관계를 보여주는 상징적 폭입니다. 실제 건물 위치와 도로 폭은 다를 수 있습니다.
         </div>
       )}
     </div>
