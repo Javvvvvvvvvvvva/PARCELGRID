@@ -76,14 +76,20 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+function ensureClosedBoundary(boundary: [number, number][]): [number, number][] {
+  if (boundary.length < 3) return boundary;
+  const first = boundary[0];
+  const last = boundary[boundary.length - 1];
+  if (first[0] === last[0] && first[1] === last[1]) return boundary;
+  return [...boundary, first];
+}
+
 export function buildRoadOrientationInsight(parcel: Parcel): RoadOrientationInsight {
-  const boundary = parcel.boundary;
+  const rawBoundary = parcel.boundary;
+  const boundary = rawBoundary && rawBoundary.length >= 3 ? ensureClosedBoundary(rawBoundary) : null;
   const roads = parcel.roads ?? [];
-  const orientation = boundary && boundary.length >= 4 ? analyzeOrientation(boundary) : null;
-  const frontage =
-    boundary && boundary.length >= 4 && roads.length > 0
-      ? analyzeFrontage(boundary, roads)
-      : null;
+  const orientation = boundary ? analyzeOrientation(boundary) : null;
+  const frontage = boundary && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
 
   const northEdge = orientation?.edges.find((e) => e.index === orientation.northEdgeIndex) ?? null;
   const frontEdge =
@@ -164,6 +170,7 @@ export function buildDataReadinessInsight(
   stations: StationSummaryInput[]
 ): DataReadinessInsight {
   const hasBuilding = Boolean(parcel.currentBuilding?.hasBuilding);
+  const hasRegistryResponse = parcel.currentBuilding != null;
   const items: DataCheckItem[] = [
     {
       label: "주소·좌표",
@@ -172,12 +179,12 @@ export function buildDataReadinessInsight(
     },
     {
       label: "대지면적·PNU",
-      status: parcel.lotArea > 0 ? "available" : "missing",
+      status: parcel.lotArea > 0 && parcel.id.length > 0 ? "available" : "missing",
       source: "V월드 지적",
     },
     {
       label: "필지 경계",
-      status: parcel.boundary && parcel.boundary.length >= 4 ? "available" : "missing",
+      status: parcel.boundary && parcel.boundary.length >= 3 ? "available" : "missing",
       source: "V월드 연속지적도",
     },
     {
@@ -187,9 +194,13 @@ export function buildDataReadinessInsight(
     },
     {
       label: "기존 건물 면적·층수",
-      status: parcel.currentBuilding ? "available" : "missing",
+      status: hasRegistryResponse ? "available" : "missing",
       source: "MOLIT 건축물대장",
-      note: hasBuilding ? undefined : "등록 건물 없음 또는 조회 실패 구분 확인 필요",
+      note: hasBuilding
+        ? undefined
+        : hasRegistryResponse
+          ? "건축물대장상 등록 건물 없음"
+          : "조회 실패 가능성 확인 필요",
     },
     {
       label: "전면 도로 방향",
