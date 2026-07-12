@@ -1,12 +1,15 @@
 "use client";
 
 /**
- * Stage 1 — 기존 건물 3D (현황). 대지 + 건축물대장 기반 현재 건물만 표시.
+ * Stage 1 — 기존 건물 개략 매스.
+ *
+ * 건축물대장의 면적·층수·높이를 사용하되 실제 건물 외곽선과 위치 데이터는
+ * 제공되지 않으므로 대지 형상을 건폐율 비율로 축소한 개략 배치로 표현한다.
  */
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { ContactShadows, Edges, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
@@ -15,18 +18,13 @@ import { projectPolygon } from "@/lib/geo/project-polygon";
 type LngLat = [number, number];
 type Pt = { x: number; z: number };
 
-const FLOOR_GAP = 0.1;
-const GRADE_Y = 0.06;
-
-const SKY_FLOOR: Record<number, string> = {
-  1: "#7ec8e8",
-  2: "#a8daf0",
-  3: "#c5e8f7",
-};
-const SKY_DEFAULT = "#8ecae6";
-const BASEMENT_COLOR = "#5c6b7a";
-const SUBJECT_LOT = "#c4a574";
-const SUBJECT_LOT_EDGE = "#8b6914";
+const FLOOR_GAP = 0.06;
+const GRADE_Y = 0.08;
+const LOT_COLOR = "#e8e1d5";
+const LOT_EDGE = "#9a8767";
+const BUILDING_COLOR = "#d9e0e5";
+const BUILDING_EDGE = "#64748b";
+const BASEMENT_COLOR = "#566371";
 
 function openRing(boundary: LngLat[]): LngLat[] {
   if (boundary.length > 1 && boundary[0][0] === boundary[boundary.length - 1][0]) {
@@ -45,13 +43,13 @@ function ringCentroidPt(ring: Pt[]): Pt {
   return { x: x / ring.length, z: z / ring.length };
 }
 
-function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[]; origin: LngLat } | null {
+function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[] } | null {
   const open = openRing(boundary);
   if (open.length < 3) return null;
   const closed = [...open, open[0]] as LngLat[];
   const projected = projectPolygon(closed);
   if (!projected) return null;
-  const origin: LngLat = [projected.center.lng, projected.center.lat];
+
   const pts = projected.points;
   const openPts =
     pts.length > 1 &&
@@ -59,8 +57,8 @@ function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[]; origin: LngLat }
     pts[0][1] === pts[pts.length - 1][1]
       ? pts.slice(0, -1)
       : pts;
-  const ring = openPts.map(([x, y]) => ({ x, z: -y }));
-  return { ring, origin };
+
+  return { ring: openPts.map(([x, y]) => ({ x, z: -y })) };
 }
 
 function scaleRingTowardCenter(ring: Pt[], areaRatio: number): Pt[] {
@@ -84,55 +82,46 @@ function extrudeShape(ring: Pt[], depth: number): THREE.ExtrudeGeometry {
   return geo;
 }
 
-function SubjectLot({ ring }: { ring: Pt[] }) {
-  const geometry = useMemo(() => extrudeShape(ring, 0.1), [ring]);
+function SubjectLot({ ring, cutaway }: { ring: Pt[]; cutaway: boolean }) {
+  const geometry = useMemo(() => extrudeShape(ring, 0.12), [ring]);
   return (
     <mesh geometry={geometry} receiveShadow position={[0, GRADE_Y, 0]}>
-      <meshStandardMaterial color={SUBJECT_LOT} roughness={0.85} metalness={0} />
+      <meshStandardMaterial
+        color={LOT_COLOR}
+        transparent={cutaway}
+        opacity={cutaway ? 0.34 : 1}
+        roughness={0.92}
+        metalness={0}
+      />
+      <Edges threshold={10} color={LOT_EDGE} />
     </mesh>
   );
 }
 
-function FloorSlab({
+function FloorMass({
   ring,
   baseY,
   height,
-  floor,
   kind,
 }: {
   ring: Pt[];
   baseY: number;
   height: number;
-  floor: number;
   kind: "above" | "below";
 }) {
   const geometry = useMemo(() => extrudeShape(ring, height), [ring, height]);
-  const fill = kind === "below" ? BASEMENT_COLOR : SKY_FLOOR[floor] ?? SKY_DEFAULT;
-  const label = kind === "below" ? `B${floor}` : `${floor}F`;
-  const edgeX = ring.reduce((max, p) => (p.x > max ? p.x : max), ring[0]?.x ?? 0) + 0.3;
-  const edgeZ = ring.reduce((s, p) => s + p.z, 0) / ring.length;
-
   return (
-    <group>
-      <mesh geometry={geometry} position={[0, baseY, 0]} castShadow receiveShadow>
-        <meshStandardMaterial
-          color={fill}
-          transparent={kind === "above"}
-          opacity={kind === "above" ? 0.92 : 0.94}
-          roughness={0.45}
-          metalness={0.02}
-        />
-      </mesh>
-      <Text
-        position={[edgeX, baseY + height / 2, edgeZ]}
-        fontSize={0.48}
-        color={kind === "below" ? "#111111" : "#0369a1"}
-        anchorX="left"
-        anchorY="middle"
-      >
-        {label}
-      </Text>
-    </group>
+    <mesh geometry={geometry} position={[0, baseY, 0]} castShadow receiveShadow>
+      <meshStandardMaterial
+        color={kind === "below" ? BASEMENT_COLOR : BUILDING_COLOR}
+        roughness={kind === "below" ? 0.72 : 0.78}
+        metalness={0}
+      />
+      <Edges
+        threshold={12}
+        color={kind === "below" ? "#263442" : BUILDING_EDGE}
+      />
+    </mesh>
   );
 }
 
@@ -140,13 +129,16 @@ function SceneContent({
   boundary,
   currentBuilding,
   lotArea,
+  showBasement,
 }: {
   boundary: LngLat[];
   currentBuilding: BuildingLookupResult | null | undefined;
   lotArea: number;
+  showBasement: boolean;
 }) {
-  const main = currentBuilding?.buildings.find((b) => b.isMainBuilding)
-    ?? currentBuilding?.buildings[0];
+  const main =
+    currentBuilding?.buildings.find((b) => b.isMainBuilding) ??
+    currentBuilding?.buildings[0];
 
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
   const lotRing = local?.ring ?? [];
@@ -164,7 +156,7 @@ function SceneContent({
   const extent = useMemo(() => {
     let e = 8;
     lotRing.forEach((p) => {
-      e = Math.max(e, Math.hypot(p.x, p.z) + 4);
+      e = Math.max(e, Math.hypot(p.x, p.z) + 2.5);
     });
     return e;
   }, [lotRing]);
@@ -177,50 +169,64 @@ function SceneContent({
 
   const aboveSlabs = useMemo(() => {
     if (groundFloors <= 0 || aboveHeight <= 0) return [];
-    const slabH = (aboveHeight - FLOOR_GAP * Math.max(0, groundFloors - 1)) / groundFloors;
+    const slabH =
+      (aboveHeight - FLOOR_GAP * Math.max(0, groundFloors - 1)) / groundFloors;
     return Array.from({ length: groundFloors }, (_, i) => ({
       floor: i + 1,
-      baseY: GRADE_Y + i * (slabH + FLOOR_GAP),
+      baseY: GRADE_Y + 0.12 + i * (slabH + FLOOR_GAP),
       height: slabH,
     }));
   }, [groundFloors, aboveHeight]);
 
   const belowSlabs = useMemo(() => {
-    if (basementFloors <= 0) return [];
+    if (!showBasement || basementFloors <= 0) return [];
     return Array.from({ length: basementFloors }, (_, i) => ({
       floor: i + 1,
       baseY: GRADE_Y - (i + 1) * floorH,
-      height: floorH,
+      height: floorH - FLOOR_GAP,
     }));
-  }, [basementFloors, floorH]);
-
-  const topY = GRADE_Y + aboveHeight + 1;
+  }, [showBasement, basementFloors, floorH]);
 
   if (lotRing.length < 3) return null;
 
   return (
     <>
-      <color attach="background" args={["#ffffff"]} />
-      <ambientLight intensity={0.9} />
-      <directionalLight position={[8, 18, 10]} intensity={0.55} castShadow />
-      <directionalLight position={[-6, 12, -8]} intensity={0.15} />
+      <color attach="background" args={["#f7f8f9"]} />
+      <ambientLight intensity={1.35} />
+      <hemisphereLight args={["#ffffff", "#d3d8dc", 0.8]} />
+      <directionalLight
+        position={[10, 18, 8]}
+        intensity={1.25}
+        castShadow
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
+      />
 
-      <SubjectLot ring={lotRing} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
+        <planeGeometry args={[extent * 3.1, extent * 3.1]} />
+        <shadowMaterial transparent opacity={0.06} />
+      </mesh>
+      <gridHelper
+        args={[extent * 2.6, 18, "#d7dde1", "#eaedef"]}
+        position={[0, 0, 0]}
+      />
+
+      <SubjectLot ring={lotRing} cutaway={showBasement} />
 
       {belowSlabs.map((s) => (
-        <FloorSlab key={`b${s.floor}`} ring={footprint} {...s} kind="below" />
+        <FloorMass key={`b${s.floor}`} ring={footprint} {...s} kind="below" />
       ))}
       {aboveSlabs.map((s) => (
-        <FloorSlab key={`a${s.floor}`} ring={footprint} {...s} kind="above" />
+        <FloorMass key={`a${s.floor}`} ring={footprint} {...s} kind="above" />
       ))}
 
-      {groundFloors > 0 && (
-        <Text position={[0, topY, 0]} fontSize={0.7} color="#475569" anchorX="center">
-          {`현재 건물 · 지상 ${groundFloors}층${
-            basementFloors > 0 ? ` · 지하 ${basementFloors}층` : ""
-          }`}
-        </Text>
-      )}
+      <ContactShadows
+        position={[0, 0.02, 0]}
+        opacity={0.2}
+        scale={extent * 1.7}
+        blur={2.5}
+        far={extent * 2}
+      />
 
       <OrbitControls
         makeDefault
@@ -229,51 +235,72 @@ function SceneContent({
         enableZoom
         enableDamping
         dampingFactor={0.08}
-        rotateSpeed={0.85}
-        minDistance={extent * 0.85}
-        maxDistance={extent * 4}
+        rotateSpeed={0.72}
+        minDistance={extent * 0.8}
+        maxDistance={extent * 3.2}
         maxPolarAngle={Math.PI / 2.05}
-        target={[0, aboveHeight * 0.28, 0]}
+        target={[0, Math.max(0.8, aboveHeight * 0.32), 0]}
       />
     </>
   );
 }
 
-function MassLegend({
-  ratios,
+function ModelHud({
   groundFloors,
   basementFloors,
+  buildingAreaSqm,
+  bcrPct,
 }: {
-  ratios?: { bcrPct: number; buildingAreaSqm: number };
   groundFloors: number;
   basementFloors: number;
+  buildingAreaSqm: number;
+  bcrPct: number;
 }) {
-  if (!ratios || groundFloors <= 0) return null;
   return (
     <div
       style={{
         position: "absolute",
-        bottom: 10,
-        left: 10,
-        padding: "8px 10px",
-        background: "rgba(255,255,255,0.96)",
-        borderRadius: 6,
-        fontSize: 11,
-        lineHeight: 1.55,
-        color: "var(--fg-muted)",
-        border: "1px solid #e2e8f0",
+        top: 12,
+        left: 12,
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
         pointerEvents: "none",
       }}
     >
-      <div>
-        <span style={{ color: SUBJECT_LOT_EDGE }}>■</span> 우리 대지 ·{" "}
-        <span style={{ color: SKY_DEFAULT }}>■</span> 우리 건물
-      </div>
-      <div>
-        건축면적 {ratios.buildingAreaSqm.toFixed(1)}㎡ · 건폐율 {ratios.bcrPct.toFixed(1)}%
-      </div>
-      <div>
-        지상 {groundFloors}층{basementFloors > 0 ? ` + 지하 ${basementFloors}층` : ""}
+      {["개략 형상", `지상 ${groundFloors}층`, ...(basementFloors > 0 ? [`지하 ${basementFloors}층`] : [])].map(
+        (label) => (
+          <span
+            key={label}
+            style={{
+              padding: "5px 8px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.94)",
+              border: "1px solid rgba(148,163,184,0.42)",
+              color: "#475569",
+              fontSize: 11,
+              fontWeight: 600,
+              boxShadow: "0 1px 4px rgba(15,23,42,0.05)",
+            }}
+          >
+            {label}
+          </span>
+        )
+      )}
+      <div
+        style={{
+          flexBasis: "100%",
+          width: "fit-content",
+          padding: "7px 9px",
+          borderRadius: 7,
+          background: "rgba(255,255,255,0.94)",
+          border: "1px solid rgba(148,163,184,0.34)",
+          color: "#64748b",
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}
+      >
+        건축면적 {buildingAreaSqm.toFixed(1)}㎡ · 건폐율 {bcrPct.toFixed(1)}%
       </div>
     </div>
   );
@@ -290,9 +317,15 @@ export function ExistingBuildingMass({
   lotArea: number;
   height?: number;
 }) {
-  const hasBuilding = currentBuilding?.hasBuilding && (currentBuilding.buildings.length ?? 0) > 0;
-  const main = currentBuilding?.buildings.find((b) => b.isMainBuilding)
-    ?? currentBuilding?.buildings[0];
+  const [showBasement, setShowBasement] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0);
+
+  const hasBuilding = Boolean(
+    currentBuilding?.hasBuilding && (currentBuilding.buildings.length ?? 0) > 0
+  );
+  const main =
+    currentBuilding?.buildings.find((b) => b.isMainBuilding) ??
+    currentBuilding?.buildings[0];
 
   const openBoundary = useMemo(() => {
     if (!boundary || boundary.length < 3) return null;
@@ -312,7 +345,7 @@ export function ExistingBuildingMass({
     if (!local) return 12;
     let e = 8;
     local.ring.forEach((p) => {
-      e = Math.max(e, Math.hypot(p.x, p.z) + 4);
+      e = Math.max(e, Math.hypot(p.x, p.z) + 2.5);
     });
     return e;
   }, [openBoundary]);
@@ -324,10 +357,11 @@ export function ExistingBuildingMass({
           height,
           display: "grid",
           placeItems: "center",
-          background: "#fff",
-          borderRadius: 8,
+          background: "var(--bg-sunken)",
+          borderRadius: 10,
           color: "var(--fg-muted)",
           fontSize: 13,
+          border: "1px solid var(--border)",
         }}
       >
         필지 경계 데이터가 없어 3D를 표시할 수 없습니다.
@@ -335,57 +369,125 @@ export function ExistingBuildingMass({
     );
   }
 
-  const camDist = extent * 1.65;
+  const camDist = extent * 1.3;
 
   return (
     <div
       style={{
         position: "relative",
         height,
-        borderRadius: 8,
+        borderRadius: 10,
         overflow: "hidden",
-        background: "#ffffff",
-        border: "1px solid #e2e8f0",
+        background: "#f7f8f9",
+        border: "1px solid #dfe4e8",
       }}
     >
       <Canvas
+        key={canvasKey}
         shadows
+        dpr={[1, 1.5]}
         style={{ cursor: "grab", touchAction: "none" }}
-        camera={{ position: [camDist, camDist * 0.65, camDist], fov: 40 }}
+        camera={{ position: [camDist, camDist * 0.72, camDist], fov: 35 }}
       >
         <Suspense fallback={null}>
           <SceneContent
             boundary={openBoundary}
             currentBuilding={hasBuilding ? currentBuilding : null}
             lotArea={lotArea}
+            showBasement={showBasement}
           />
         </Suspense>
       </Canvas>
+
+      {hasBuilding && main && ratios && (
+        <ModelHud
+          groundFloors={main.groundFloors}
+          basementFloors={main.undergroundFloors}
+          buildingAreaSqm={ratios.buildingAreaSqm}
+          bcrPct={ratios.bcrPct}
+        />
+      )}
+
+      <div
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          display: "flex",
+          gap: 6,
+        }}
+      >
+        {hasBuilding && (main?.undergroundFloors ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowBasement((v) => !v)}
+            style={controlStyle(showBasement)}
+          >
+            {showBasement ? "지하 숨기기" : "지하 보기"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setCanvasKey((v) => v + 1)}
+          style={controlStyle(false)}
+        >
+          시점 초기화
+        </button>
+      </div>
+
       {!hasBuilding && (
         <div
           style={{
             position: "absolute",
             bottom: 12,
             left: 12,
-            padding: "6px 10px",
+            padding: "7px 10px",
             background: "rgba(255,255,255,0.95)",
-            borderRadius: 6,
+            borderRadius: 7,
             fontSize: 12,
             color: "var(--fg-muted)",
-            border: "1px solid #e2e8f0",
+            border: "1px solid #dfe4e8",
             pointerEvents: "none",
           }}
         >
-          현재 건물 없음
+          건축물대장에 등록된 현재 건물 없음
         </div>
       )}
-      {hasBuilding && main && (
-        <MassLegend
-          ratios={ratios}
-          groundFloors={main.groundFloors}
-          basementFloors={main.undergroundFloors}
-        />
+
+      {hasBuilding && (
+        <div
+          style={{
+            position: "absolute",
+            right: 12,
+            bottom: 12,
+            maxWidth: 310,
+            padding: "7px 9px",
+            borderRadius: 7,
+            background: "rgba(255,255,255,0.94)",
+            border: "1px solid rgba(148,163,184,0.34)",
+            color: "#64748b",
+            fontSize: 10.5,
+            lineHeight: 1.45,
+            pointerEvents: "none",
+          }}
+        >
+          대지 형상을 건폐율 비율로 축소한 개략 배치입니다. 실제 건물 외곽선·위치와 다를 수 있습니다.
+        </div>
       )}
     </div>
   );
+}
+
+function controlStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "6px 9px",
+    borderRadius: 7,
+    border: active ? "1px solid #334155" : "1px solid rgba(148,163,184,0.48)",
+    background: active ? "#334155" : "rgba(255,255,255,0.94)",
+    color: active ? "#ffffff" : "#475569",
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+    boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+  };
 }
