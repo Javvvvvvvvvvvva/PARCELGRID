@@ -1,11 +1,14 @@
 "use client";
 
 /**
- * Stage 1 — 기존 건물 개략 매스.
+ * Stage 1 — 기존 건물 현황 매스.
  *
- * 건축물대장의 면적·층수·높이를 사용하되 실제 건물 외곽선과 위치 데이터는
- * 제공되지 않으므로 대지 형상을 건폐율 비율로 축소한 개략 배치로 표현한다.
- * 도로는 V월드 도로 중심선 중 대상지와 가장 가까운 선을 개략 리본으로 표시한다.
+ * 우선순위:
+ *   1. VWorld GIS건물통합정보(dt_d010)의 실제 건물 외곽선·위치
+ *   2. 데이터가 없으면 기존 방식(필지 형상 × 건폐율)의 개략 매스 fallback
+ *
+ * 높이 방향은 건축물대장 또는 dt_d010의 층수·높이 속성을 사용하며,
+ * 층별 후퇴·지붕·출입구·창호는 현황 도면이 없으므로 표현하지 않는다.
  */
 
 import { Suspense, useMemo, useState } from "react";
@@ -14,13 +17,28 @@ import { ContactShadows, Edges, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
+import {
+  getExistingBuildingGeometry,
+  type BuildingPolygon,
+  type ExistingBuildingFootprint,
+  type LngLat,
+} from "@/lib/geo/existing-building-geometry";
 import { projectPolygon } from "@/lib/geo/project-polygon";
 import { useProjectStore } from "@/lib/stores/project-store";
 
-type LngLat = [number, number];
 type Pt = { x: number; z: number };
+type LocalPolygon = Pt[][];
 type RoadInput = { name: string | null; points: LngLat[] };
 type LocalRoad = { name: string | null; points: Pt[]; distanceM: number };
+
+type BuildingModel = {
+  key: string;
+  polygons: LocalPolygon[];
+  groundFloors: number;
+  undergroundFloors: number;
+  totalHeightM: number;
+  footprintAreaSqm: number;
+};
 
 const FLOOR_GAP = 0.06;
 const GRADE_Y = 0.08;
@@ -34,23 +52,24 @@ const ROAD_CENTER_COLOR = "#d8dde1";
 const SCHEMATIC_ROAD_WIDTH_M = 1.45;
 const FRONT_ROAD_MAX_DISTANCE_M = 12;
 
-function openRing(boundary: LngLat[]): LngLat[] {
-  if (
-    boundary.length > 1 &&
-    boundary[0][0] === boundary[boundary.length - 1][0] &&
-    boundary[0][1] === boundary[boundary.length - 1][1]
-  ) {
-    return boundary.slice(0, -1);
-  }
-  return boundary;
+function openRing<T extends [number, number] | Pt>(ring: T[]): T[] {
+  if (ring.length <= 1) return ring;
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  const firstX = "x" in first ? first.x : first[0];
+  const firstY = "z" in first ? first.z : first[1];
+  const lastX = "x" in last ? last.x : last[0];
+  const lastY = "z" in last ? last.z : last[1];
+  return firstX === lastX && firstY === lastY ? ring.slice(0, -1) : ring;
 }
 
 function ringCentroidPt(ring: Pt[]): Pt {
-  const sum = ring.reduce(
+  const open = openRing(ring);
+  const sum = open.reduce(
     (acc, point) => ({ x: acc.x + point.x, z: acc.z + point.z }),
     { x: 0, z: 0 }
   );
-  return { x: sum.x / ring.length, z: sum.z / ring.length };
+  return { x: sum.x / open.length, z: sum.z / open.length };
 }
 
 function boundaryToLocalRing(
@@ -74,19 +93,31 @@ function boundaryToLocalRing(
   };
 }
 
-function projectRoadPoint(point: LngLat, center: { lng: number; lat: number }): Pt {
-  const lngMetersPerDeg = 111320 * Math.cos((center.lat * Math.PI) / 180);
+function projectLngLat(point: LngLat, center: { lng: number; lat: number }): Pt {
+  const lngMetersPerDeg = 111_320 * Math.cos((center.lat * Math.PI) / 180);
   return {
     x: (point[0] - center.lng) * lngMetersPerDeg,
-    z: -(point[1] - center.lat) * 110540,
+    z: -(point[1] - center.lat) * 110_540,
   };
+}
+
+function projectBuildingPolygon(
+  polygon: BuildingPolygon,
+  center: { lng: number; lat: number }
+): LocalPolygon {
+  return polygon
+    .map((ring) => openRing(ring).map((point) => projectLngLat(point, center)))
+    .filter((ring) => ring.length >= 3);
 }
 
 function distanceOriginToSegment(a: Pt, b: Pt): number {
   const dx = b.x - a.x;
   const dz = b.z - a.z;
   const lengthSq = dx * dx + dz * dz;
-  const t = lengthSq > 0 ? Math.max(0, Math.min(1, (-a.x * dx - a.z * dz) / lengthSq)) : 0;
+  const t =
+    lengthSq > 0
+      ? Math.max(0, Math.min(1, (-a.x * dx - a.z * dz) / lengthSq))
+      : 0;
   return Math.hypot(a.x + t * dx, a.z + t * dz);
 }
 
@@ -97,7 +128,7 @@ function findPrimaryRoad(boundary: LngLat[], roads: RoadInput[]): LocalRoad | nu
   let selected: LocalRoad | null = null;
   for (const road of roads) {
     if (!road.points || road.points.length < 2) continue;
-    const points = road.points.map((point) => projectRoadPoint(point, local.center));
+    const points = road.points.map((point) => projectLngLat(point, local.center));
     let distanceM = Infinity;
     for (let index = 0; index < points.length - 1; index++) {
       distanceM = Math.min(
@@ -122,20 +153,36 @@ function scaleRingTowardCenter(ring: Pt[], areaRatio: number): Pt[] {
   }));
 }
 
-function extrudeShape(ring: Pt[], depth: number): THREE.ExtrudeGeometry {
+function extrudePolygon(polygon: LocalPolygon, depth: number): THREE.ExtrudeGeometry {
+  const outer = polygon[0] ?? [];
   const shape = new THREE.Shape();
-  ring.forEach((point, index) => {
+  outer.forEach((point, index) => {
     if (index === 0) shape.moveTo(point.x, point.z);
     else shape.lineTo(point.x, point.z);
   });
   shape.closePath();
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+
+  for (const holeRing of polygon.slice(1)) {
+    const hole = new THREE.Path();
+    holeRing.forEach((point, index) => {
+      if (index === 0) hole.moveTo(point.x, point.z);
+      else hole.lineTo(point.x, point.z);
+    });
+    hole.closePath();
+    shape.holes.push(hole);
+  }
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: false,
+    curveSegments: 1,
+  });
   geometry.rotateX(-Math.PI / 2);
   return geometry;
 }
 
 function SubjectLot({ ring, cutaway }: { ring: Pt[]; cutaway: boolean }) {
-  const geometry = useMemo(() => extrudeShape(ring, 0.12), [ring]);
+  const geometry = useMemo(() => extrudePolygon([ring], 0.12), [ring]);
   return (
     <mesh geometry={geometry} receiveShadow position={[0, GRADE_Y, 0]}>
       <meshStandardMaterial
@@ -151,17 +198,17 @@ function SubjectLot({ ring, cutaway }: { ring: Pt[]; cutaway: boolean }) {
 }
 
 function FloorMass({
-  ring,
+  polygon,
   baseY,
   height,
   kind,
 }: {
-  ring: Pt[];
+  polygon: LocalPolygon;
   baseY: number;
   height: number;
   kind: "above" | "below";
 }) {
-  const geometry = useMemo(() => extrudeShape(ring, height), [ring, height]);
+  const geometry = useMemo(() => extrudePolygon(polygon, height), [polygon, height]);
   return (
     <mesh geometry={geometry} position={[0, baseY, 0]} castShadow receiveShadow>
       <meshStandardMaterial
@@ -265,6 +312,42 @@ function NorthMarker({ extent }: { extent: number }) {
   );
 }
 
+function modelFromFootprint(
+  footprint: ExistingBuildingFootprint,
+  center: { lng: number; lat: number },
+  fallbackFloorHeight: number,
+  fallbackBuilding: BuildingLookupResult["buildings"][number] | undefined
+): BuildingModel | null {
+  const polygons = footprint.polygons
+    .map((polygon) => projectBuildingPolygon(polygon, center))
+    .filter((polygon) => polygon.length > 0 && polygon[0].length >= 3);
+  if (polygons.length === 0) return null;
+
+  const groundFloors = Math.max(
+    1,
+    footprint.groundFloors || fallbackBuilding?.groundFloors || 1
+  );
+  const undergroundFloors = Math.max(
+    0,
+    footprint.undergroundFloors || fallbackBuilding?.undergroundFloors || 0
+  );
+  const totalHeightM =
+    footprint.heightM > 0
+      ? footprint.heightM
+      : fallbackBuilding && fallbackBuilding.height > 0
+        ? fallbackBuilding.height
+        : groundFloors * fallbackFloorHeight;
+
+  return {
+    key: footprint.id,
+    polygons,
+    groundFloors,
+    undergroundFloors,
+    totalHeightM,
+    footprintAreaSqm: footprint.footprintAreaSqm,
+  };
+}
+
 function SceneContent({
   boundary,
   roads,
@@ -281,54 +364,67 @@ function SceneContent({
   const main =
     currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
     currentBuilding?.buildings[0];
+  const geometry = getExistingBuildingGeometry(currentBuilding);
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
   const lotRing = local?.ring ?? [];
   const primaryRoad = useMemo(() => findPrimaryRoad(boundary, roads), [boundary, roads]);
-  const footprint = useMemo(() => {
-    if (lotRing.length < 3) return [];
+  const floorHeight = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
+
+  const models = useMemo(() => {
+    if (!local || lotRing.length < 3) return [];
+
+    if (geometry?.status === "matched" && geometry.footprints.length > 0) {
+      return geometry.footprints
+        .map((footprint, index) =>
+          modelFromFootprint(
+            footprint,
+            local.center,
+            floorHeight,
+            currentBuilding?.buildings[index] ?? main
+          )
+        )
+        .filter((model): model is BuildingModel => model !== null);
+    }
+
+    if (!main) return [];
     const ratio =
-      main && main.buildingArea > 0 && lotArea > 0
+      main.buildingArea > 0 && lotArea > 0
         ? main.buildingArea / lotArea
-        : main?.buildingCoverage
+        : main.buildingCoverage > 0
           ? main.buildingCoverage / 100
           : 0.6;
-    return scaleRingTowardCenter(lotRing, ratio);
-  }, [lotRing, main, lotArea]);
+    const footprint = scaleRingTowardCenter(lotRing, ratio);
+    return [
+      {
+        key: "schematic-main",
+        polygons: [[footprint]],
+        groundFloors: Math.max(1, main.groundFloors),
+        undergroundFloors: Math.max(0, main.undergroundFloors),
+        totalHeightM:
+          main.height > 0 ? main.height : Math.max(1, main.groundFloors) * floorHeight,
+        footprintAreaSqm: main.buildingArea,
+      },
+    ];
+  }, [geometry, floorHeight, currentBuilding, local, lotArea, lotRing, main]);
 
   const extent = useMemo(() => {
     let value = 8;
     lotRing.forEach((point) => {
       value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
     });
+    for (const model of models) {
+      for (const polygon of model.polygons) {
+        for (const ring of polygon) {
+          for (const point of ring) {
+            value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
+          }
+        }
+      }
+    }
     return value;
-  }, [lotRing]);
+  }, [lotRing, models]);
 
-  const groundFloors = main?.groundFloors ?? 0;
-  const basementFloors = main?.undergroundFloors ?? 0;
-  const floorHeight = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
-  const aboveHeight =
-    main && main.height > 0 && groundFloors > 0 ? main.height : groundFloors * floorHeight;
-
-  const aboveSlabs = useMemo(() => {
-    if (groundFloors <= 0 || aboveHeight <= 0) return [];
-    const slabHeight =
-      (aboveHeight - FLOOR_GAP * Math.max(0, groundFloors - 1)) / groundFloors;
-    return Array.from({ length: groundFloors }, (_, index) => ({
-      floor: index + 1,
-      baseY: GRADE_Y + 0.12 + index * (slabHeight + FLOOR_GAP),
-      height: slabHeight,
-    }));
-  }, [groundFloors, aboveHeight]);
-
-  const belowSlabs = useMemo(() => {
-    if (!showBasement || basementFloors <= 0) return [];
-    return Array.from({ length: basementFloors }, (_, index) => ({
-      floor: index + 1,
-      baseY: GRADE_Y - (index + 1) * floorHeight,
-      height: floorHeight - FLOOR_GAP,
-    }));
-  }, [showBasement, basementFloors, floorHeight]);
-
+  const maxHeight = models.reduce((max, model) => Math.max(max, model.totalHeightM), 0);
   if (lotRing.length < 3) return null;
 
   return (
@@ -352,14 +448,36 @@ function SceneContent({
 
       {primaryRoad && <RoadRibbon road={primaryRoad} extent={extent} />}
       <SubjectLot ring={lotRing} cutaway={showBasement} />
-      {belowSlabs.map((slab) => (
-        <FloorMass key={`b${slab.floor}`} ring={footprint} {...slab} kind="below" />
-      ))}
-      {aboveSlabs.map((slab) => (
-        <FloorMass key={`a${slab.floor}`} ring={footprint} {...slab} kind="above" />
-      ))}
-      <NorthMarker extent={extent} />
 
+      {models.flatMap((model) => {
+        const slabHeight =
+          (model.totalHeightM - FLOOR_GAP * Math.max(0, model.groundFloors - 1)) /
+          model.groundFloors;
+        return model.polygons.flatMap((polygon, polygonIndex) => [
+          ...(showBasement
+            ? Array.from({ length: model.undergroundFloors }, (_, index) => (
+                <FloorMass
+                  key={`${model.key}-${polygonIndex}-b${index + 1}`}
+                  polygon={polygon}
+                  baseY={GRADE_Y - (index + 1) * floorHeight}
+                  height={floorHeight - FLOOR_GAP}
+                  kind="below"
+                />
+              ))
+            : []),
+          ...Array.from({ length: model.groundFloors }, (_, index) => (
+            <FloorMass
+              key={`${model.key}-${polygonIndex}-a${index + 1}`}
+              polygon={polygon}
+              baseY={GRADE_Y + 0.12 + index * (slabHeight + FLOOR_GAP)}
+              height={slabHeight}
+              kind="above"
+            />
+          )),
+        ]);
+      })}
+
+      <NorthMarker extent={extent} />
       <ContactShadows
         position={[0, 0.02, 0]}
         opacity={0.2}
@@ -378,29 +496,44 @@ function SceneContent({
         minDistance={extent * 0.8}
         maxDistance={extent * 3.2}
         maxPolarAngle={Math.PI / 2.05}
-        target={[0, Math.max(0.8, aboveHeight * 0.32), 0]}
+        target={[0, Math.max(0.8, maxHeight * 0.32), 0]}
       />
     </>
   );
 }
 
 function ModelHud({
-  groundFloors,
-  basementFloors,
-  buildingAreaSqm,
-  bcrPct,
+  currentBuilding,
+  lotArea,
   roadName,
 }: {
-  groundFloors: number;
-  basementFloors: number;
-  buildingAreaSqm: number;
-  bcrPct: number;
+  currentBuilding: BuildingLookupResult;
+  lotArea: number;
   roadName: string | null;
 }) {
+  const geometry = getExistingBuildingGeometry(currentBuilding);
+  const actual = geometry?.status === "matched" && geometry.footprints.length > 0;
+  const main =
+    currentBuilding.buildings.find((building) => building.isMainBuilding) ??
+    currentBuilding.buildings[0];
+  const footprintArea = actual
+    ? geometry.footprints.reduce((sum, footprint) => sum + footprint.footprintAreaSqm, 0)
+    : main?.buildingArea ?? 0;
+  const bcrPct = lotArea > 0 ? (footprintArea / lotArea) * 100 : main?.buildingCoverage ?? 0;
+  const groundFloors = Math.max(
+    0,
+    ...currentBuilding.buildings.map((building) => building.groundFloors)
+  );
+  const basementFloors = Math.max(
+    0,
+    ...currentBuilding.buildings.map((building) => building.undergroundFloors)
+  );
+
   const labels = [
-    "개략 형상",
-    `지상 ${groundFloors}층`,
-    ...(basementFloors > 0 ? [`지하 ${basementFloors}층`] : []),
+    actual ? "실제 외곽선" : "개략 형상",
+    ...(actual ? [`건물 ${geometry.footprints.length}개 형상`] : []),
+    `지상 최대 ${groundFloors}층`,
+    ...(basementFloors > 0 ? [`지하 최대 ${basementFloors}층`] : []),
     ...(roadName !== null ? [roadName || "전면도로"] : []),
   ];
 
@@ -422,9 +555,12 @@ function ModelHud({
           style={{
             padding: "5px 8px",
             borderRadius: 999,
-            background: "rgba(255,255,255,0.94)",
-            border: "1px solid rgba(148,163,184,0.42)",
-            color: "#475569",
+            background: actual && label === "실제 외곽선" ? "#e8f5ee" : "rgba(255,255,255,0.94)",
+            border:
+              actual && label === "실제 외곽선"
+                ? "1px solid #8fc7a5"
+                : "1px solid rgba(148,163,184,0.42)",
+            color: actual && label === "실제 외곽선" ? "#25633f" : "#475569",
             fontSize: 11,
             fontWeight: 600,
             boxShadow: "0 1px 4px rgba(15,23,42,0.05)",
@@ -446,7 +582,7 @@ function ModelHud({
           lineHeight: 1.5,
         }}
       >
-        건축면적 {buildingAreaSqm.toFixed(1)}㎡ · 건폐율 {bcrPct.toFixed(1)}%
+        건축면적 {footprintArea.toFixed(1)}㎡ · 건폐율 {bcrPct.toFixed(1)}%
       </div>
     </div>
   );
@@ -473,9 +609,9 @@ export function ExistingBuildingMass({
   const hasBuilding = Boolean(
     currentBuilding?.hasBuilding && (currentBuilding.buildings.length ?? 0) > 0
   );
-  const main =
-    currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
-    currentBuilding?.buildings[0];
+  const geometry = getExistingBuildingGeometry(currentBuilding);
+  const actualGeometry =
+    geometry?.status === "matched" && geometry.footprints.length > 0;
   const openBoundary = useMemo(() => {
     if (!boundary || boundary.length < 3) return null;
     return openRing(boundary);
@@ -484,14 +620,6 @@ export function ExistingBuildingMass({
     () => (openBoundary ? findPrimaryRoad(openBoundary, resolvedRoads) : null),
     [openBoundary, resolvedRoads]
   );
-  const ratios = useMemo(() => {
-    if (!main || lotArea <= 0) return undefined;
-    const bcrFromArea = (main.buildingArea / lotArea) * 100;
-    return {
-      bcrPct: main.buildingCoverage > 0 ? main.buildingCoverage : bcrFromArea,
-      buildingAreaSqm: main.buildingArea,
-    };
-  }, [main, lotArea]);
   const extent = useMemo(() => {
     if (!openBoundary) return 12;
     const local = boundaryToLocalRing(openBoundary);
@@ -501,6 +629,9 @@ export function ExistingBuildingMass({
       8
     );
   }, [openBoundary]);
+  const basementFloors = currentBuilding
+    ? Math.max(0, ...currentBuilding.buildings.map((building) => building.undergroundFloors))
+    : 0;
 
   if (!openBoundary || openBoundary.length < 3) {
     return (
@@ -525,6 +656,7 @@ export function ExistingBuildingMass({
 
   return (
     <div
+      data-building-geometry={actualGeometry ? "actual" : "schematic"}
       style={{
         position: "relative",
         height,
@@ -552,18 +684,16 @@ export function ExistingBuildingMass({
         </Suspense>
       </Canvas>
 
-      {hasBuilding && main && ratios && (
+      {hasBuilding && currentBuilding && (
         <ModelHud
-          groundFloors={main.groundFloors}
-          basementFloors={main.undergroundFloors}
-          buildingAreaSqm={ratios.buildingAreaSqm}
-          bcrPct={ratios.bcrPct}
+          currentBuilding={currentBuilding}
+          lotArea={lotArea}
           roadName={primaryRoad ? primaryRoad.name ?? "" : null}
         />
       )}
 
       <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 6 }}>
-        {hasBuilding && (main?.undergroundFloors ?? 0) > 0 && (
+        {hasBuilding && basementFloors > 0 && (
           <button
             type="button"
             onClick={() => setShowBasement((value) => !value)}
@@ -596,7 +726,7 @@ export function ExistingBuildingMass({
             pointerEvents: "none",
           }}
         >
-          건축물대장에 등록된 현재 건물 없음
+          건축물대장과 GIS건물통합정보에 일치하는 현재 건물 없음
         </div>
       )}
 
@@ -606,7 +736,7 @@ export function ExistingBuildingMass({
             position: "absolute",
             right: 12,
             bottom: 12,
-            maxWidth: 340,
+            maxWidth: 360,
             padding: "7px 9px",
             borderRadius: 7,
             background: "rgba(255,255,255,0.94)",
@@ -617,7 +747,11 @@ export function ExistingBuildingMass({
             pointerEvents: "none",
           }}
         >
-          대지·건물은 개략 형상이며, 도로는 V월드 중심선 관계를 보여주는 상징적 폭입니다. 실제 건물 위치와 도로 폭은 다를 수 있습니다.
+          {actualGeometry
+            ? "건물 외곽선·위치는 VWorld GIS건물통합정보 기반입니다. 층별 후퇴·지붕·출입구는 미반영이며, 도로 폭은 상징적으로 표시합니다."
+            : geometry?.status === "error"
+              ? "GIS건물통합정보 조회에 실패해 필지 형상과 건폐율을 이용한 개략 매스를 표시합니다."
+              : "일치하는 GIS 건물 형상이 없어 필지 형상과 건폐율을 이용한 개략 매스를 표시합니다."}
         </div>
       )}
     </div>
