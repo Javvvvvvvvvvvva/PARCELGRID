@@ -104,6 +104,16 @@ describe("Stage 1 status insights", () => {
     expect(insight.notes.some((note) => note.includes("도로 폭"))).toBe(true);
   });
 
+  it("also accepts an open parcel ring and closes it before orientation analysis", () => {
+    const parcel = sampleParcel();
+    parcel.boundary = parcel.boundary?.slice(0, -1);
+
+    const insight = buildRoadOrientationInsight(parcel);
+
+    expect(insight.orientationAvailable).toBe(true);
+    expect(insight.frontageAvailable).toBe(true);
+  });
+
   it("separates total market collection, same-dong evidence and map display", () => {
     const insight = buildMarketInsight(
       [comp("1", 1_000, true, 2024), comp("2", 1_400, true, 2010), comp("3", 2_000, false, 2025)],
