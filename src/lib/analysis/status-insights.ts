@@ -4,6 +4,7 @@ import { sunRestrictionApplies } from "@/lib/finance/sun-envelope";
 import { computeExistingRatios, headroomPct } from "./existing-building-metrics";
 import { analyzeOrientation, type Direction } from "@/lib/geo/orientation";
 import { analyzeFrontage } from "@/lib/geo/road-frontage";
+import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 
 export interface StationSummaryInput {
   name: string;
@@ -171,6 +172,13 @@ export function buildDataReadinessInsight(
 ): DataReadinessInsight {
   const hasBuilding = Boolean(parcel.currentBuilding?.hasBuilding);
   const hasRegistryResponse = parcel.currentBuilding != null;
+  const geometry = getExistingBuildingGeometry(parcel.currentBuilding);
+  const actualGeometry = geometry?.status === "matched" && geometry.footprints.length > 0;
+  const knownViolationCount =
+    geometry?.footprints.filter((footprint) => footprint.violationStatus !== "unknown").length ?? 0;
+  const violationYesCount =
+    geometry?.footprints.filter((footprint) => footprint.violationStatus === "yes").length ?? 0;
+
   const items: DataCheckItem[] = [
     {
       label: "주소·좌표",
@@ -195,11 +203,11 @@ export function buildDataReadinessInsight(
     {
       label: "기존 건물 면적·층수",
       status: hasRegistryResponse ? "available" : "missing",
-      source: "MOLIT 건축물대장",
+      source: actualGeometry ? "MOLIT 건축물대장 + V월드 GIS건물통합정보" : "MOLIT 건축물대장",
       note: hasBuilding
         ? undefined
         : hasRegistryResponse
-          ? "건축물대장상 등록 건물 없음"
+          ? "공공 데이터상 등록 건물 없음"
           : "조회 실패 가능성 확인 필요",
     },
     {
@@ -224,9 +232,15 @@ export function buildDataReadinessInsight(
     items.push(
       {
         label: "실제 건물 외곽선·위치",
-        status: "missing",
-        source: "미연동",
-        note: "현재 3D는 건폐율 기반 개략 매스",
+        status: actualGeometry ? "available" : "missing",
+        source: actualGeometry
+          ? "V월드 GIS건물통합정보 dt_d010"
+          : geometry?.status === "error"
+            ? "V월드 GIS건물통합정보 조회 실패"
+            : "V월드 GIS건물통합정보 미매칭",
+        note: actualGeometry
+          ? `${geometry.footprints.length}개 형상 · ${geometry.footprints[0]?.matchMethod === "pnu" ? "PNU 직접 매칭" : "필지 겹침 매칭"}`
+          : "현재 3D는 건폐율 기반 개략 매스",
       },
       {
         label: "기존 주차대수",
@@ -240,8 +254,14 @@ export function buildDataReadinessInsight(
       },
       {
         label: "위반건축물 여부",
-        status: "missing",
-        source: "건축물대장 추가 조회 필요",
+        status: knownViolationCount > 0 ? "available" : "missing",
+        source: knownViolationCount > 0 ? "V월드 GIS건물통합정보 violt_bild" : "추가 확인 필요",
+        note:
+          knownViolationCount > 0
+            ? violationYesCount > 0
+              ? `${violationYesCount}개 형상에서 위반 값 확인 · 원문 대장 재확인 필요`
+              : `${knownViolationCount}개 형상에서 비위반 값 확인 · 원문 대장 재확인 권장`
+            : "코드값 미제공 또는 해석 불가",
       },
       {
         label: "지붕·층별 용도",
