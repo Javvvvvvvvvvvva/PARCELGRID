@@ -18,7 +18,7 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(170px, 0.7fr) minmax(250px, 1.3fr)",
+          gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
           gap: 18,
           alignItems: "stretch",
         }}
@@ -100,9 +100,29 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
             <br />
             {insight.northLengthM != null ? `${insight.northLengthM.toFixed(1)}m` : "미확인"}
           </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 12,
+              bottom: 12,
+              fontSize: 9.5,
+              color: "var(--fg-faint)",
+            }}
+          >
+            방위 개념도 · 실제 필지 형상 아님
+          </div>
         </div>
 
-        <div style={{ display: "grid", gap: 1, background: "var(--border)", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+        <div
+          style={{
+            display: "grid",
+            gap: 1,
+            background: "var(--border)",
+            border: "1px solid var(--border)",
+            borderRadius: 9,
+            overflow: "hidden",
+          }}
+        >
           <InsightRow
             label="전면 방향"
             value={insight.frontDirection ? `${insight.frontDirection}측` : "추가 확인 필요"}
@@ -126,7 +146,13 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
             label="북측 경계"
             value={
               insight.northDirection
-                ? `${insight.northDirection}측 · ${insight.northIsRoad === true ? "도로 접면 추정" : insight.northIsRoad === false ? "인접 대지 추정" : "접도 미확인"}`
+                ? `${insight.northDirection}측 · ${
+                    insight.northIsRoad === true
+                      ? "도로 접면 추정"
+                      : insight.northIsRoad === false
+                        ? "인접 대지 추정"
+                        : "접도 미확인"
+                  }`
                 : "방위 분석 불가"
             }
             sub={insight.sunReviewApplies ? "정북일조 검토 대상 용도지역" : "정북일조 적용 여부 낮음"}
@@ -136,7 +162,16 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
 
       <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
         {insight.notes.map((note) => (
-          <div key={note} style={{ display: "flex", gap: 8, fontSize: 11.5, color: "var(--fg-faint)", lineHeight: 1.55 }}>
+          <div
+            key={note}
+            style={{
+              display: "flex",
+              gap: 8,
+              fontSize: 11.5,
+              color: "var(--fg-faint)",
+              lineHeight: 1.55,
+            }}
+          >
             <span style={{ marginTop: 1 }}>·</span>
             <span>{note}</span>
           </div>
@@ -164,7 +199,7 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
     >
       <MarketMetric label="수집 거래" value={`${num(insight.collectedCount)}건`} sub="전체 조회 결과" />
       <MarketMetric label="같은 동 거래" value={`${num(insight.sameDongCount)}건`} sub="법정동 기준" />
-      <MarketMetric label="지도 표시" value={`${num(insight.mapDisplayCount)}건`} sub="최대 24건" />
+      <MarketMetric label="지도 표시" value={`${num(insight.mapDisplayCount)}건`} sub="지오코딩 성공 건수" />
       <MarketMetric label="최근 신축" value={`${num(insight.recentBuildCount)}건`} sub="최근 5년 준공" />
       <MarketMetric
         label={medianLabel}
@@ -198,7 +233,7 @@ export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
           gap: 8,
           marginBottom: 16,
         }}
@@ -210,7 +245,16 @@ export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight 
       <div style={{ fontSize: 11.5, color: "var(--fg-faint)", marginBottom: 12 }}>
         현재 화면에서 활용 가능한 항목 {confirmed}개 · 현장조사나 추가 API가 필요한 항목 {insight.missingCount}개
       </div>
-      <div style={{ display: "grid", gap: 1, background: "var(--border)", border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden" }}>
+      <div
+        style={{
+          display: "grid",
+          gap: 1,
+          background: "var(--border)",
+          border: "1px solid var(--border)",
+          borderRadius: 9,
+          overflow: "hidden",
+        }}
+      >
         {insight.items.map((item) => (
           <DataCheckRow key={item.label} item={item} />
         ))}
@@ -255,7 +299,11 @@ function InsightRow({ label, value, sub }: { label: string; value: string; sub?:
     <div style={{ background: "var(--bg-elev)", padding: "12px 13px" }}>
       <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 13.5, fontWeight: 650 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 4, lineHeight: 1.45 }}>{sub}</div>}
+      {sub && (
+        <div style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 4, lineHeight: 1.45 }}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
@@ -265,7 +313,9 @@ function MarketMetric({ label, value, sub }: { label: string; value: string; sub
     <div style={{ background: "var(--bg-elev)", padding: "12px 13px", minHeight: 76 }}>
       <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
-      <div style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 4, lineHeight: 1.4 }}>{sub}</div>
+      <div style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 4, lineHeight: 1.4 }}>
+        {sub}
+      </div>
     </div>
   );
 }
@@ -273,7 +323,14 @@ function MarketMetric({ label, value, sub }: { label: string; value: string; sub
 function CountCard({ label, value, tone }: { label: string; value: number; tone: ReviewTone }) {
   const style = toneStyle(tone);
   return (
-    <div style={{ padding: "12px 13px", borderRadius: 8, border: `1px solid ${style.border}`, background: style.background }}>
+    <div
+      style={{
+        padding: "12px 13px",
+        borderRadius: 8,
+        border: `1px solid ${style.border}`,
+        background: style.background,
+      }}
+    >
       <div style={{ fontSize: 10.5, color: style.color }}>{label}</div>
       <div style={{ marginTop: 3, fontSize: 22, fontWeight: 750, color: style.color }}>{value}</div>
     </div>
@@ -291,7 +348,7 @@ function DataCheckRow({ item }: { item: DataCheckItem }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(130px, 0.8fr) minmax(160px, 1fr) minmax(80px, auto)",
+        gridTemplateColumns: "minmax(120px, 0.8fr) minmax(0, 1fr) auto",
         gap: 10,
         alignItems: "center",
         padding: "10px 12px",
@@ -355,7 +412,16 @@ function ReviewCard({ option }: { option: ExistingReviewOption }) {
       </p>
       <div style={{ marginTop: 13, display: "grid", gap: 7 }}>
         {option.points.map((point) => (
-          <div key={point} style={{ display: "flex", gap: 7, fontSize: 11.5, color: "var(--fg-subtle)", lineHeight: 1.5 }}>
+          <div
+            key={point}
+            style={{
+              display: "flex",
+              gap: 7,
+              fontSize: 11.5,
+              color: "var(--fg-subtle)",
+              lineHeight: 1.5,
+            }}
+          >
             <span>·</span>
             <span>{point}</span>
           </div>
