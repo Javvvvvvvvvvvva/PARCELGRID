@@ -15,6 +15,7 @@ import * as THREE from "three";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
 import { projectPolygon } from "@/lib/geo/project-polygon";
+import { useProjectStore } from "@/lib/stores/project-store";
 
 type LngLat = [number, number];
 type Pt = { x: number; z: number };
@@ -45,13 +46,11 @@ function openRing(boundary: LngLat[]): LngLat[] {
 }
 
 function ringCentroidPt(ring: Pt[]): Pt {
-  let x = 0;
-  let z = 0;
-  for (const p of ring) {
-    x += p.x;
-    z += p.z;
-  }
-  return { x: x / ring.length, z: z / ring.length };
+  const sum = ring.reduce(
+    (acc, point) => ({ x: acc.x + point.x, z: acc.z + point.z }),
+    { x: 0, z: 0 }
+  );
+  return { x: sum.x / ring.length, z: sum.z / ring.length };
 }
 
 function boundaryToLocalRing(
@@ -59,30 +58,27 @@ function boundaryToLocalRing(
 ): { ring: Pt[]; center: { lng: number; lat: number } } | null {
   const open = openRing(boundary);
   if (open.length < 3) return null;
-  const closed = [...open, open[0]] as LngLat[];
-  const projected = projectPolygon(closed);
+  const projected = projectPolygon([...open, open[0]] as LngLat[]);
   if (!projected) return null;
 
-  const pts = projected.points;
-  const openPts =
-    pts.length > 1 &&
-    pts[0][0] === pts[pts.length - 1][0] &&
-    pts[0][1] === pts[pts.length - 1][1]
-      ? pts.slice(0, -1)
-      : pts;
+  const openPoints =
+    projected.points.length > 1 &&
+    projected.points[0][0] === projected.points[projected.points.length - 1][0] &&
+    projected.points[0][1] === projected.points[projected.points.length - 1][1]
+      ? projected.points.slice(0, -1)
+      : projected.points;
 
   return {
-    ring: openPts.map(([x, y]) => ({ x, z: -y })),
+    ring: openPoints.map(([x, y]) => ({ x, z: -y })),
     center: projected.center,
   };
 }
 
 function projectRoadPoint(point: LngLat, center: { lng: number; lat: number }): Pt {
   const lngMetersPerDeg = 111320 * Math.cos((center.lat * Math.PI) / 180);
-  const latMetersPerDeg = 110540;
   return {
     x: (point[0] - center.lng) * lngMetersPerDeg,
-    z: -(point[1] - center.lat) * latMetersPerDeg,
+    z: -(point[1] - center.lat) * 110540,
   };
 }
 
@@ -103,8 +99,11 @@ function findPrimaryRoad(boundary: LngLat[], roads: RoadInput[]): LocalRoad | nu
     if (!road.points || road.points.length < 2) continue;
     const points = road.points.map((point) => projectRoadPoint(point, local.center));
     let distanceM = Infinity;
-    for (let i = 0; i < points.length - 1; i++) {
-      distanceM = Math.min(distanceM, distanceOriginToSegment(points[i], points[i + 1]));
+    for (let index = 0; index < points.length - 1; index++) {
+      distanceM = Math.min(
+        distanceM,
+        distanceOriginToSegment(points[index], points[index + 1])
+      );
     }
     if (!selected || distanceM < selected.distanceM) {
       selected = { name: road.name, points, distanceM };
@@ -116,23 +115,23 @@ function findPrimaryRoad(boundary: LngLat[], roads: RoadInput[]): LocalRoad | nu
 
 function scaleRingTowardCenter(ring: Pt[], areaRatio: number): Pt[] {
   const factor = Math.sqrt(Math.max(0.04, Math.min(1, areaRatio)));
-  const c = ringCentroidPt(ring);
-  return ring.map((p) => ({
-    x: c.x + (p.x - c.x) * factor,
-    z: c.z + (p.z - c.z) * factor,
+  const center = ringCentroidPt(ring);
+  return ring.map((point) => ({
+    x: center.x + (point.x - center.x) * factor,
+    z: center.z + (point.z - center.z) * factor,
   }));
 }
 
 function extrudeShape(ring: Pt[], depth: number): THREE.ExtrudeGeometry {
   const shape = new THREE.Shape();
-  ring.forEach((p, i) => {
-    if (i === 0) shape.moveTo(p.x, p.z);
-    else shape.lineTo(p.x, p.z);
+  ring.forEach((point, index) => {
+    if (index === 0) shape.moveTo(point.x, point.z);
+    else shape.lineTo(point.x, point.z);
   });
   shape.closePath();
-  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
-  geo.rotateX(-Math.PI / 2);
-  return geo;
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
 }
 
 function SubjectLot({ ring, cutaway }: { ring: Pt[]; cutaway: boolean }) {
@@ -170,10 +169,7 @@ function FloorMass({
         roughness={kind === "below" ? 0.72 : 0.78}
         metalness={0}
       />
-      <Edges
-        threshold={12}
-        color={kind === "below" ? "#263442" : BUILDING_EDGE}
-      />
+      <Edges threshold={12} color={kind === "below" ? "#263442" : BUILDING_EDGE} />
     </mesh>
   );
 }
@@ -181,9 +177,9 @@ function FloorMass({
 function RoadRibbon({ road, extent }: { road: LocalRoad; extent: number }) {
   const segments = useMemo(() => {
     const result: { key: string; x: number; z: number; length: number; angle: number }[] = [];
-    for (let i = 0; i < road.points.length - 1; i++) {
-      const a = road.points[i];
-      const b = road.points[i + 1];
+    for (let index = 0; index < road.points.length - 1; index++) {
+      const a = road.points[index];
+      const b = road.points[index + 1];
       const dx = b.x - a.x;
       const dz = b.z - a.z;
       const length = Math.hypot(dx, dz);
@@ -191,7 +187,7 @@ function RoadRibbon({ road, extent }: { road: LocalRoad; extent: number }) {
       const z = (a.z + b.z) / 2;
       if (length < 0.1 || Math.hypot(x, z) > extent * 2.3) continue;
       result.push({
-        key: `${i}-${x.toFixed(2)}-${z.toFixed(2)}`,
+        key: `${index}-${x.toFixed(2)}-${z.toFixed(2)}`,
         x,
         z,
         length,
@@ -228,24 +224,25 @@ function NorthMarker({ extent }: { extent: number }) {
     () => new THREE.Vector3(extent * 0.62, 0.28, extent * 0.55),
     [extent]
   );
+  const arrowLength = Math.max(2.2, extent * 0.25);
   const arrow = useMemo(
     () =>
       new THREE.ArrowHelper(
         new THREE.Vector3(0, 0, -1),
         origin,
-        Math.max(2.2, extent * 0.25),
+        arrowLength,
         "#334155",
         0.55,
         0.28
       ),
-    [extent, origin]
+    [arrowLength, origin]
   );
 
   return (
     <group>
       <primitive object={arrow} />
       <Html
-        position={[origin.x, origin.y + 0.2, origin.z - Math.max(2.5, extent * 0.28)]}
+        position={[origin.x, origin.y + 0.2, origin.z - arrowLength - 0.3]}
         center
         style={{ pointerEvents: "none" }}
       >
@@ -282,9 +279,8 @@ function SceneContent({
   showBasement: boolean;
 }) {
   const main =
-    currentBuilding?.buildings.find((b) => b.isMainBuilding) ??
+    currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
     currentBuilding?.buildings[0];
-
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
   const lotRing = local?.ring ?? [];
   const primaryRoad = useMemo(() => findPrimaryRoad(boundary, roads), [boundary, roads]);
@@ -300,38 +296,38 @@ function SceneContent({
   }, [lotRing, main, lotArea]);
 
   const extent = useMemo(() => {
-    let e = 8;
-    lotRing.forEach((p) => {
-      e = Math.max(e, Math.hypot(p.x, p.z) + 2.5);
+    let value = 8;
+    lotRing.forEach((point) => {
+      value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
     });
-    return e;
+    return value;
   }, [lotRing]);
 
   const groundFloors = main?.groundFloors ?? 0;
   const basementFloors = main?.undergroundFloors ?? 0;
-  const floorH = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
+  const floorHeight = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
   const aboveHeight =
-    main && main.height > 0 && groundFloors > 0 ? main.height : groundFloors * floorH;
+    main && main.height > 0 && groundFloors > 0 ? main.height : groundFloors * floorHeight;
 
   const aboveSlabs = useMemo(() => {
     if (groundFloors <= 0 || aboveHeight <= 0) return [];
-    const slabH =
+    const slabHeight =
       (aboveHeight - FLOOR_GAP * Math.max(0, groundFloors - 1)) / groundFloors;
-    return Array.from({ length: groundFloors }, (_, i) => ({
-      floor: i + 1,
-      baseY: GRADE_Y + 0.12 + i * (slabH + FLOOR_GAP),
-      height: slabH,
+    return Array.from({ length: groundFloors }, (_, index) => ({
+      floor: index + 1,
+      baseY: GRADE_Y + 0.12 + index * (slabHeight + FLOOR_GAP),
+      height: slabHeight,
     }));
   }, [groundFloors, aboveHeight]);
 
   const belowSlabs = useMemo(() => {
     if (!showBasement || basementFloors <= 0) return [];
-    return Array.from({ length: basementFloors }, (_, i) => ({
-      floor: i + 1,
-      baseY: GRADE_Y - (i + 1) * floorH,
-      height: floorH - FLOOR_GAP,
+    return Array.from({ length: basementFloors }, (_, index) => ({
+      floor: index + 1,
+      baseY: GRADE_Y - (index + 1) * floorHeight,
+      height: floorHeight - FLOOR_GAP,
     }));
-  }, [showBasement, basementFloors, floorH]);
+  }, [showBasement, basementFloors, floorHeight]);
 
   if (lotRing.length < 3) return null;
 
@@ -352,21 +348,16 @@ function SceneContent({
         <planeGeometry args={[extent * 3.1, extent * 3.1]} />
         <shadowMaterial transparent opacity={0.06} />
       </mesh>
-      <gridHelper
-        args={[extent * 2.6, 18, "#d7dde1", "#eaedef"]}
-        position={[0, 0, 0]}
-      />
+      <gridHelper args={[extent * 2.6, 18, "#d7dde1", "#eaedef"]} position={[0, 0, 0]} />
 
       {primaryRoad && <RoadRibbon road={primaryRoad} extent={extent} />}
       <SubjectLot ring={lotRing} cutaway={showBasement} />
-
-      {belowSlabs.map((s) => (
-        <FloorMass key={`b${s.floor}`} ring={footprint} {...s} kind="below" />
+      {belowSlabs.map((slab) => (
+        <FloorMass key={`b${slab.floor}`} ring={footprint} {...slab} kind="below" />
       ))}
-      {aboveSlabs.map((s) => (
-        <FloorMass key={`a${s.floor}`} ring={footprint} {...s} kind="above" />
+      {aboveSlabs.map((slab) => (
+        <FloorMass key={`a${slab.floor}`} ring={footprint} {...slab} kind="above" />
       ))}
-
       <NorthMarker extent={extent} />
 
       <ContactShadows
@@ -376,7 +367,6 @@ function SceneContent({
         blur={2.5}
         far={extent * 2}
       />
-
       <OrbitControls
         makeDefault
         enableRotate
@@ -475,6 +465,8 @@ export function ExistingBuildingMass({
   lotArea: number;
   height?: number;
 }) {
+  const storedRoads = useProjectStore((state) => state.data?.parcel.roads ?? []);
+  const resolvedRoads = roads.length > 0 ? roads : storedRoads;
   const [showBasement, setShowBasement] = useState(false);
   const [canvasKey, setCanvasKey] = useState(0);
 
@@ -482,35 +474,32 @@ export function ExistingBuildingMass({
     currentBuilding?.hasBuilding && (currentBuilding.buildings.length ?? 0) > 0
   );
   const main =
-    currentBuilding?.buildings.find((b) => b.isMainBuilding) ??
+    currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
     currentBuilding?.buildings[0];
-
   const openBoundary = useMemo(() => {
     if (!boundary || boundary.length < 3) return null;
     return openRing(boundary);
   }, [boundary]);
-
   const primaryRoad = useMemo(
-    () => (openBoundary ? findPrimaryRoad(openBoundary, roads) : null),
-    [openBoundary, roads]
+    () => (openBoundary ? findPrimaryRoad(openBoundary, resolvedRoads) : null),
+    [openBoundary, resolvedRoads]
   );
-
   const ratios = useMemo(() => {
     if (!main || lotArea <= 0) return undefined;
     const bcrFromArea = (main.buildingArea / lotArea) * 100;
-    const bcrPct = main.buildingCoverage > 0 ? main.buildingCoverage : bcrFromArea;
-    return { bcrPct, buildingAreaSqm: main.buildingArea };
+    return {
+      bcrPct: main.buildingCoverage > 0 ? main.buildingCoverage : bcrFromArea,
+      buildingAreaSqm: main.buildingArea,
+    };
   }, [main, lotArea]);
-
   const extent = useMemo(() => {
     if (!openBoundary) return 12;
     const local = boundaryToLocalRing(openBoundary);
     if (!local) return 12;
-    let e = 8;
-    local.ring.forEach((p) => {
-      e = Math.max(e, Math.hypot(p.x, p.z) + 2.5);
-    });
-    return e;
+    return local.ring.reduce(
+      (value, point) => Math.max(value, Math.hypot(point.x, point.z) + 2.5),
+      8
+    );
   }, [openBoundary]);
 
   if (!openBoundary || openBoundary.length < 3) {
@@ -532,7 +521,7 @@ export function ExistingBuildingMass({
     );
   }
 
-  const camDist = extent * 1.3;
+  const cameraDistance = extent * 1.3;
 
   return (
     <div
@@ -550,12 +539,12 @@ export function ExistingBuildingMass({
         shadows
         dpr={[1, 1.5]}
         style={{ cursor: "grab", touchAction: "none" }}
-        camera={{ position: [camDist, camDist * 0.72, camDist], fov: 35 }}
+        camera={{ position: [cameraDistance, cameraDistance * 0.72, cameraDistance], fov: 35 }}
       >
         <Suspense fallback={null}>
           <SceneContent
             boundary={openBoundary}
-            roads={roads}
+            roads={resolvedRoads}
             currentBuilding={hasBuilding ? currentBuilding : null}
             lotArea={lotArea}
             showBasement={showBasement}
@@ -573,19 +562,11 @@ export function ExistingBuildingMass({
         />
       )}
 
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 12,
-          display: "flex",
-          gap: 6,
-        }}
-      >
+      <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 6 }}>
         {hasBuilding && (main?.undergroundFloors ?? 0) > 0 && (
           <button
             type="button"
-            onClick={() => setShowBasement((v) => !v)}
+            onClick={() => setShowBasement((value) => !value)}
             style={controlStyle(showBasement)}
           >
             {showBasement ? "지하 숨기기" : "지하 보기"}
@@ -593,7 +574,7 @@ export function ExistingBuildingMass({
         )}
         <button
           type="button"
-          onClick={() => setCanvasKey((v) => v + 1)}
+          onClick={() => setCanvasKey((value) => value + 1)}
           style={controlStyle(false)}
         >
           시점 초기화
