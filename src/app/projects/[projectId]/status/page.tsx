@@ -15,6 +15,12 @@ import { KakaoMap, type CompMarker, type StationMarker } from "@/components/ui/K
 import { Panel, SectionTitle, DataRow, Button } from "@/components/ui/primitives";
 import { Dot } from "@/components/ui/Tag";
 import {
+  DataReadinessPanel,
+  ExistingReviewPanel,
+  MarketSnapshotPanel,
+  RoadOrientationPanel,
+} from "@/components/ui/StatusInsightPanels";
+import {
   buildStatusSummary,
   formatExistingUnits,
   type SummaryTone,
@@ -24,7 +30,13 @@ import {
   formatRatioVsLimit,
   headroomPct,
 } from "@/lib/analysis/existing-building-metrics";
-import { num, pyeong } from "@/lib/utils/format";
+import {
+  buildDataReadinessInsight,
+  buildExistingReviewOptions,
+  buildMarketInsight,
+  buildRoadOrientationInsight,
+} from "@/lib/analysis/status-insights";
+import { num, pyeong, won } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 
@@ -166,6 +178,32 @@ export default function StatusPage({
       allComps.filter((c) => c.buildYear != null && c.buildYear >= NEW_BUILD_CUTOFF_YEAR)
         .length,
     [allComps]
+  );
+
+  const roadInsight = useMemo(
+    () => (parcel ? buildRoadOrientationInsight(parcel) : null),
+    [parcel]
+  );
+  const marketInsight = useMemo(
+    () =>
+      parcel
+        ? buildMarketInsight(
+            allComps,
+            stations,
+            subjectPPP,
+            compMarkers.length,
+            NEW_BUILD_CUTOFF_YEAR
+          )
+        : null,
+    [parcel, allComps, stations, subjectPPP, compMarkers.length]
+  );
+  const dataReadiness = useMemo(
+    () => (parcel ? buildDataReadinessInsight(parcel, allComps, stations) : null),
+    [parcel, allComps, stations]
+  );
+  const reviewOptions = useMemo(
+    () => (parcel ? buildExistingReviewOptions(parcel) : []),
+    [parcel]
   );
 
   if (!parcel) {
@@ -331,7 +369,7 @@ export default function StatusPage({
             background: "var(--border)",
           }}
         >
-          <OverviewMetric label="대지" value={`${pyeong(parcel.lotArea)}`} sub={`${num(parcel.lotArea, 2)}㎡`} />
+          <OverviewMetric label="대지" value={pyeong(parcel.lotArea)} sub={`${num(parcel.lotArea, 2)}㎡`} />
           <OverviewMetric
             label="기존 건물"
             value={main ? `지상 ${main.groundFloors}층` : "없음"}
@@ -365,6 +403,7 @@ export default function StatusPage({
       >
         <Panel title="① 토지 기본 정보" source="V월드 · 공시지가 · 건축물대장">
           <DataRow label="주소" value={parcel.address} />
+          {parcel.addressRoad && <DataRow label="도로명 주소" value={parcel.addressRoad} />}
           <DataRow
             label="대지면적"
             value={`${num(parcel.lotArea, 2)} m² (${pyeong(parcel.lotArea)})`}
@@ -398,6 +437,11 @@ export default function StatusPage({
             label="공시지가"
             value={`${num(parcel.landPrice / 10_000)}만/m²`}
             sub="V월드 개별공시지가"
+          />
+          <DataRow
+            label="도로 데이터"
+            value={parcel.roads && parcel.roads.length > 0 ? `${parcel.roads.length}개 중심선` : "추가 확인 필요"}
+            sub="도로 폭은 현재 데이터에 포함되지 않음"
           />
         </Panel>
 
@@ -440,6 +484,18 @@ export default function StatusPage({
               )}
               <DataRow label="세대·가구" value={formatExistingUnits(currentBuilding)} />
               <DataRow label="구조" value={main.structure || "건축물대장 미제공"} />
+              <DataRow
+                label="예상 철거비"
+                value={
+                  parcel.demolitionCost && parcel.demolitionCost > 0
+                    ? won(parcel.demolitionCost, { full: true })
+                    : "개략값 없음"
+                }
+                sub="건축물대장 연면적 × 구조별 단가 · 견적 아님"
+              />
+              <DataRow label="기존 주차대수" value="추가 조회 필요" sub="표제부 외 추가 API 필요" />
+              <DataRow label="승강기·지붕" value="추가 조회 필요" sub="층별개요·설비 데이터 미연동" />
+              <DataRow label="위반건축물 여부" value="추가 확인 필요" sub="현재 API 응답에 포함되지 않음" />
               {(currentBuilding?.buildings.length ?? 0) > 1 && (
                 <DataRow
                   label="부속 동"
@@ -528,11 +584,19 @@ export default function StatusPage({
         </Panel>
       </div>
 
+      {roadInsight && (
+        <div style={{ marginTop: "var(--s5)" }}>
+          <RoadOrientationPanel insight={roadInsight} />
+        </div>
+      )}
+
       <Panel
-        title="⑤ 지도와 주변 환경"
+        title="⑥ 지도와 주변 시장"
         source="Kakao Map · MOLIT 실거래"
         style={{ marginTop: "var(--s5)" }}
       >
+        {marketInsight && <MarketSnapshotPanel insight={marketInsight} />}
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
           <LayerChip
             label="대상지"
@@ -543,7 +607,7 @@ export default function StatusPage({
             label={`수집 실거래 (${allComps.length})`}
             active={layers.comps}
             onClick={() => setLayers((l) => ({ ...l, comps: !l.comps }))}
-            hint={`지도에는 최대 ${compsForMap.length}건 표시`}
+            hint={`지도 실제 표시 ${compMarkers.length}건`}
           />
           <LayerChip
             label={`역세권 (${stations.length})`}
@@ -564,7 +628,9 @@ export default function StatusPage({
           <KakaoMap
             centerLat={parcel.lat}
             centerLng={parcel.lng}
-            showRoads={false}
+            showRoads
+            roads={parcel.roads}
+            boundary={parcel.boundary}
             focusSubject
             zoomLevel={3}
             maxZoomOutLevel={4}
@@ -573,7 +639,7 @@ export default function StatusPage({
             subjectPPP={subjectPPP}
             comps={layers.comps ? compMarkers : []}
             stations={layers.stations ? stations : []}
-            height={360}
+            height={380}
           />
         ) : (
           <p style={{ fontSize: 13, color: "var(--fg-muted)" }}>
@@ -581,9 +647,19 @@ export default function StatusPage({
           </p>
         )}
         <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-          우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표 · 수집 건수와 지도 표시 건수는 다를 수 있습니다.
+          우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표 · 중앙값은 단순 시장 참고값이며 최종 비교사례 선정값이 아닙니다.
         </p>
       </Panel>
+
+      {dataReadiness && (
+        <div style={{ marginTop: "var(--s5)" }}>
+          <DataReadinessPanel insight={dataReadiness} />
+        </div>
+      )}
+
+      <div style={{ marginTop: "var(--s5)" }}>
+        <ExistingReviewPanel options={reviewOptions} />
+      </div>
 
       <div
         style={{
