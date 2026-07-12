@@ -1,23 +1,31 @@
 /**
  * POST /api/parcels/lookup
  *
- * 주소를 받아서 5개 외부 API를 호출하고 부지 정보를 통합 반환:
- *   1. Kakao         → 좌표 + 행정코드 + 정확 지번 (mainAddressNo/subAddressNo)
- *   2. V월드 지적    → PNU + 면적 + 지목 + 공시지가
- *   3. V월드 용도지역 → 용도지역 + 건폐율 + 용적률 + 높이제한
- *   4. MOLIT 건축물대장 → 현재 건물 정보 + 재건축 시그널
+ * 주소를 받아 외부 데이터를 통합 반환:
+ *   1. Kakao                    → 좌표 + 행정코드 + 정확 지번
+ *   2. V월드 연속지적도          → PNU + 면적 + 지목 + 공시지가 + 필지 경계
+ *   3. V월드 용도지역            → 용도지역 + 건폐율 + 용적률 + 높이제한
+ *   4. MOLIT 건축물대장          → 현재 건물 속성 + 재건축 시그널
+ *   5. V월드 GIS건물통합정보     → 실제 건물 외곽선·위치·방향 (dt_d010)
  *
  * 작은 부지에서 V월드 PNU 부정확 문제 때문에 건축물대장 lookup은
- * 카카오 지번 기반(lookupBuildingByJibun)을 우선 사용.
+ * 카카오 지번 기반(lookupBuildingByJibun)을 우선 사용한다.
+ * 건물 외곽선 조회 실패는 비치명적으로 처리하고 건폐율 기반 개략 매스로 fallback한다.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { geocodeAddress } from "@/lib/integrations/kakao";
+import { lookupCadastral, lookupZoningByPNU } from "@/lib/integrations/vworld";
 import {
-  lookupCadastral,
-  lookupZoningByPNU,
-} from "@/lib/integrations/vworld";
-import { lookupBuildingByJibun, estimateUnitAreaSqm } from "@/lib/integrations/molit-building";
+  lookupBuildingByJibun,
+  estimateUnitAreaSqm,
+  type BuildingLookupResult,
+} from "@/lib/integrations/molit-building";
+import {
+  attachExistingBuildingGeometry,
+  fetchExistingBuildingGeometry,
+} from "@/lib/integrations/vworld-buildings";
+import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 
 export const runtime = "nodejs";
 
@@ -57,31 +65,62 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. V월드 용도지역 정보 (PNU 기반)
-    let zoning;
-    try {
-      zoning = await lookupZoningByPNU(cadastral.pnu);
-    } catch (err) {
-      console.error("V월드 용도지역 조회 실패:", err);
+    // 3~5. PNU가 확보된 뒤 독립 조회를 병렬 실행
+    const zoningPromise = lookupZoningByPNU(cadastral.pnu);
+    const buildingPromise = lookupBuildingByJibun(
+      geo.bCode,
+      geo.mainAddressNo,
+      geo.subAddressNo,
+      geo.mountainYn || "N"
+    );
+    const geometryPromise = fetchExistingBuildingGeometry({
+      pnu: cadastral.pnu,
+      boundary: cadastral.boundary,
+      center: cadastral.centroid,
+    });
+
+    const [zoningResult, buildingResult, geometryResult] = await Promise.allSettled([
+      zoningPromise,
+      buildingPromise,
+      geometryPromise,
+    ]);
+
+    if (zoningResult.status === "rejected") {
+      console.error("V월드 용도지역 조회 실패:", zoningResult.reason);
       return NextResponse.json(
         { error: "용도지역 정보 조회 실패" },
         { status: 502 }
       );
     }
+    const zoning = zoningResult.value;
 
-    // 4. MOLIT 건축물대장 (카카오 지번 기반 — 더 정확)
-    let currentBuilding = null;
-    try {
-      currentBuilding = await lookupBuildingByJibun(
-        geo.bCode,
-        geo.mainAddressNo,
-        geo.subAddressNo,
-        geo.mountainYn || "N"
-      );
-    } catch (err) {
-      console.warn("MOLIT 건축물대장 조회 실패 (비치명적):", err);
-      // 건축물대장 실패는 빈땅으로 간주하고 계속
+    let currentBuilding: BuildingLookupResult | null = null;
+    if (buildingResult.status === "fulfilled") {
+      currentBuilding = buildingResult.value;
+    } else {
+      console.warn("MOLIT 건축물대장 조회 실패 (비치명적):", buildingResult.reason);
     }
+
+    let buildingGeometry: ExistingBuildingGeometry;
+    if (geometryResult.status === "fulfilled") {
+      buildingGeometry = geometryResult.value;
+    } else {
+      console.warn("V월드 GIS건물통합정보 조회 실패 (비치명적):", geometryResult.reason);
+      buildingGeometry = {
+        source: "vworld-dt_d010",
+        status: "error",
+        footprints: [],
+        queryFeatureCount: 0,
+      };
+    }
+
+    // MOLIT 속성을 우선 유지하고 V월드 실제 외곽선을 결합한다.
+    // MOLIT 실패 시에도 dt_d010 속성으로 최소 건물 정보를 구성한다.
+    currentBuilding = attachExistingBuildingGeometry(
+      currentBuilding,
+      buildingGeometry,
+      cadastral.lotAreaSqm
+    );
 
     return NextResponse.json({
       // Kakao
@@ -118,9 +157,8 @@ export async function POST(req: NextRequest) {
       heightLimit: zoning.heightLimitM,
       overlays: zoning.overlays,
 
-      // MOLIT 건축물대장 (있으면)
+      // MOLIT 속성 + V월드 dt_d010 실제 외곽선
       currentBuilding,
-      // 기존 건물 기반 세대당 면적 (하드코딩 50㎡ 대체, 없으면 null)
       existingUnitArea: estimateUnitAreaSqm(currentBuilding),
     });
   } catch (err) {
