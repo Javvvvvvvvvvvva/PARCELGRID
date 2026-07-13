@@ -32,21 +32,19 @@ export interface PlanningFloorMass {
   floorHeightM: number;
   shape: LocalPlanPoint[];
   programAreaSqm: number;
-  /** 법규 엔진이 해당 층에 허용한 최대 외곽선 면적. */
   envelopeAreaSqm: number;
-  /** 프로그램 면적과 법규 외곽선 중 더 작은 3D 목표 면적. */
   targetAreaSqm: number;
   visualAreaSqm: number;
   areaDifferencePct: number;
-  /** 프로그램 면적 또는 정돈된 평면 배치가 법규 외곽선에 수용되지 못한 면적. */
   capacityShortfallSqm: number;
   fitsEnvelope: boolean;
-  /** 법규 외곽선을 기준으로 실제 적용된 선형 축척. */
   appliedScalePct: number;
   footprintScalePct: number;
   northSetbackM: number;
   requiredSetbackM: number;
   envelopeAvailable: boolean;
+  supportOverlapRatio: number;
+  supportedByLowerFloor: boolean;
   residentialUnits: number;
   commercialUnits: number;
   dominantUse: FloorUseType | "mixed";
@@ -69,12 +67,8 @@ export interface PlanningMassModel {
   capacity: PlanningMassCapacitySummary;
 }
 
-interface RegularizedFootprintResult {
-  shape: LocalPlanPoint[];
-  fitRatio: number;
-}
-
 const EPSILON = 1e-7;
+const MIN_SUPPORT_OVERLAP_RATIO = 0.12;
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -135,12 +129,10 @@ function pointOnSegment(
     (point.z - start.z) * (end.x - start.x) -
     (point.x - start.x) * (end.z - start.z);
   if (Math.abs(cross) > EPSILON) return false;
-
   const dot =
     (point.x - start.x) * (end.x - start.x) +
     (point.z - start.z) * (end.z - start.z);
   if (dot < -EPSILON) return false;
-
   const lengthSquared =
     (end.x - start.x) ** 2 + (end.z - start.z) ** 2;
   return dot <= lengthSquared + EPSILON;
@@ -157,16 +149,15 @@ function pointInPolygonInclusive(
     index < polygon.length;
     previous = index++
   ) {
-    const currentPoint = polygon[index];
-    const previousPoint = polygon[previous];
-    if (pointOnSegment(point, previousPoint, currentPoint)) return true;
+    const current = polygon[index];
+    const before = polygon[previous];
+    if (pointOnSegment(point, before, current)) return true;
     const intersects =
-      currentPoint.z > point.z !== previousPoint.z > point.z &&
+      current.z > point.z !== before.z > point.z &&
       point.x <
-        ((previousPoint.x - currentPoint.x) *
-          (point.z - currentPoint.z)) /
-          (previousPoint.z - currentPoint.z) +
-          currentPoint.x;
+        ((before.x - current.x) * (point.z - current.z)) /
+          (before.z - current.z) +
+          current.x;
     if (intersects) inside = !inside;
   }
   return inside;
@@ -181,9 +172,15 @@ function polygonInsidePolygon(
   inner.forEach((point, index) => {
     const next = inner[(index + 1) % inner.length];
     samples.push(
-      { x: point.x * 0.75 + next.x * 0.25, z: point.z * 0.75 + next.z * 0.25 },
       { x: (point.x + next.x) / 2, z: (point.z + next.z) / 2 },
-      { x: point.x * 0.25 + next.x * 0.75, z: point.z * 0.25 + next.z * 0.75 }
+      {
+        x: point.x * 0.75 + next.x * 0.25,
+        z: point.z * 0.75 + next.z * 0.25,
+      },
+      {
+        x: point.x * 0.25 + next.x * 0.75,
+        z: point.z * 0.25 + next.z * 0.75,
+      }
     );
   });
   return samples.every((point) => pointInPolygonInclusive(point, outer));
@@ -201,223 +198,77 @@ function polygonBounds(points: LocalPlanPoint[]) {
   };
 }
 
-function longestEdgeAngle(points: LocalPlanPoint[]): number {
-  let longest = -1;
-  let angle = 0;
-  points.forEach((point, index) => {
-    const next = points[(index + 1) % points.length];
-    const dx = next.x - point.x;
-    const dz = next.z - point.z;
-    const lengthSquared = dx * dx + dz * dz;
-    if (lengthSquared > longest) {
-      longest = lengthSquared;
-      angle = Math.atan2(dz, dx);
-    }
-  });
-  return angle;
-}
-
-function orientedAspectRatio(
-  points: LocalPlanPoint[],
-  angle: number
+function boundingOverlapRatio(
+  upper: LocalPlanPoint[],
+  lower: LocalPlanPoint[]
 ): number {
-  if (points.length < 3) return 1;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const projected = points.map((point) => ({
-    u: point.x * cos + point.z * sin,
-    v: -point.x * sin + point.z * cos,
-  }));
-  const width =
-    Math.max(...projected.map((point) => point.u)) -
-    Math.min(...projected.map((point) => point.u));
-  const depth =
-    Math.max(...projected.map((point) => point.v)) -
-    Math.min(...projected.map((point) => point.v));
-  if (width <= EPSILON || depth <= EPSILON) return 1;
-  return clamp(width / depth, 0.35, 2.85);
-}
-
-function rectangleShape(
-  center: LocalPlanPoint,
-  areaSqm: number,
-  aspectRatio: number,
-  angle: number,
-  scale = 1
-): LocalPlanPoint[] {
-  if (areaSqm <= 0 || scale <= 0) return [];
-  const width = Math.sqrt(areaSqm * aspectRatio) * scale;
-  const depth = (areaSqm / Math.max(width / scale, EPSILON)) * scale;
-  const halfWidth = width / 2;
-  const halfDepth = depth / 2;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const localCorners = [
-    { u: -halfWidth, v: -halfDepth },
-    { u: halfWidth, v: -halfDepth },
-    { u: halfWidth, v: halfDepth },
-    { u: -halfWidth, v: halfDepth },
-  ];
-  return localCorners.map(({ u, v }) => ({
-    x: center.x + u * cos - v * sin,
-    z: center.z + u * sin + v * cos,
-  }));
-}
-
-function candidateCenters(polygon: LocalPlanPoint[]): LocalPlanPoint[] {
-  const bounds = polygonBounds(polygon);
-  const centroid = polygonCentroid(polygon);
-  const average = polygon.reduce(
-    (sum, point) => ({
-      x: sum.x + point.x / polygon.length,
-      z: sum.z + point.z / polygon.length,
-    }),
-    { x: 0, z: 0 }
+  if (upper.length < 3 || lower.length < 3) return 0;
+  const a = polygonBounds(upper);
+  const b = polygonBounds(lower);
+  const overlapWidth = Math.max(
+    0,
+    Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX)
   );
-  const candidates: LocalPlanPoint[] = [
-    centroid,
-    average,
-    {
-      x: (bounds.minX + bounds.maxX) / 2,
-      z: (bounds.minZ + bounds.maxZ) / 2,
-    },
-  ];
-
-  const divisions = 6;
-  for (let xIndex = 0; xIndex <= divisions; xIndex += 1) {
-    for (let zIndex = 0; zIndex <= divisions; zIndex += 1) {
-      candidates.push({
-        x:
-          bounds.minX +
-          ((bounds.maxX - bounds.minX) * xIndex) / divisions,
-        z:
-          bounds.minZ +
-          ((bounds.maxZ - bounds.minZ) * zIndex) / divisions,
-      });
-    }
-  }
-
-  const seen = new Set<string>();
-  return candidates.filter((point) => {
-    const key = `${point.x.toFixed(4)}:${point.z.toFixed(4)}`;
-    if (seen.has(key) || !pointInPolygonInclusive(point, polygon)) return false;
-    seen.add(key);
-    return true;
-  });
+  const overlapDepth = Math.max(
+    0,
+    Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ)
+  );
+  const overlapArea = overlapWidth * overlapDepth;
+  const upperBoxArea = Math.max(
+    EPSILON,
+    (a.maxX - a.minX) * (a.maxZ - a.minZ)
+  );
+  const lowerBoxArea = Math.max(
+    EPSILON,
+    (b.maxX - b.minX) * (b.maxZ - b.minZ)
+  );
+  return clamp(overlapArea / Math.min(upperBoxArea, lowerBoxArea), 0, 1);
 }
 
-/**
- * 법규 외곽선은 제한선으로만 사용하고 실제 계획 매스는 정돈된 직사각형으로 만든다.
- * 1층 기준 방향과 종횡비를 모든 지상층이 공유해 작은 상층부에서도 꺾인 외곽선이
- * 과장되거나 층마다 평면 방향이 달라 보이지 않도록 한다.
- */
-function regularizeFootprint(
-  envelopeShape: LocalPlanPoint[],
-  referenceShape: LocalPlanPoint[],
-  desiredAreaSqm: number
-): RegularizedFootprintResult {
-  if (
-    envelopeShape.length < 3 ||
-    referenceShape.length < 3 ||
-    desiredAreaSqm <= 0
-  ) {
-    return { shape: [], fitRatio: 0 };
-  }
-
-  const angle = longestEdgeAngle(referenceShape);
-  const aspectRatio = orientedAspectRatio(referenceShape, angle);
-  const preferredCenter = polygonCentroid(envelopeShape);
-  let bestShape: LocalPlanPoint[] = [];
-  let bestScale = 0;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
-  for (const center of candidateCenters(envelopeShape)) {
-    let low = 0;
-    let high = 1;
-    let candidate = rectangleShape(
-      center,
-      desiredAreaSqm,
-      aspectRatio,
-      angle,
-      high
-    );
-    if (polygonInsidePolygon(candidate, envelopeShape)) {
-      low = 1;
-    } else {
-      for (let iteration = 0; iteration < 26; iteration += 1) {
-        const middle = (low + high) / 2;
-        candidate = rectangleShape(
-          center,
-          desiredAreaSqm,
-          aspectRatio,
-          angle,
-          middle
-        );
-        if (polygonInsidePolygon(candidate, envelopeShape)) {
-          low = middle;
-        } else {
-          high = middle;
-        }
-      }
-    }
-
-    const distance = Math.hypot(
-      center.x - preferredCenter.x,
-      center.z - preferredCenter.z
-    );
-    if (
-      low > bestScale + 1e-5 ||
-      (Math.abs(low - bestScale) <= 1e-5 && distance < bestDistance)
-    ) {
-      bestScale = low;
-      bestDistance = distance;
-      bestShape = rectangleShape(
-        center,
-        desiredAreaSqm,
-        aspectRatio,
-        angle,
-        low
-      );
-    }
-    if (bestScale >= 0.99999 && bestDistance <= 0.01) break;
-  }
-
-  return { shape: bestShape, fitRatio: bestScale };
-}
-
-function applyPlacementTransform(
+function translateShape(
   points: LocalPlanPoint[],
-  northSetbackM: number,
-  placement: PlanningPlacement,
-  rotationPivot: LocalPlanPoint
+  dx: number,
+  dz: number
 ): LocalPlanPoint[] {
-  const angle = (placement.rotationDeg * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  return points.map((point) => {
-    const pivotX = point.x - rotationPivot.x;
-    const pivotZ = point.z - rotationPivot.z;
-    return {
-      x:
-        rotationPivot.x +
-        pivotX * cos -
-        pivotZ * sin +
-        placement.offsetXM,
-      z:
-        rotationPivot.z +
-        pivotX * sin +
-        pivotZ * cos +
-        placement.offsetZM +
-        nonNegative(placement.northSetbackM) +
-        nonNegative(northSetbackM),
-    };
-  });
+  return points.map((point) => ({ x: point.x + dx, z: point.z + dz }));
 }
 
-/**
- * 기존 공개 유틸리티. 임의 외곽선을 자체 중심으로 축척한 뒤 공통 회전축을 기준으로
- * 회전·이동한다. 개별 호출과 기존 테스트의 하위 호환을 유지한다.
- */
+function alignFootprintToSupport(
+  shape: LocalPlanPoint[],
+  supportShape: LocalPlanPoint[] | undefined,
+  legalEnvelope: LocalPlanPoint[]
+): { shape: LocalPlanPoint[]; overlapRatio: number } {
+  if (!supportShape || supportShape.length < 3 || shape.length < 3) {
+    return { shape, overlapRatio: 1 };
+  }
+
+  const initialOverlap = boundingOverlapRatio(shape, supportShape);
+  if (initialOverlap >= MIN_SUPPORT_OVERLAP_RATIO) {
+    return { shape, overlapRatio: initialOverlap };
+  }
+
+  const shapeCenter = polygonCentroid(shape);
+  const supportCenter = polygonCentroid(supportShape);
+  const dx = supportCenter.x - shapeCenter.x;
+  const dz = supportCenter.z - shapeCenter.z;
+  let bestShape = shape;
+  let bestOverlap = initialOverlap;
+
+  for (let step = 1; step <= 40; step += 1) {
+    const ratio = step / 40;
+    const candidate = translateShape(shape, dx * ratio, dz * ratio);
+    if (!polygonInsidePolygon(candidate, legalEnvelope)) continue;
+    const overlap = boundingOverlapRatio(candidate, supportShape);
+    if (overlap > bestOverlap) {
+      bestOverlap = overlap;
+      bestShape = candidate;
+    }
+    if (overlap >= MIN_SUPPORT_OVERLAP_RATIO) break;
+  }
+
+  return { shape: bestShape, overlapRatio: bestOverlap };
+}
+
 export function transformPlanningFootprint(
   points: LocalPlanPoint[],
   footprintScalePct: number,
@@ -437,11 +288,28 @@ export function transformPlanningFootprint(
         )
       : 1;
   const scale = clamp(areaFitScale * manualScale, 0.01, 1);
-  const scaled = points.map((point) => ({
-    x: floorCenter.x + (point.x - floorCenter.x) * scale,
-    z: floorCenter.z + (point.z - floorCenter.z) * scale,
-  }));
-  return applyPlacementTransform(scaled, northSetbackM, placement, pivot);
+  const angle = (placement.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return points.map((point) => {
+    const scaledX = floorCenter.x + (point.x - floorCenter.x) * scale;
+    const scaledZ = floorCenter.z + (point.z - floorCenter.z) * scale;
+    const pivotX = scaledX - pivot.x;
+    const pivotZ = scaledZ - pivot.z;
+    const rotatedX = pivotX * cos - pivotZ * sin;
+    const rotatedZ = pivotX * sin + pivotZ * cos;
+
+    return {
+      x: pivot.x + rotatedX + placement.offsetXM,
+      z:
+        pivot.z +
+        rotatedZ +
+        placement.offsetZM +
+        nonNegative(placement.northSetbackM) +
+        nonNegative(northSetbackM),
+    };
+  });
 }
 
 function floorProgramArea(floor: FloorProgram): number {
@@ -478,11 +346,11 @@ function dominantUse(floor: FloorProgram): FloorUseType | "mixed" {
 function buildMass(
   floor: FloorProgram,
   envelope: PlanningEnvelopeStep,
-  referenceShape: LocalPlanPoint[],
   placement: PlanningPlacement,
   rotationPivot: LocalPlanPoint,
   baseHeightM: number,
-  topHeightM: number
+  topHeightM: number,
+  supportShape?: LocalPlanPoint[]
 ): PlanningFloorMass {
   const programAreaSqm = floorProgramArea(floor);
   const measuredEnvelopeAreaSqm = polygonAreaSqm(envelope.shape);
@@ -491,34 +359,37 @@ function buildMass(
       ? measuredEnvelopeAreaSqm
       : nonNegative(envelope.envelopeAreaSqm);
   const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
-  const manualScale = clamp(floor.footprintScalePct / 100, 0.1, 1);
-  const desiredVisualAreaSqm = targetAreaSqm * manualScale * manualScale;
-  const regularized = regularizeFootprint(
+  const initialShape = transformPlanningFootprint(
     envelope.shape,
-    referenceShape,
-    desiredVisualAreaSqm
-  );
-  const shape = applyPlacementTransform(
-    regularized.shape,
+    floor.footprintScalePct,
     floor.northSetbackM,
     placement,
+    targetAreaSqm,
     rotationPivot
   );
+  const placedLegalEnvelope = transformPlanningFootprint(
+    envelope.shape,
+    100,
+    floor.northSetbackM,
+    placement,
+    undefined,
+    rotationPivot
+  );
+  const supported = alignFootprintToSupport(
+    initialShape,
+    supportShape,
+    placedLegalEnvelope
+  );
+  const shape = supported.shape;
   const visualAreaSqm = polygonAreaSqm(shape);
   const areaDifferencePct =
     programAreaSqm > 0
       ? ((visualAreaSqm - programAreaSqm) / programAreaSqm) * 100
       : 0;
-  const envelopeAreaShortfall = Math.max(
+  const capacityShortfallSqm = Math.max(
     0,
     programAreaSqm - envelopeAreaSqm
   );
-  const regularizedFitShortfall = Math.max(
-    0,
-    desiredVisualAreaSqm - visualAreaSqm
-  );
-  const capacityShortfallSqm =
-    envelopeAreaShortfall + regularizedFitShortfall;
   const appliedScalePct =
     envelopeAreaSqm > 0
       ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
@@ -544,6 +415,9 @@ function buildMass(
     northSetbackM: nonNegative(floor.northSetbackM),
     requiredSetbackM: nonNegative(envelope.requiredSetbackM),
     envelopeAvailable: envelope.envelopeAvailable,
+    supportOverlapRatio: supported.overlapRatio,
+    supportedByLowerFloor:
+      !supportShape || supported.overlapRatio >= MIN_SUPPORT_OVERLAP_RATIO,
     residentialUnits: countUnits(floor, ["residential"]),
     commercialUnits: countUnits(floor, ["retail", "office"]),
     dominantUse: dominantUse(floor),
@@ -605,44 +479,53 @@ export function buildPlanningMassModel(
       ? envelopeByLevel.get(groundPrograms[0].level)
       : undefined) ?? fallbackEnvelope;
   const rotationPivot = polygonCentroid(pivotEnvelope.shape);
-  const groundReferenceShape = pivotEnvelope.shape;
-  const basementReferenceShape =
-    (basementPrograms.length > 0
-      ? envelopeByLevel.get(basementPrograms[0].level)?.shape
-      : undefined) ?? groundReferenceShape;
 
   let currentHeightM = 0;
-  const aboveGroundFloors = groundPrograms.map((floor) => {
+  const aboveGroundFloors: PlanningFloorMass[] = [];
+  for (const floor of groundPrograms) {
     const height = nonNegative(floor.floorHeightM);
     const base = currentHeightM;
     currentHeightM += height;
-    return buildMass(
-      floor,
-      envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
-      groundReferenceShape,
-      placement,
-      rotationPivot,
-      base,
-      currentHeightM
+    const supportShape =
+      aboveGroundFloors.length > 0
+        ? aboveGroundFloors[aboveGroundFloors.length - 1].shape
+        : undefined;
+    aboveGroundFloors.push(
+      buildMass(
+        floor,
+        envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
+        placement,
+        rotationPivot,
+        base,
+        currentHeightM,
+        supportShape
+      )
     );
-  });
+  }
 
   let currentDepthM = 0;
-  const basementFloors = basementPrograms.map((floor) => {
+  const basementFloors: PlanningFloorMass[] = [];
+  for (const floor of basementPrograms) {
     const height = nonNegative(floor.floorHeightM);
     const top = currentDepthM === 0 ? 0 : -currentDepthM;
     currentDepthM += height;
     const base = -currentDepthM;
-    return buildMass(
-      floor,
-      envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
-      basementReferenceShape,
-      placement,
-      rotationPivot,
-      base,
-      top
+    const supportShape =
+      basementFloors.length > 0
+        ? basementFloors[basementFloors.length - 1].shape
+        : undefined;
+    basementFloors.push(
+      buildMass(
+        floor,
+        envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
+        placement,
+        rotationPivot,
+        base,
+        top,
+        supportShape
+      )
     );
-  });
+  }
 
   const floors = [...aboveGroundFloors, ...basementFloors];
   return {
