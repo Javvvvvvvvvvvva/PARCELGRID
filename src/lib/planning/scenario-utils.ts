@@ -85,6 +85,7 @@ export function createFloorProgram(
 }
 
 export function createBlankPlanningScenario(input?: {
+  projectId?: string;
   name?: string;
   origin?: PlanningScenarioOrigin;
   acquisitionCostManwon?: number;
@@ -92,6 +93,7 @@ export function createBlankPlanningScenario(input?: {
   const timestamp = nowIso();
   return {
     id: uid("plan"),
+    projectId: input?.projectId,
     name: input?.name ?? "새 계획안",
     description: "",
     origin: input?.origin ?? "custom",
