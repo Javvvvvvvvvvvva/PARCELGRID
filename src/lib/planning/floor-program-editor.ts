@@ -39,6 +39,26 @@ export function cloneFloorProgramAtLevel(
   };
 }
 
+export function normalizeFloorLevels(floors: FloorProgram[]): FloorProgram[] {
+  const ground = floors
+    .filter((floor) => floor.level > 0)
+    .sort((a, b) => a.level - b.level)
+    .map((floor, index) => ({
+      ...floor,
+      level: index + 1,
+      label: `${index + 1}층`,
+    }));
+  const basement = floors
+    .filter((floor) => floor.level < 0)
+    .sort((a, b) => b.level - a.level)
+    .map((floor, index) => ({
+      ...floor,
+      level: -(index + 1),
+      label: `B${index + 1}`,
+    }));
+  return sortFloorPrograms([...ground, ...basement]);
+}
+
 export function nextGroundLevel(floors: FloorProgram[]): number {
   const levels = floors.filter((floor) => floor.level > 0).map((floor) => floor.level);
   return levels.length > 0 ? Math.max(...levels) + 1 : 1;
@@ -57,7 +77,7 @@ export function addGroundFloor(floors: FloorProgram[]): FloorProgram[] {
   const floor = source
     ? cloneFloorProgramAtLevel(source, level)
     : createFloorProgram(level, [createFloorZone("residential", 40, 1)]);
-  return sortFloorPrograms([...floors, floor]);
+  return normalizeFloorLevels([...floors, floor]);
 }
 
 export function addBasementFloor(floors: FloorProgram[]): FloorProgram[] {
@@ -67,8 +87,12 @@ export function addBasementFloor(floors: FloorProgram[]): FloorProgram[] {
     .sort((a, b) => a.level - b.level)[0];
   const floor = source
     ? cloneFloorProgramAtLevel(source, level)
-    : createFloorProgram(level, [createFloorZone("parking", 50, 0, undefined, "non-revenue")], 3.3);
-  return sortFloorPrograms([...floors, floor]);
+    : createFloorProgram(
+        level,
+        [createFloorZone("parking", 50, 0, undefined, "non-revenue")],
+        3.3
+      );
+  return normalizeFloorLevels([...floors, floor]);
 }
 
 export function duplicateFloorProgram(
@@ -78,7 +102,7 @@ export function duplicateFloorProgram(
   const source = floors.find((floor) => floor.id === floorId);
   if (!source) return floors;
   const level = source.level < 0 ? nextBasementLevel(floors) : nextGroundLevel(floors);
-  return sortFloorPrograms([
+  return normalizeFloorLevels([
     ...floors,
     cloneFloorProgramAtLevel(source, level),
   ]);
@@ -89,7 +113,7 @@ export function removeFloorProgram(
   floorId: string
 ): FloorProgram[] {
   if (floors.length <= 1) return floors;
-  return floors.filter((floor) => floor.id !== floorId);
+  return normalizeFloorLevels(floors.filter((floor) => floor.id !== floorId));
 }
 
 export function updateFloorProgram(
@@ -107,7 +131,10 @@ export function addZoneToFloor(
   floorId: string,
   useType: FloorUseType
 ): FloorProgram[] {
-  const defaultUnitCount = useType === "residential" || useType === "retail" || useType === "office" ? 1 : 0;
+  const defaultUnitCount =
+    useType === "residential" || useType === "retail" || useType === "office"
+      ? 1
+      : 0;
   return floors.map((floor) =>
     floor.id === floorId
       ? {
