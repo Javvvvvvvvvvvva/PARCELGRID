@@ -2,6 +2,7 @@
 
 import { use } from "react";
 import { PlanningScenarioWorkspaceV3 } from "@/components/planning/PlanningScenarioWorkspaceV3";
+import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacementWorkspace";
 import { ScenarioChangeWorkspace } from "@/components/planning/ScenarioChangeWorkspace";
 
 export default function EnvelopePage({
@@ -13,6 +14,7 @@ export default function EnvelopePage({
   return (
     <>
       <PlanningScenarioWorkspaceV3 projectId={projectId} />
+      <ScenarioPlacementWorkspace projectId={projectId} />
       <ScenarioChangeWorkspace projectId={projectId} />
     </>
   );
