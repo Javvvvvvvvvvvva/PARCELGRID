@@ -179,7 +179,6 @@ export function summarizePlanningScenario(
   let rentableAreaSqm = 0;
   let residentialUnitCount = 0;
   let commercialUnitCount = 0;
-  let unitCount = 0;
   let gradeFootprintAreaSqm = 0;
 
   for (const floor of scenario.floorPrograms) {
@@ -189,15 +188,14 @@ export function summarizePlanningScenario(
 
     for (const zone of floor.zones) {
       const area = Math.max(0, zone.areaSqm);
-      const zones = Math.max(0, Math.floor(zone.unitCount));
-      unitCount += zones;
+      const zoneCount = Math.max(0, Math.floor(zone.unitCount));
       if (zone.useType === "residential") {
         residentialAreaSqm += area;
-        residentialUnitCount += zones;
+        residentialUnitCount += zoneCount;
       }
       if (zone.useType === "retail" || zone.useType === "office") {
         commercialAreaSqm += area;
-        commercialUnitCount += zones;
+        commercialUnitCount += zoneCount;
       }
       if (zone.useType === "parking" || zone.useType === "piloti") parkingAreaSqm += area;
       if (
@@ -224,6 +222,7 @@ export function summarizePlanningScenario(
   const belowLevels = scenario.floorPrograms
     .filter((floor) => floor.level < 0)
     .map((floor) => Math.abs(floor.level));
+  const totalUnitCount = residentialUnitCount + commercialUnitCount;
 
   return {
     aboveGroundFloors: aboveLevels.length > 0 ? Math.max(...aboveLevels) : 0,
@@ -238,7 +237,8 @@ export function summarizePlanningScenario(
     rentableAreaSqm,
     residentialUnitCount,
     commercialUnitCount,
-    unitCount,
+    totalUnitCount,
+    unitCount: residentialUnitCount,
     providedCars: Math.max(0, scenario.parking.providedCars),
   };
 }
