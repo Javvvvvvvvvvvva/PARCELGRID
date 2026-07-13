@@ -139,7 +139,7 @@ function buildSpatialChecks(
 }
 
 export function calculatePlanningSpatialValidation(
-  boundary: LngLat[],
+  boundary: LngLat[] | undefined,
   zoning: string,
   scenario: PlanningScenario,
   roads?: RoadLine[],
