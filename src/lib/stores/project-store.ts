@@ -3,7 +3,7 @@
  *
  * Stage 1 stores the computed parcel and existing-condition data.
  * Stage 2 stores multiple planning scenarios and the currently selected plan.
- * Stage 3 consumes a saved planning scenario for detailed feasibility analysis.
+ * Stage 3 consumes a saved representative planning scenario for detailed feasibility analysis.
  */
 
 "use client";
@@ -19,7 +19,7 @@ import {
 } from "@/lib/planning/scenario-utils";
 
 /**
- * Legacy aggregate plan used by the current Stage 2 screen.
+ * Legacy aggregate plan used by older Stage 2 and downstream screens.
  * It remains temporarily while the UI is migrated to PlanningScenario[].
  */
 export interface EnvelopePlan {
@@ -66,6 +66,8 @@ interface ProjectStore {
 
   planningScenarios: PlanningScenario[];
   selectedPlanningScenarioId: string | null;
+  /** Stage 3로 넘길 대표 계획안. 저장 계획안과 별도로 명시적으로 확정한다. */
+  representativePlanningScenarioId: string | null;
   setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
   addPlanningScenario: (scenario: PlanningScenario) => string;
   /** 편집 중 즉시 재계산용. 버전은 올리지 않고 draft 상태로만 갱신한다. */
@@ -81,6 +83,7 @@ interface ProjectStore {
   removePlanningScenario: (id: string) => void;
   duplicatePlanningScenario: (id: string, name?: string) => string | null;
   selectPlanningScenario: (id: string | null) => void;
+  setRepresentativePlanningScenarioId: (id: string | null) => void;
   clearPlanningScenarios: () => void;
 
   activeScenarioId: string | null;
@@ -112,7 +115,8 @@ export const useProjectStore = create<ProjectStore>()(
         clearOverride: (scenarioId, field) =>
           set((state) => ({
             pendingOverrides: state.pendingOverrides.filter(
-              (item) => !(item.scenarioId === scenarioId && item.field === field)
+              (item) =>
+                !(item.scenarioId === scenarioId && item.field === field)
             ),
           })),
         clearAllOverrides: () => set({ pendingOverrides: [] }),
@@ -141,15 +145,21 @@ export const useProjectStore = create<ProjectStore>()(
 
         planningScenarios: [],
         selectedPlanningScenarioId: null,
+        representativePlanningScenarioId: null,
         setPlanningScenarios: (planningScenarios) =>
           set((state) => ({
             planningScenarios,
-            selectedPlanningScenarioId:
-              planningScenarios.some(
-                (scenario) => scenario.id === state.selectedPlanningScenarioId
-              )
-                ? state.selectedPlanningScenarioId
-                : planningScenarios[0]?.id ?? null,
+            selectedPlanningScenarioId: planningScenarios.some(
+              (scenario) => scenario.id === state.selectedPlanningScenarioId
+            )
+              ? state.selectedPlanningScenarioId
+              : planningScenarios[0]?.id ?? null,
+            representativePlanningScenarioId: planningScenarios.some(
+              (scenario) =>
+                scenario.id === state.representativePlanningScenarioId
+            )
+              ? state.representativePlanningScenarioId
+              : null,
           })),
         addPlanningScenario: (scenario) => {
           set((state) => ({
@@ -181,6 +191,12 @@ export const useProjectStore = create<ProjectStore>()(
                 economicsPreview: patchedEconomics,
               };
             }),
+            representativePlanningScenarioId:
+              state.representativePlanningScenarioId === id
+                ? null
+                : state.representativePlanningScenarioId,
+            activeScenarioId:
+              state.activeScenarioId === id ? null : state.activeScenarioId,
           })),
         updatePlanningScenario: (id, patch) =>
           set((state) => ({
@@ -201,6 +217,12 @@ export const useProjectStore = create<ProjectStore>()(
                 state.selectedPlanningScenarioId === id
                   ? planningScenarios[0]?.id ?? null
                   : state.selectedPlanningScenarioId,
+              representativePlanningScenarioId:
+                state.representativePlanningScenarioId === id
+                  ? null
+                  : state.representativePlanningScenarioId,
+              activeScenarioId:
+                state.activeScenarioId === id ? null : state.activeScenarioId,
             };
           }),
         duplicatePlanningScenario: (id, name) => {
@@ -217,11 +239,20 @@ export const useProjectStore = create<ProjectStore>()(
         },
         selectPlanningScenario: (selectedPlanningScenarioId) =>
           set({ selectedPlanningScenarioId }),
+        setRepresentativePlanningScenarioId: (
+          representativePlanningScenarioId
+        ) => set({ representativePlanningScenarioId }),
         clearPlanningScenarios: () =>
-          set({ planningScenarios: [], selectedPlanningScenarioId: null }),
+          set({
+            planningScenarios: [],
+            selectedPlanningScenarioId: null,
+            representativePlanningScenarioId: null,
+            activeScenarioId: null,
+          }),
 
         activeScenarioId: null,
-        setActiveScenarioId: (activeScenarioId) => set({ activeScenarioId }),
+        setActiveScenarioId: (activeScenarioId) =>
+          set({ activeScenarioId }),
       }),
       {
         name: "parcelgrid-envelope",
@@ -229,6 +260,9 @@ export const useProjectStore = create<ProjectStore>()(
           envelopePlan: state.envelopePlan,
           planningScenarios: state.planningScenarios,
           selectedPlanningScenarioId: state.selectedPlanningScenarioId,
+          representativePlanningScenarioId:
+            state.representativePlanningScenarioId,
+          activeScenarioId: state.activeScenarioId,
           draftAssumptions: state.draftAssumptions,
         }),
       }
