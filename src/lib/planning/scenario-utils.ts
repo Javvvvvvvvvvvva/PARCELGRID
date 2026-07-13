@@ -177,6 +177,8 @@ export function summarizePlanningScenario(
   let commonAreaSqm = 0;
   let saleableAreaSqm = 0;
   let rentableAreaSqm = 0;
+  let residentialUnitCount = 0;
+  let commercialUnitCount = 0;
   let unitCount = 0;
   let gradeFootprintAreaSqm = 0;
 
@@ -187,9 +189,16 @@ export function summarizePlanningScenario(
 
     for (const zone of floor.zones) {
       const area = Math.max(0, zone.areaSqm);
-      unitCount += Math.max(0, Math.floor(zone.unitCount));
-      if (zone.useType === "residential") residentialAreaSqm += area;
-      if (zone.useType === "retail" || zone.useType === "office") commercialAreaSqm += area;
+      const zones = Math.max(0, Math.floor(zone.unitCount));
+      unitCount += zones;
+      if (zone.useType === "residential") {
+        residentialAreaSqm += area;
+        residentialUnitCount += zones;
+      }
+      if (zone.useType === "retail" || zone.useType === "office") {
+        commercialAreaSqm += area;
+        commercialUnitCount += zones;
+      }
       if (zone.useType === "parking" || zone.useType === "piloti") parkingAreaSqm += area;
       if (
         zone.useType === "common" ||
@@ -227,6 +236,8 @@ export function summarizePlanningScenario(
     commonAreaSqm,
     saleableAreaSqm,
     rentableAreaSqm,
+    residentialUnitCount,
+    commercialUnitCount,
     unitCount,
     providedCars: Math.max(0, scenario.parking.providedCars),
   };
