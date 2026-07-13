@@ -67,6 +67,11 @@ export interface PlanningMassModel {
   capacity: PlanningMassCapacitySummary;
 }
 
+interface FittedFootprint {
+  shape: LocalPlanPoint[];
+  fitRatio: number;
+}
+
 const EPSILON = 1e-7;
 const MIN_SUPPORT_OVERLAP_RATIO = 0.12;
 
@@ -97,7 +102,7 @@ export function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
       return sum + current.x * next.z - next.x * current.z;
     }, 0) / 2;
 
-  if (Math.abs(signedArea) < 1e-9) {
+  if (Math.abs(signedArea) < EPSILON) {
     return points.reduce(
       (sum, point) => ({
         x: sum.x + point.x / points.length,
@@ -198,6 +203,141 @@ function polygonBounds(points: LocalPlanPoint[]) {
   };
 }
 
+function translateShape(
+  points: LocalPlanPoint[],
+  dx: number,
+  dz: number
+): LocalPlanPoint[] {
+  return points.map((point) => ({ x: point.x + dx, z: point.z + dz }));
+}
+
+function scaleShapeAround(
+  points: LocalPlanPoint[],
+  anchor: LocalPlanPoint,
+  scale: number
+): LocalPlanPoint[] {
+  return points.map((point) => ({
+    x: anchor.x + (point.x - anchor.x) * scale,
+    z: anchor.z + (point.z - anchor.z) * scale,
+  }));
+}
+
+function candidateAnchors(polygon: LocalPlanPoint[]): LocalPlanPoint[] {
+  if (polygon.length < 3) return [];
+  const bounds = polygonBounds(polygon);
+  const average = polygon.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / polygon.length,
+      z: sum.z + point.z / polygon.length,
+    }),
+    { x: 0, z: 0 }
+  );
+  const candidates: LocalPlanPoint[] = [
+    polygonCentroid(polygon),
+    average,
+    {
+      x: (bounds.minX + bounds.maxX) / 2,
+      z: (bounds.minZ + bounds.maxZ) / 2,
+    },
+    ...polygon,
+    ...polygon.map((point, index) => {
+      const next = polygon[(index + 1) % polygon.length];
+      return { x: (point.x + next.x) / 2, z: (point.z + next.z) / 2 };
+    }),
+  ];
+
+  const divisions = 10;
+  for (let xIndex = 0; xIndex <= divisions; xIndex += 1) {
+    for (let zIndex = 0; zIndex <= divisions; zIndex += 1) {
+      candidates.push({
+        x:
+          bounds.minX +
+          ((bounds.maxX - bounds.minX) * xIndex) / divisions,
+        z:
+          bounds.minZ +
+          ((bounds.maxZ - bounds.minZ) * zIndex) / divisions,
+      });
+    }
+  }
+
+  const seen = new Set<string>();
+  return candidates.filter((point) => {
+    const key = `${point.x.toFixed(5)}:${point.z.toFixed(5)}`;
+    if (seen.has(key) || !pointInPolygonInclusive(point, polygon)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function fitScaledEnvelope(
+  envelope: LocalPlanPoint[],
+  desiredAreaSqm: number
+): FittedFootprint {
+  const envelopeAreaSqm = polygonAreaSqm(envelope);
+  if (envelope.length < 3 || envelopeAreaSqm <= 0 || desiredAreaSqm <= 0) {
+    return { shape: [], fitRatio: 0 };
+  }
+
+  const desiredScale = clamp(
+    Math.sqrt(Math.min(desiredAreaSqm, envelopeAreaSqm) / envelopeAreaSqm),
+    0,
+    1
+  );
+  const preferredCenter = polygonCentroid(envelope);
+  let bestShape: LocalPlanPoint[] = [];
+  let bestScale = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const anchor of candidateAnchors(envelope)) {
+    const desiredShape = scaleShapeAround(envelope, anchor, desiredScale);
+    if (polygonInsidePolygon(desiredShape, envelope)) {
+      const desiredCenter = polygonCentroid(desiredShape);
+      const distance = Math.hypot(
+        desiredCenter.x - preferredCenter.x,
+        desiredCenter.z - preferredCenter.z
+      );
+      if (
+        desiredScale > bestScale + EPSILON ||
+        (Math.abs(desiredScale - bestScale) <= EPSILON &&
+          distance < bestDistance)
+      ) {
+        bestShape = desiredShape;
+        bestScale = desiredScale;
+        bestDistance = distance;
+      }
+      continue;
+    }
+
+    let low = 0;
+    let high = desiredScale;
+    for (let iteration = 0; iteration < 28; iteration += 1) {
+      const middle = (low + high) / 2;
+      const candidate = scaleShapeAround(envelope, anchor, middle);
+      if (polygonInsidePolygon(candidate, envelope)) low = middle;
+      else high = middle;
+    }
+    const candidate = scaleShapeAround(envelope, anchor, low);
+    const candidateCenter = polygonCentroid(candidate);
+    const distance = Math.hypot(
+      candidateCenter.x - preferredCenter.x,
+      candidateCenter.z - preferredCenter.z
+    );
+    if (
+      low > bestScale + EPSILON ||
+      (Math.abs(low - bestScale) <= EPSILON && distance < bestDistance)
+    ) {
+      bestShape = candidate;
+      bestScale = low;
+      bestDistance = distance;
+    }
+  }
+
+  return {
+    shape: bestShape,
+    fitRatio: desiredScale > EPSILON ? bestScale / desiredScale : 0,
+  };
+}
+
 function boundingOverlapRatio(
   upper: LocalPlanPoint[],
   lower: LocalPlanPoint[]
@@ -225,14 +365,6 @@ function boundingOverlapRatio(
   return clamp(overlapArea / Math.min(upperBoxArea, lowerBoxArea), 0, 1);
 }
 
-function translateShape(
-  points: LocalPlanPoint[],
-  dx: number,
-  dz: number
-): LocalPlanPoint[] {
-  return points.map((point) => ({ x: point.x + dx, z: point.z + dz }));
-}
-
 function alignFootprintToSupport(
   shape: LocalPlanPoint[],
   supportShape: LocalPlanPoint[] | undefined,
@@ -254,8 +386,8 @@ function alignFootprintToSupport(
   let bestShape = shape;
   let bestOverlap = initialOverlap;
 
-  for (let step = 1; step <= 40; step += 1) {
-    const ratio = step / 40;
+  for (let step = 1; step <= 80; step += 1) {
+    const ratio = step / 80;
     const candidate = translateShape(shape, dx * ratio, dz * ratio);
     if (!polygonInsidePolygon(candidate, legalEnvelope)) continue;
     const overlap = boundingOverlapRatio(candidate, supportShape);
@@ -267,6 +399,35 @@ function alignFootprintToSupport(
   }
 
   return { shape: bestShape, overlapRatio: bestOverlap };
+}
+
+function applyPlacementTransform(
+  points: LocalPlanPoint[],
+  northSetbackM: number,
+  placement: PlanningPlacement,
+  rotationPivot: LocalPlanPoint
+): LocalPlanPoint[] {
+  const angle = (placement.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return points.map((point) => {
+    const pivotX = point.x - rotationPivot.x;
+    const pivotZ = point.z - rotationPivot.z;
+    return {
+      x:
+        rotationPivot.x +
+        pivotX * cos -
+        pivotZ * sin +
+        placement.offsetXM,
+      z:
+        rotationPivot.z +
+        pivotX * sin +
+        pivotZ * cos +
+        placement.offsetZM +
+        nonNegative(placement.northSetbackM) +
+        nonNegative(northSetbackM),
+    };
+  });
 }
 
 export function transformPlanningFootprint(
@@ -288,28 +449,8 @@ export function transformPlanningFootprint(
         )
       : 1;
   const scale = clamp(areaFitScale * manualScale, 0.01, 1);
-  const angle = (placement.rotationDeg * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-
-  return points.map((point) => {
-    const scaledX = floorCenter.x + (point.x - floorCenter.x) * scale;
-    const scaledZ = floorCenter.z + (point.z - floorCenter.z) * scale;
-    const pivotX = scaledX - pivot.x;
-    const pivotZ = scaledZ - pivot.z;
-    const rotatedX = pivotX * cos - pivotZ * sin;
-    const rotatedZ = pivotX * sin + pivotZ * cos;
-
-    return {
-      x: pivot.x + rotatedX + placement.offsetXM,
-      z:
-        pivot.z +
-        rotatedZ +
-        placement.offsetZM +
-        nonNegative(placement.northSetbackM) +
-        nonNegative(northSetbackM),
-    };
-  });
+  const scaled = scaleShapeAround(points, floorCenter, scale);
+  return applyPlacementTransform(scaled, northSetbackM, placement, pivot);
 }
 
 function floorProgramArea(floor: FloorProgram): number {
@@ -359,20 +500,20 @@ function buildMass(
       ? measuredEnvelopeAreaSqm
       : nonNegative(envelope.envelopeAreaSqm);
   const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
-  const initialShape = transformPlanningFootprint(
-    envelope.shape,
-    floor.footprintScalePct,
+  const manualScale = clamp(floor.footprintScalePct / 100, 0.1, 1);
+  const desiredVisualAreaSqm = targetAreaSqm * manualScale * manualScale;
+
+  const fitted = fitScaledEnvelope(envelope.shape, desiredVisualAreaSqm);
+  const initialShape = applyPlacementTransform(
+    fitted.shape,
     floor.northSetbackM,
     placement,
-    targetAreaSqm,
     rotationPivot
   );
-  const placedLegalEnvelope = transformPlanningFootprint(
+  const placedLegalEnvelope = applyPlacementTransform(
     envelope.shape,
-    100,
     floor.northSetbackM,
     placement,
-    undefined,
     rotationPivot
   );
   const supported = alignFootprintToSupport(
@@ -386,10 +527,13 @@ function buildMass(
     programAreaSqm > 0
       ? ((visualAreaSqm - programAreaSqm) / programAreaSqm) * 100
       : 0;
-  const capacityShortfallSqm = Math.max(
+  const envelopeAreaShortfall = Math.max(
     0,
     programAreaSqm - envelopeAreaSqm
   );
+  const fitShortfall = Math.max(0, desiredVisualAreaSqm - visualAreaSqm);
+  const capacityShortfallSqm = envelopeAreaShortfall + fitShortfall;
+  const insideLegalEnvelope = polygonInsidePolygon(shape, placedLegalEnvelope);
   const appliedScalePct =
     envelopeAreaSqm > 0
       ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
@@ -409,7 +553,7 @@ function buildMass(
     visualAreaSqm,
     areaDifferencePct,
     capacityShortfallSqm,
-    fitsEnvelope: capacityShortfallSqm <= 0.1,
+    fitsEnvelope: capacityShortfallSqm <= 0.1 && insideLegalEnvelope,
     appliedScalePct,
     footprintScalePct: floor.footprintScalePct,
     northSetbackM: nonNegative(floor.northSetbackM),
