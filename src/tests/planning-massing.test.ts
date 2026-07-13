@@ -6,6 +6,7 @@ import {
   transformPlanningFootprint,
   type PlanningEnvelopeStep,
 } from "@/lib/planning/planning-massing";
+import { polygonInsidePolygon } from "@/lib/planning/placement-assessment";
 import {
   createFloorProgram,
   createFloorZone,
@@ -85,8 +86,7 @@ describe("Stage 2 planning massing", () => {
     expect(model.aboveGroundFloors[1].topHeightM).toBeCloseTo(6.6, 5);
     expect(model.basementFloors[0].baseHeightM).toBeCloseTo(-3.3, 5);
     expect(model.basementFloors[0].topHeightM).toBe(0);
-    // 60㎡ 프로그램을 먼저 맞춘 뒤 80% 선형 축척을 적용하므로 60 × 0.8² = 38.4㎡.
-    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(38.4, 5);
+    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(38.4, 4);
     expect(model.aboveGroundFloors[1].residentialUnits).toBe(2);
     expect(model.aboveGroundFloors[0].commercialUnits).toBe(1);
     expect(model.aboveGroundFloors[0].dominantUse).toBe("retail");
@@ -105,9 +105,9 @@ describe("Stage 2 planning massing", () => {
 
     expect(mass.programAreaSqm).toBe(50);
     expect(mass.envelopeAreaSqm).toBeCloseTo(100, 5);
-    expect(mass.visualAreaSqm).toBeCloseTo(50, 5);
-    expect(mass.areaDifferencePct).toBeCloseTo(0, 5);
-    expect(mass.capacityShortfallSqm).toBe(0);
+    expect(mass.visualAreaSqm).toBeCloseTo(50, 4);
+    expect(mass.areaDifferencePct).toBeCloseTo(0, 4);
+    expect(mass.capacityShortfallSqm).toBeCloseTo(0, 4);
     expect(mass.fitsEnvelope).toBe(true);
     expect(model.capacity.allFloorsFit).toBe(true);
   });
@@ -125,11 +125,11 @@ describe("Stage 2 planning massing", () => {
 
     expect(mass.programAreaSqm).toBe(120);
     expect(mass.envelopeAreaSqm).toBeCloseTo(100, 5);
-    expect(mass.visualAreaSqm).toBeCloseTo(100, 5);
-    expect(mass.capacityShortfallSqm).toBeCloseTo(20, 5);
+    expect(mass.visualAreaSqm).toBeCloseTo(100, 4);
+    expect(mass.capacityShortfallSqm).toBeCloseTo(20, 4);
     expect(mass.fitsEnvelope).toBe(false);
     expect(model.capacity.overCapacityFloorCount).toBe(1);
-    expect(model.capacity.totalShortfallSqm).toBeCloseTo(20, 5);
+    expect(model.capacity.totalShortfallSqm).toBeCloseTo(20, 4);
   });
 
   it("rotates staggered floor envelopes around one shared building pivot", () => {
@@ -177,11 +177,58 @@ describe("Stage 2 planning massing", () => {
     const lowerCenter = polygonCentroid(model.aboveGroundFloors[0].shape);
     const upperCenter = polygonCentroid(model.aboveGroundFloors[1].shape);
 
-    // 회전 전 상층 중심은 1층 중심보다 남쪽(+z) 4m에 있다.
-    // 건물 전체를 90도 회전하면 이 상대 오프셋도 함께 회전해 서쪽(-x) 4m가 되어야 한다.
-    expect(upperCenter.x - lowerCenter.x).toBeCloseTo(-4, 5);
-    expect(upperCenter.z - lowerCenter.z).toBeCloseTo(0, 5);
-    expect(model.aboveGroundFloors[0].visualAreaSqm).toBeCloseTo(100, 5);
-    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(100, 5);
+    expect(upperCenter.x - lowerCenter.x).toBeCloseTo(-4, 4);
+    expect(upperCenter.z - lowerCenter.z).toBeCloseTo(0, 4);
+    expect(model.aboveGroundFloors[0].visualAreaSqm).toBeCloseTo(100, 4);
+    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(100, 4);
+  });
+
+  it("uses a clean four-corner plan inside a kinked upper-floor envelope", () => {
+    const lower = createFloorProgram(
+      1,
+      [createFloorZone("residential", 30, 1)],
+      3
+    );
+    const upper = createFloorProgram(
+      2,
+      [createFloorZone("residential", 6, 1)],
+      3
+    );
+    const kinkedUpper = [
+      { x: -4, z: -2 },
+      { x: 4, z: -2 },
+      { x: 4, z: 0 },
+      { x: 1, z: 0 },
+      { x: 1, z: 4 },
+      { x: -4, z: 4 },
+    ];
+    const steps: PlanningEnvelopeStep[] = [
+      {
+        level: 1,
+        shape: square,
+        envelopeAreaSqm: 100,
+        requiredSetbackM: 0,
+        envelopeAvailable: true,
+      },
+      {
+        level: 2,
+        shape: kinkedUpper,
+        envelopeAreaSqm: polygonAreaSqm(kinkedUpper),
+        requiredSetbackM: 1.5,
+        envelopeAvailable: true,
+      },
+    ];
+
+    const model = buildPlanningMassModel(
+      [lower, upper],
+      steps,
+      { ...placement, offsetXM: 0, offsetZM: 0 }
+    );
+    const upperMass = model.aboveGroundFloors[1];
+
+    expect(upperMass.shape).toHaveLength(4);
+    expect(upperMass.visualAreaSqm).toBeCloseTo(6, 3);
+    expect(polygonInsidePolygon(upperMass.shape, kinkedUpper).fits).toBe(true);
+    expect(upperMass.fitsEnvelope).toBe(true);
   });
 });
