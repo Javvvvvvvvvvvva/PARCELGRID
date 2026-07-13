@@ -10,11 +10,12 @@ import * as THREE from "three";
  * geometry, while the planning validation continues to report the floor as
  * unavailable or non-compliant.
  */
-type GuardedPathPrototype = THREE.Path & {
+type GuardedPathPrototype = {
+  closePath: (this: THREE.Path) => THREE.Path;
   __parcelgridEmptyPathGuardInstalled?: boolean;
 };
 
-const prototype = THREE.Path.prototype as GuardedPathPrototype;
+const prototype = THREE.Path.prototype as unknown as GuardedPathPrototype;
 
 if (!prototype.__parcelgridEmptyPathGuardInstalled) {
   const originalClosePath = prototype.closePath;
