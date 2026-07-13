@@ -73,7 +73,10 @@ describe("Stage 2 planning calculation engine", () => {
     expect(result.metrics.commercialAreaSqm).toBe(40);
     expect(result.metrics.saleableAreaSqm).toBe(110);
     expect(result.metrics.rentableAreaSqm).toBe(40);
-    expect(result.metrics.unitCount).toBe(4); // 주거 3 + 상가 호실 1
+    expect(result.metrics.residentialUnitCount).toBe(3);
+    expect(result.metrics.commercialUnitCount).toBe(1);
+    expect(result.metrics.totalUnitCount).toBe(4);
+    expect(result.metrics.unitCount).toBe(3);
   });
 
   it("calculates component parking and reports a shortfall", () => {
