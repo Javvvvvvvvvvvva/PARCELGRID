@@ -76,6 +76,9 @@ function buildSpatialChecks(
   const placementFailures = assessment.floors.filter(
     (floor) => !floor.placementFits
   );
+  const supportFailures = model.aboveGroundFloors.filter(
+    (floor) => floor.level > 1 && !floor.supportedByLowerFloor
+  );
   const unavailableFloors = model.floors.filter(
     (floor) => !floor.envelopeAvailable
   );
@@ -89,6 +92,12 @@ function buildSpatialChecks(
   const placementDetails = placementFailures
     .map((floor) => floor.label)
     .join(", ");
+  const supportDetails = supportFailures
+    .map(
+      (floor) =>
+        `${floor.label} 하부 중첩 ${round(floor.supportOverlapRatio * 100, 0)}%`
+    )
+    .join(" · ");
 
   const checks: PlanningCheck[] = [
     {
@@ -112,6 +121,16 @@ function buildSpatialChecks(
           ? `${placementDetails}이 이동·회전 후 법규 외곽선을 벗어납니다.`
           : "현재 이동·회전·후퇴 조건에서 모든 층이 법규 외곽선 안에 있습니다.",
       source: "3D 배치 외곽선 포함 판정",
+    },
+    {
+      code: "spatial-floor-support",
+      label: "층간 구조 연결",
+      status: supportFailures.length > 0 ? "fail" : "pass",
+      message:
+        supportFailures.length > 0
+          ? `${supportFailures.length}개 상층이 아래층과 충분히 겹치지 않습니다. ${supportDetails}. 법규 외곽선 안에서 연결 가능한 위치 또는 구조 전이 계획이 필요합니다.`
+          : "모든 지상 상층이 바로 아래층과 최소 지지 중첩을 확보합니다.",
+      source: "층별 매스 하부 중첩 예비 판정",
     },
   ];
 
