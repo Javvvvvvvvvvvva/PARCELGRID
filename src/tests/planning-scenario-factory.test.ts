@@ -14,10 +14,11 @@ const parcel: PlanningScenarioParcelSeed = {
 };
 
 describe("Stage 2 scenario factory", () => {
-  it("creates a parcel-sized blank plan instead of a fixed arbitrary floor", () => {
-    const scenario = createBlankScenarioForParcel(parcel, "직접 설계안");
+  it("creates a parcel-sized, project-scoped blank plan", () => {
+    const scenario = createBlankScenarioForParcel(parcel, "직접 설계안", "project-a");
     const floorArea = scenario.floorPrograms[0].zones[0].areaSqm;
 
+    expect(scenario.projectId).toBe("project-a");
     expect(scenario.name).toBe("직접 설계안");
     expect(scenario.origin).toBe("custom");
     expect(floorArea).toBe(48);
@@ -27,16 +28,21 @@ describe("Stage 2 scenario factory", () => {
   });
 
   it("migrates the legacy aggregate input into floor-by-floor programs", () => {
-    const scenario = createStarterPlanningScenario(parcel, {
-      farPct: 150,
-      scenarioType: "multi-family",
-      floors: 3,
-      units: 5,
-      unitAreaSqm: 40,
-      avgUnitAreaSqm: 36,
-      requiredCars: 3,
-    });
+    const scenario = createStarterPlanningScenario(
+      parcel,
+      {
+        farPct: 150,
+        scenarioType: "multi-family",
+        floors: 3,
+        units: 5,
+        unitAreaSqm: 40,
+        avgUnitAreaSqm: 36,
+        requiredCars: 3,
+      },
+      "project-a"
+    );
 
+    expect(scenario.projectId).toBe("project-a");
     expect(scenario.origin).toBe("legacy");
     expect(scenario.floorPrograms).toHaveLength(3);
     expect(scenario.floorPrograms.map((floor) => floor.level)).toEqual([1, 2, 3]);
