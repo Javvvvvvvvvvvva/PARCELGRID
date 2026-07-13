@@ -114,7 +114,12 @@ export function transformPlanningFootprint(
     return {
       x: center.x + rotatedX + placement.offsetXM,
       // Local z grows toward the south. A north setback therefore moves the mass south.
-      z: center.z + rotatedZ + placement.offsetZM + nonNegative(northSetbackM),
+      z:
+        center.z +
+        rotatedZ +
+        placement.offsetZM +
+        nonNegative(placement.northSetbackM) +
+        nonNegative(northSetbackM),
     };
   });
 }
