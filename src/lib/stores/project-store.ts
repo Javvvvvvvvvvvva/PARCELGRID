@@ -44,17 +44,14 @@ export interface PendingOverride {
 }
 
 interface ProjectStore {
-  // Server state, refreshed via React Query
   data: ProjectComputed | null;
   setData: (data: ProjectComputed) => void;
 
-  // Draft overrides not yet saved
   pendingOverrides: PendingOverride[];
   setOverride: (override: PendingOverride) => void;
   clearOverride: (scenarioId: string, field: keyof AssumptionSet) => void;
   clearAllOverrides: () => void;
 
-  // 가정 편집 draft (시나리오별)
   draftAssumptions: Record<string, Partial<AssumptionSet>>;
   setDraftAssumption: (
     scenarioId: string,
@@ -63,12 +60,10 @@ interface ProjectStore {
   ) => void;
   resetDraftAssumptions: (scenarioId: string) => void;
 
-  // Legacy envelope plan — removed after the Stage 2 UI migration is complete.
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
   clearEnvelopePlan: () => void;
 
-  // Stage 2 planning scenarios
   planningScenarios: PlanningScenario[];
   selectedPlanningScenarioId: string | null;
   setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
@@ -88,7 +83,6 @@ interface ProjectStore {
   selectPlanningScenario: (id: string | null) => void;
   clearPlanningScenarios: () => void;
 
-  // Which finance scenario is focused across legacy screens
   activeScenarioId: string | null;
   setActiveScenarioId: (id: string | null) => void;
 }
@@ -168,15 +162,14 @@ export const useProjectStore = create<ProjectStore>()(
           set((state) => ({
             planningScenarios: state.planningScenarios.map((scenario) => {
               if (scenario.id !== id) return scenario;
-              const patchedEconomics = patch.economicsPreview
-                ? patch.economicsPreview
-                : {
-                    ...scenario.economicsPreview,
-                    status:
-                      scenario.economicsPreview.status === "not-calculated"
-                        ? "not-calculated"
-                        : "stale",
-                  };
+              const patchedEconomics: PlanningScenario["economicsPreview"] =
+                patch.economicsPreview ?? {
+                  ...scenario.economicsPreview,
+                  status:
+                    scenario.economicsPreview.status === "not-calculated"
+                      ? "not-calculated"
+                      : "stale",
+                };
               return {
                 ...scenario,
                 ...patch,
@@ -243,7 +236,6 @@ export const useProjectStore = create<ProjectStore>()(
   )
 );
 
-/** Get the override for a specific (scenario, field), if any. */
 export function findOverride(
   overrides: PendingOverride[],
   scenarioId: string,
