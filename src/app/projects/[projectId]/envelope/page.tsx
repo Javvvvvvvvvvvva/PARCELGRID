@@ -1,7 +1,7 @@
 "use client";
 
 import { use } from "react";
-import { PlanningScenarioWorkspace } from "@/components/planning/PlanningScenarioWorkspace";
+import { PlanningScenarioWorkspaceV2 } from "@/components/planning/PlanningScenarioWorkspaceV2";
 
 export default function EnvelopePage({
   params,
@@ -9,5 +9,5 @@ export default function EnvelopePage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
-  return <PlanningScenarioWorkspace projectId={projectId} />;
+  return <PlanningScenarioWorkspaceV2 projectId={projectId} />;
 }
