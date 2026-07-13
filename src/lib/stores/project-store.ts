@@ -73,6 +73,12 @@ interface ProjectStore {
   selectedPlanningScenarioId: string | null;
   setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
   addPlanningScenario: (scenario: PlanningScenario) => string;
+  /** 편집 중 즉시 재계산용. 버전은 올리지 않고 draft 상태로만 갱신한다. */
+  editPlanningScenarioDraft: (
+    id: string,
+    patch: Partial<Omit<PlanningScenario, "id" | "createdAt" | "version">>
+  ) => void;
+  /** 명시적 저장용. 버전과 updatedAt을 한 번 올린다. */
   updatePlanningScenario: (
     id: string,
     patch: Partial<Omit<PlanningScenario, "id" | "createdAt">>
@@ -158,6 +164,31 @@ export const useProjectStore = create<ProjectStore>()(
           }));
           return scenario.id;
         },
+        editPlanningScenarioDraft: (id, patch) =>
+          set((state) => ({
+            planningScenarios: state.planningScenarios.map((scenario) => {
+              if (scenario.id !== id) return scenario;
+              const patchedEconomics = patch.economicsPreview
+                ? patch.economicsPreview
+                : {
+                    ...scenario.economicsPreview,
+                    status:
+                      scenario.economicsPreview.status === "not-calculated"
+                        ? "not-calculated"
+                        : "stale",
+                  };
+              return {
+                ...scenario,
+                ...patch,
+                id: scenario.id,
+                createdAt: scenario.createdAt,
+                version: scenario.version,
+                status: "draft",
+                updatedAt: new Date().toISOString(),
+                economicsPreview: patchedEconomics,
+              };
+            }),
+          })),
         updatePlanningScenario: (id, patch) =>
           set((state) => ({
             planningScenarios: state.planningScenarios.map((scenario) =>
