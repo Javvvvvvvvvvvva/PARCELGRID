@@ -3,6 +3,7 @@ import type {
   FloorUseType,
   FloorZone,
   PlanningEconomicsPreview,
+  PlanningRevenueModel,
   PlanningScenario,
   PlanningScenarioOrigin,
   PlanningScenarioSummary,
@@ -19,16 +20,30 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+export function defaultRevenueModelForUse(useType: FloorUseType): PlanningRevenueModel {
+  if (useType === "residential") return "sale";
+  if (useType === "retail" || useType === "office") return "lease";
+  return "non-revenue";
+}
+
+export function resolveZoneRevenueModel(zone: FloorZone): PlanningRevenueModel {
+  return zone.revenueModel ?? defaultRevenueModelForUse(zone.useType);
+}
+
 export function emptyEconomicsPreview(
   acquisitionCostManwon = 0
 ): PlanningEconomicsPreview {
   return {
     status: "not-calculated",
     acquisitionCostManwon,
+    demolitionCostManwon: 0,
     constructionCostManwon: 0,
     softCostManwon: 0,
+    contingencyCostManwon: 0,
     financingCostManwon: 0,
     totalCostManwon: acquisitionCostManwon,
+    saleRevenueManwon: 0,
+    capitalizedLeaseValueManwon: 0,
     expectedRevenueManwon: 0,
     expectedAnnualNoiManwon: 0,
     profitManwon: -acquisitionCostManwon,
@@ -40,7 +55,8 @@ export function createFloorZone(
   useType: FloorUseType,
   areaSqm = 0,
   unitCount = 0,
-  label?: string
+  label?: string,
+  revenueModel: PlanningRevenueModel = defaultRevenueModelForUse(useType)
 ): FloorZone {
   return {
     id: uid("zone"),
@@ -48,6 +64,7 @@ export function createFloorZone(
     label,
     areaSqm: Math.max(0, areaSqm),
     unitCount: Math.max(0, Math.floor(unitCount)),
+    revenueModel,
   };
 }
 
@@ -158,6 +175,8 @@ export function summarizePlanningScenario(
   let commercialAreaSqm = 0;
   let parkingAreaSqm = 0;
   let commonAreaSqm = 0;
+  let saleableAreaSqm = 0;
+  let rentableAreaSqm = 0;
   let unitCount = 0;
   let gradeFootprintAreaSqm = 0;
 
@@ -179,6 +198,14 @@ export function summarizePlanningScenario(
       ) {
         commonAreaSqm += area;
       }
+
+      const revenueModel = resolveZoneRevenueModel(zone);
+      if (revenueModel === "sale") {
+        saleableAreaSqm += Math.min(area, Math.max(0, zone.saleableAreaSqm ?? area));
+      }
+      if (revenueModel === "lease") {
+        rentableAreaSqm += Math.min(area, Math.max(0, zone.rentableAreaSqm ?? area));
+      }
     }
   }
 
@@ -198,6 +225,8 @@ export function summarizePlanningScenario(
     commercialAreaSqm,
     parkingAreaSqm,
     commonAreaSqm,
+    saleableAreaSqm,
+    rentableAreaSqm,
     unitCount,
     providedCars: Math.max(0, scenario.parking.providedCars),
   };
