@@ -18,14 +18,23 @@ export type FloorUseType =
   | "storage"
   | "other";
 
+export type PlanningRevenueModel = "sale" | "lease" | "non-revenue";
+
 export interface FloorZone {
   id: string;
   useType: FloorUseType;
   label?: string;
   areaSqm: number;
   unitCount: number;
-  rentableAreaSqm?: number;
+  /**
+   * Stage 2 개략 사업성의 수익 방식.
+   * 값이 없는 과거 데이터는 용도별 기본값을 사용한다.
+   */
+  revenueModel?: PlanningRevenueModel;
+  /** 실제 매각 산정 면적. 없으면 revenueModel=sale인 구역의 전체 면적을 사용한다. */
   saleableAreaSqm?: number;
+  /** 실제 임대 산정 면적. 없으면 revenueModel=lease인 구역의 전체 면적을 사용한다. */
+  rentableAreaSqm?: number;
 }
 
 export interface FloorProgram {
@@ -74,16 +83,42 @@ export interface PlanningCheck {
 }
 
 /**
+ * Stage 2 개략 사업성 계산에 사용하는 명시적 가정.
+ * 모든 금액 단가는 원 단위이며 결과는 만원 단위로 반환한다.
+ */
+export interface PlanningEconomicsAssumptions {
+  version: string;
+  constructionCostPerSqmWon: number;
+  /** 지하층 공사비 가중치. 예: 1.25 = 지상 기준의 125%. */
+  basementCostMultiplier: number;
+  softCostRatePct: number;
+  contingencyRatePct: number;
+  /** Stage 2용 개략 금융비율. 상세 PF 이자는 Stage 3에서 계산한다. */
+  financingCostRatePct: number;
+  residentialSalePricePerSqmWon: number;
+  commercialSalePricePerSqmWon: number;
+  residentialRentPerSqmMonthWon: number;
+  retailRentPerSqmMonthWon: number;
+  officeRentPerSqmMonthWon: number;
+  vacancyRatePct: number;
+  capRatePct: number;
+}
+
+/**
  * Stage 2에서 보여주는 개략 사업성 미리보기.
  * 금융·세금·공정·민감도까지 포함한 최종 사업성은 Stage 3에서 계산한다.
  */
 export interface PlanningEconomicsPreview {
   status: "not-calculated" | "estimated" | "stale";
   acquisitionCostManwon: number;
+  demolitionCostManwon: number;
   constructionCostManwon: number;
   softCostManwon: number;
+  contingencyCostManwon: number;
   financingCostManwon: number;
   totalCostManwon: number;
+  saleRevenueManwon: number;
+  capitalizedLeaseValueManwon: number;
   expectedRevenueManwon: number;
   expectedAnnualNoiManwon: number;
   profitManwon: number;
@@ -121,6 +156,49 @@ export interface PlanningScenarioSummary {
   commercialAreaSqm: number;
   parkingAreaSqm: number;
   commonAreaSqm: number;
+  saleableAreaSqm: number;
+  rentableAreaSqm: number;
   unitCount: number;
   providedCars: number;
+}
+
+export interface PlanningCalculationParcel {
+  lotAreaSqm: number;
+  maxFARPct: number;
+  maxBCRPct: number;
+  heightLimitM: number;
+  acquisitionCostManwon: number;
+  demolitionCostManwon: number;
+}
+
+export interface PlanningParkingAssessment {
+  requiredCars: number;
+  providedCars: number;
+  shortfallCars: number;
+  estimatedCapacityFromProgram: number | null;
+  estimated: boolean;
+  exemptPossible: boolean;
+  basis: string[];
+  reference: string[];
+}
+
+export interface PlanningScenarioMetrics extends PlanningScenarioSummary {
+  constructionAreaSqm: number;
+  aboveGroundProgramAreaSqm: number;
+  basementProgramAreaSqm: number;
+  /** 지상 주차·필로티를 제외한 예비 용적률 산입면적. 최종 법적 산입면적은 별도 확인. */
+  preliminaryFarAreaSqm: number;
+  preliminaryBcrPct: number;
+  preliminaryFarPct: number;
+  totalHeightM: number;
+  requiredCars: number;
+  parkingShortfallCars: number;
+}
+
+export interface PlanningScenarioCalculation {
+  scenarioId: string;
+  metrics: PlanningScenarioMetrics;
+  parking: PlanningParkingAssessment;
+  checks: PlanningCheck[];
+  economicsPreview: PlanningEconomicsPreview;
 }
