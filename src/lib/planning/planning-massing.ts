@@ -228,7 +228,9 @@ export function buildPlanningMassModel(
   let currentDepthM = 0;
   const basementFloors = basementPrograms.map((floor) => {
     const height = nonNegative(floor.floorHeightM);
-    const top = -currentDepthM;
+    // Normalize the first basement ceiling to positive zero. JavaScript preserves -0,
+    // which is numerically equivalent but fails strict Object.is comparisons in tests.
+    const top = currentDepthM === 0 ? 0 : -currentDepthM;
     currentDepthM += height;
     const base = -currentDepthM;
     return buildMass(
