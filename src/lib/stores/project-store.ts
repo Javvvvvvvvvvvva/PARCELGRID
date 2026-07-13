@@ -1,20 +1,9 @@
 /**
  * Active project store.
  *
- * Holds the current project's computed data and any pending assumption
- * overrides. The assumption editor screen mutates `pendingOverrides`;
- * the rest of the app subscribes and re-renders.
- *
- * Why Zustand and not React Query alone:
- *   - The "what-if" feel of the assumption editor needs optimistic local
- *     state that doesn't round-trip to the server on every keystroke.
- *   - Multiple screens share the in-flight override state simultaneously
- *     (editor on the right, KPI tiles on the left).
- *
- * Why not just useState lifted to App level:
- *   - Survives client-side route changes without re-fetching.
- *   - Cleanly separates "applied state" (the saved project) from
- *     "draft state" (pending overrides).
+ * Stage 1 stores the computed parcel and existing-condition data.
+ * Stage 2 stores multiple planning scenarios and the currently selected plan.
+ * Stage 3 consumes a saved planning scenario for detailed feasibility analysis.
  */
 
 "use client";
@@ -23,7 +12,16 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import type { AssumptionSet } from "@/lib/finance/types";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+import type { PlanningScenario } from "@/lib/planning/types";
+import {
+  clonePlanningScenario,
+  touchPlanningScenario,
+} from "@/lib/planning/scenario-utils";
 
+/**
+ * Legacy aggregate plan used by the current Stage 2 screen.
+ * It remains temporarily while the UI is migrated to PlanningScenario[].
+ */
 export interface EnvelopePlan {
   farPct: number;
   scenarioType: "single-house" | "multi-family" | "retail" | null;
@@ -52,13 +50,11 @@ interface ProjectStore {
 
   // Draft overrides not yet saved
   pendingOverrides: PendingOverride[];
-
   setOverride: (override: PendingOverride) => void;
   clearOverride: (scenarioId: string, field: keyof AssumptionSet) => void;
   clearAllOverrides: () => void;
 
-  // 가정 편집 draft (시나리오별) — 대시보드 사이드바 ↔ 가정 편집 페이지 공유.
-  // 화면을 넘나들어도(그리고 새로고침해도) 편집값이 유지된다.
+  // 가정 편집 draft (시나리오별)
   draftAssumptions: Record<string, Partial<AssumptionSet>>;
   setDraftAssumption: (
     scenarioId: string,
@@ -67,12 +63,26 @@ interface ProjectStore {
   ) => void;
   resetDraftAssumptions: (scenarioId: string) => void;
 
-  // envelope 건축 기획 (단일 진실 소스)
+  // Legacy envelope plan — removed after the Stage 2 UI migration is complete.
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
   clearEnvelopePlan: () => void;
 
-  // Which scenario is "focused" across screens
+  // Stage 2 planning scenarios
+  planningScenarios: PlanningScenario[];
+  selectedPlanningScenarioId: string | null;
+  setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
+  addPlanningScenario: (scenario: PlanningScenario) => string;
+  updatePlanningScenario: (
+    id: string,
+    patch: Partial<Omit<PlanningScenario, "id" | "createdAt">>
+  ) => void;
+  removePlanningScenario: (id: string) => void;
+  duplicatePlanningScenario: (id: string, name?: string) => string | null;
+  selectPlanningScenario: (id: string | null) => void;
+  clearPlanningScenarios: () => void;
+
+  // Which finance scenario is focused across legacy screens
   activeScenarioId: string | null;
   setActiveScenarioId: (id: string | null) => void;
 }
@@ -80,66 +90,121 @@ interface ProjectStore {
 export const useProjectStore = create<ProjectStore>()(
   devtools(
     persist(
-      (set) => ({
-    data: null,
-    setData: (data) => set({ data }),
+      (set, get) => ({
+        data: null,
+        setData: (data) => set({ data }),
 
-    pendingOverrides: [],
+        pendingOverrides: [],
+        setOverride: (override) =>
+          set((state) => {
+            const without = state.pendingOverrides.filter(
+              (item) =>
+                !(
+                  item.scenarioId === override.scenarioId &&
+                  item.field === override.field
+                )
+            );
+            if (override.overrideValue === override.baseValue) {
+              return { pendingOverrides: without };
+            }
+            return { pendingOverrides: [...without, override] };
+          }),
+        clearOverride: (scenarioId, field) =>
+          set((state) => ({
+            pendingOverrides: state.pendingOverrides.filter(
+              (item) => !(item.scenarioId === scenarioId && item.field === field)
+            ),
+          })),
+        clearAllOverrides: () => set({ pendingOverrides: [] }),
 
-    setOverride: (override) =>
-      set((s) => {
-        const without = s.pendingOverrides.filter(
-          (o) =>
-            !(
-              o.scenarioId === override.scenarioId &&
-              o.field === override.field
-            )
-        );
-        // Only keep the override if it actually differs from base
-        if (override.overrideValue === override.baseValue) {
-          return { pendingOverrides: without };
-        }
-        return { pendingOverrides: [...without, override] };
-      }),
+        draftAssumptions: {},
+        setDraftAssumption: (scenarioId, field, value) =>
+          set((state) => ({
+            draftAssumptions: {
+              ...state.draftAssumptions,
+              [scenarioId]: {
+                ...(state.draftAssumptions[scenarioId] ?? {}),
+                [field]: value,
+              },
+            },
+          })),
+        resetDraftAssumptions: (scenarioId) =>
+          set((state) => {
+            const next = { ...state.draftAssumptions };
+            delete next[scenarioId];
+            return { draftAssumptions: next };
+          }),
 
-    clearOverride: (scenarioId, field) =>
-      set((s) => ({
-        pendingOverrides: s.pendingOverrides.filter(
-          (o) => !(o.scenarioId === scenarioId && o.field === field)
-        ),
-      })),
+        envelopePlan: null,
+        setEnvelopePlan: (envelopePlan) => set({ envelopePlan }),
+        clearEnvelopePlan: () => set({ envelopePlan: null }),
 
-    clearAllOverrides: () => set({ pendingOverrides: [] }),
-
-    draftAssumptions: {},
-    setDraftAssumption: (scenarioId, field, value) =>
-      set((s) => ({
-        draftAssumptions: {
-          ...s.draftAssumptions,
-          [scenarioId]: {
-            ...(s.draftAssumptions[scenarioId] ?? {}),
-            [field]: value,
-          },
+        planningScenarios: [],
+        selectedPlanningScenarioId: null,
+        setPlanningScenarios: (planningScenarios) =>
+          set((state) => ({
+            planningScenarios,
+            selectedPlanningScenarioId:
+              planningScenarios.some(
+                (scenario) => scenario.id === state.selectedPlanningScenarioId
+              )
+                ? state.selectedPlanningScenarioId
+                : planningScenarios[0]?.id ?? null,
+          })),
+        addPlanningScenario: (scenario) => {
+          set((state) => ({
+            planningScenarios: [...state.planningScenarios, scenario],
+            selectedPlanningScenarioId: scenario.id,
+          }));
+          return scenario.id;
         },
-      })),
-    resetDraftAssumptions: (scenarioId) =>
-      set((s) => {
-        const next = { ...s.draftAssumptions };
-        delete next[scenarioId];
-        return { draftAssumptions: next };
-      }),
+        updatePlanningScenario: (id, patch) =>
+          set((state) => ({
+            planningScenarios: state.planningScenarios.map((scenario) =>
+              scenario.id === id
+                ? touchPlanningScenario(scenario, patch)
+                : scenario
+            ),
+          })),
+        removePlanningScenario: (id) =>
+          set((state) => {
+            const planningScenarios = state.planningScenarios.filter(
+              (scenario) => scenario.id !== id
+            );
+            return {
+              planningScenarios,
+              selectedPlanningScenarioId:
+                state.selectedPlanningScenarioId === id
+                  ? planningScenarios[0]?.id ?? null
+                  : state.selectedPlanningScenarioId,
+            };
+          }),
+        duplicatePlanningScenario: (id, name) => {
+          const source = get().planningScenarios.find(
+            (scenario) => scenario.id === id
+          );
+          if (!source) return null;
+          const copy = clonePlanningScenario(source, name);
+          set((state) => ({
+            planningScenarios: [...state.planningScenarios, copy],
+            selectedPlanningScenarioId: copy.id,
+          }));
+          return copy.id;
+        },
+        selectPlanningScenario: (selectedPlanningScenarioId) =>
+          set({ selectedPlanningScenarioId }),
+        clearPlanningScenarios: () =>
+          set({ planningScenarios: [], selectedPlanningScenarioId: null }),
 
-    activeScenarioId: null,
-    envelopePlan: null,
-    setEnvelopePlan: (envelopePlan) => set({ envelopePlan }),
-    clearEnvelopePlan: () => set({ envelopePlan: null }),
-
-    setActiveScenarioId: (id) => set({ activeScenarioId: id }),
+        activeScenarioId: null,
+        setActiveScenarioId: (activeScenarioId) => set({ activeScenarioId }),
       }),
       {
         name: "parcelgrid-envelope",
         partialize: (state) => ({
           envelopePlan: state.envelopePlan,
+          planningScenarios: state.planningScenarios,
+          selectedPlanningScenarioId: state.selectedPlanningScenarioId,
           draftAssumptions: state.draftAssumptions,
         }),
       }
@@ -154,6 +219,7 @@ export function findOverride(
   field: keyof AssumptionSet
 ): PendingOverride | undefined {
   return overrides.find(
-    (o) => o.scenarioId === scenarioId && o.field === field
+    (override) =>
+      override.scenarioId === scenarioId && override.field === field
   );
 }
