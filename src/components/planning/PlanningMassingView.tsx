@@ -54,7 +54,9 @@ function openRing(ring: LngLat[]): LngLat[] {
   if (ring.length < 2) return ring;
   const first = ring[0];
   const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1] ? ring.slice(0, -1) : ring;
+  return first[0] === last[0] && first[1] === last[1]
+    ? ring.slice(0, -1)
+    : ring;
 }
 
 function ringCentroid(ring: LngLat[]): LngLat {
@@ -76,15 +78,27 @@ function ringToLocalMeters(ring: LngLat[], origin: LngLat): LocalPlanPoint[] {
 }
 
 function floorUseSummary(mass: PlanningFloorMass): string {
-  const uses = [...new Set(mass.zones.filter((zone) => zone.areaSqm > 0).map((zone) => USE_LABEL[zone.useType]))];
+  const uses = [
+    ...new Set(
+      mass.zones
+        .filter((zone) => zone.areaSqm > 0)
+        .map((zone) => USE_LABEL[zone.useType])
+    ),
+  ];
   const unitParts: string[] = [];
   if (mass.residentialUnits > 0) unitParts.push(`${mass.residentialUnits}세대`);
   if (mass.commercialUnits > 0) unitParts.push(`${mass.commercialUnits}실`);
   const useText = uses.length > 0 ? uses.join("+") : "용도 미입력";
-  return unitParts.length > 0 ? `${useText} · ${unitParts.join(" · ")}` : useText;
+  return unitParts.length > 0
+    ? `${useText} · ${unitParts.join(" · ")}`
+    : useText;
 }
 
-function shapeGeometry(points: LocalPlanPoint[], baseHeightM: number, topHeightM: number): THREE.ExtrudeGeometry {
+function shapeGeometry(
+  points: LocalPlanPoint[],
+  baseHeightM: number,
+  topHeightM: number
+): THREE.ExtrudeGeometry {
   const shape = new THREE.Shape();
   points.forEach((point, index) => {
     if (index === 0) shape.moveTo(point.x, point.z);
@@ -92,7 +106,10 @@ function shapeGeometry(points: LocalPlanPoint[], baseHeightM: number, topHeightM
   });
   shape.closePath();
   const depth = Math.max(0.05, topHeightM - baseHeightM);
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth,
+    bevelEnabled: false,
+  });
   geometry.rotateX(-Math.PI / 2);
   geometry.translate(0, baseHeightM, 0);
   return geometry;
@@ -120,12 +137,16 @@ function FloorMassMesh({
   const labelPoint = useMemo(() => {
     if (mass.shape.length === 0) return { x: 0, z: 0 };
     return mass.shape.reduce(
-      (best, point) => point.x > best.x ? point : best,
+      (best, point) => (point.x > best.x ? point : best),
       mass.shape[0]
     );
   }, [mass.shape]);
   const active = selected || hovered;
-  const lowOpacity = mass.level < 0 || mass.dominantUse === "piloti" || mass.dominantUse === "parking";
+  const lowOpacity =
+    mass.level < 0 ||
+    mass.dominantUse === "piloti" ||
+    mass.dominantUse === "parking";
+  const overCapacity = !mass.fitsEnvelope;
 
   return (
     <group>
@@ -146,7 +167,13 @@ function FloorMassMesh({
         }}
       >
         <meshStandardMaterial
-          color={active ? "#ef4444" : USE_COLOR[mass.dominantUse]}
+          color={
+            active
+              ? "#ef4444"
+              : overCapacity
+                ? "#dc2626"
+                : USE_COLOR[mass.dominantUse]
+          }
           transparent
           opacity={active ? 0.9 : lowOpacity ? 0.34 : 0.7}
           roughness={0.58}
@@ -155,7 +182,11 @@ function FloorMassMesh({
         />
       </mesh>
       <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
-        <lineBasicMaterial color={active ? "#991b1b" : "#334155"} transparent opacity={0.55} />
+        <lineBasicMaterial
+          color={active || overCapacity ? "#991b1b" : "#334155"}
+          transparent
+          opacity={0.58}
+        />
       </lineSegments>
       <Text
         position={[
@@ -164,12 +195,12 @@ function FloorMassMesh({
           labelPoint.z,
         ]}
         fontSize={Math.max(0.65, extent * 0.055)}
-        color={active ? "#991b1b" : "#334155"}
+        color={active || overCapacity ? "#991b1b" : "#334155"}
         anchorX="left"
         anchorY="middle"
         maxWidth={extent * 1.1}
       >
-        {`${mass.label} · ${floorUseSummary(mass)}`}
+        {`${mass.label} · ${floorUseSummary(mass)}${overCapacity ? " · 면적 초과" : ""}`}
       </Text>
     </group>
   );
@@ -191,9 +222,16 @@ function ParcelPlate({ shape }: { shape: LocalPlanPoint[] }) {
   return (
     <group>
       <mesh geometry={geometry} position={[0, -0.04, 0]}>
-        <meshStandardMaterial color="#e2e8f0" roughness={0.9} side={THREE.DoubleSide} />
+        <meshStandardMaterial
+          color="#e2e8f0"
+          roughness={0.9}
+          side={THREE.DoubleSide}
+        />
       </mesh>
-      <lineSegments geometry={new THREE.EdgesGeometry(geometry)} position={[0, -0.02, 0]}>
+      <lineSegments
+        geometry={new THREE.EdgesGeometry(geometry)}
+        position={[0, -0.02, 0]}
+      >
         <lineBasicMaterial color="#64748b" />
       </lineSegments>
     </group>
@@ -242,8 +280,14 @@ function PlanningScene({
   return (
     <>
       <ambientLight intensity={0.78} />
-      <directionalLight position={[extent, extent * 2.2, extent]} intensity={1.1} />
-      <directionalLight position={[-extent, extent, -extent]} intensity={0.35} />
+      <directionalLight
+        position={[extent, extent * 2.2, extent]}
+        intensity={1.1}
+      />
+      <directionalLight
+        position={[-extent, extent, -extent]}
+        intensity={0.35}
+      />
       <ParcelPlate shape={groundShape} />
       {visibleFloors.map((mass) => (
         <FloorMassMesh
@@ -286,16 +330,22 @@ function createPlanningMassData(
   const groundShape = ringToLocalMeters(boundary, origin);
   const groundFloors = scenario.floorPrograms.filter((floor) => floor.level > 0);
   const maxFloor = Math.max(1, ...groundFloors.map((floor) => floor.level));
-  const averageFloorHeight = groundFloors.length > 0
-    ? groundFloors.reduce((sum, floor) => sum + Math.max(2, floor.floorHeightM), 0) / groundFloors.length
-    : 3;
-  const frontage = roads && roads.length > 0 && setback
-    ? analyzeFrontage(boundary, roads)
-    : null;
+  const averageFloorHeight =
+    groundFloors.length > 0
+      ? groundFloors.reduce(
+          (sum, floor) => sum + Math.max(2, floor.floorHeightM),
+          0
+        ) / groundFloors.length
+      : 3;
+  const frontage =
+    roads && roads.length > 0 && setback
+      ? analyzeFrontage(boundary, roads)
+      : null;
   const edgeSetbacks = edgeSetbacksFromFrontage(
     frontage,
     setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
   );
+
   const buildable = calcBuildableArea(
     boundary,
     0.5,
@@ -304,22 +354,50 @@ function createPlanningMassData(
     /주거/.test(zoning),
     edgeSetbacks
   );
+  // 지하층에는 정북일조 계단식 외곽선을 재사용하지 않고 측면·도로 이격만 적용한다.
+  const basementBuildable = calcBuildableArea(
+    boundary,
+    0.5,
+    1,
+    3,
+    false,
+    edgeSetbacks
+  );
+
   const fallbackRing = buildable.buildable2DRing ?? boundary;
   const firstStep = buildable.stepped3D.find((step) => step.ringLngLat);
-  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map((floor) => {
-    const step = floor.level > 0
-      ? buildable.stepped3D.find((candidate) => candidate.floor === floor.level)
-      : undefined;
-    const ring = step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
-    const shape = ringToLocalMeters(ring, origin);
-    return {
-      level: floor.level,
-      shape,
-      envelopeAreaSqm: step?.floorPlateSqm ?? polygonAreaSqm(shape),
-      requiredSetbackM: step?.requiredSetbackM ?? 0,
-      envelopeAvailable: Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
-    };
-  });
+  const basementRing = basementBuildable.buildable2DRing ?? boundary;
+
+  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map(
+    (floor) => {
+      const step =
+        floor.level > 0
+          ? buildable.stepped3D.find(
+              (candidate) => candidate.floor === floor.level
+            )
+          : undefined;
+      const ring =
+        floor.level < 0
+          ? basementRing
+          : step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
+      const shape = ringToLocalMeters(ring, origin);
+      return {
+        level: floor.level,
+        shape,
+        envelopeAreaSqm:
+          floor.level < 0
+            ? polygonAreaSqm(shape)
+            : step?.floorPlateSqm ?? polygonAreaSqm(shape),
+        requiredSetbackM:
+          floor.level < 0 ? 0 : step?.requiredSetbackM ?? 0,
+        envelopeAvailable:
+          floor.level < 0
+            ? Boolean(basementBuildable.buildable2DRing)
+            : Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
+      };
+    }
+  );
+
   const model = buildPlanningMassModel(
     scenario.floorPrograms,
     envelopeSteps,
@@ -327,10 +405,16 @@ function createPlanningMassData(
   );
 
   let extent = 10;
-  [...groundShape, ...model.floors.flatMap((floor) => floor.shape)].forEach((point) => {
-    extent = Math.max(extent, Math.abs(point.x), Math.abs(point.z));
-  });
-  extent = Math.max(extent, model.totalHeightM * 0.7, model.basementDepthM * 0.7);
+  [...groundShape, ...model.floors.flatMap((floor) => floor.shape)].forEach(
+    (point) => {
+      extent = Math.max(extent, Math.abs(point.x), Math.abs(point.z));
+    }
+  );
+  extent = Math.max(
+    extent,
+    model.totalHeightM * 0.7,
+    model.basementDepthM * 0.7
+  );
 
   return {
     groundShape,
@@ -341,11 +425,43 @@ function createPlanningMassData(
 }
 
 function areaDifferenceLabel(mass: PlanningFloorMass): string {
+  if (!mass.fitsEnvelope) {
+    return `법규 외곽선보다 ${num(mass.capacityShortfallSqm, 1)}㎡ 초과`;
+  }
+  if (mass.footprintScalePct < 99.5) {
+    return `프로그램 면적 기준 ${mass.footprintScalePct.toFixed(0)}% 선형 축척 적용`;
+  }
   const absolute = Math.abs(mass.areaDifferencePct);
-  if (absolute < 10) return "면적 일치";
+  if (absolute < 2) return "프로그램 면적과 정합";
   return mass.areaDifferencePct > 0
     ? `3D 외곽선이 프로그램보다 ${absolute.toFixed(0)}% 큼`
     : `3D 외곽선이 프로그램보다 ${absolute.toFixed(0)}% 작음`;
+}
+
+function CapacityNotice({ model }: { model: PlanningMassModel }) {
+  const capacity = model.capacity;
+  const ok = capacity.allFloorsFit;
+  return (
+    <div
+      style={{
+        marginBottom: 10,
+        padding: "10px 12px",
+        borderRadius: 9,
+        border: `1px solid ${ok ? "var(--pos-fg)" : "var(--neg-fg)"}`,
+        background: ok ? "var(--pos-soft)" : "var(--neg-soft)",
+        color: ok ? "var(--pos-fg)" : "var(--neg-fg)",
+        fontSize: 10.5,
+        lineHeight: 1.5,
+      }}
+    >
+      <strong>{ok ? "배치 면적 수용 가능" : "층별 프로그램 면적 초과"}</strong>
+      <span style={{ marginLeft: 7 }}>
+        {ok
+          ? "3D는 각 층 프로그램 면적을 법규 외곽선 안에서 자동 맞춤했습니다."
+          : `${capacity.overCapacityFloorCount}개 층이 법규 외곽선보다 총 ${num(capacity.totalShortfallSqm, 1)}㎡ 큽니다. 3D는 현재 가능한 면적까지만 표시합니다.`}
+      </span>
+    </div>
+  );
 }
 
 export function PlanningMassingView({
@@ -368,9 +484,10 @@ export function PlanningMassingView({
   const [showBasements, setShowBasements] = useState(true);
 
   const data = useMemo(
-    () => boundary && boundary.length >= 3
-      ? createPlanningMassData(boundary, zoning, scenario, roads, setback)
-      : null,
+    () =>
+      boundary && boundary.length >= 3
+        ? createPlanningMassData(boundary, zoning, scenario, roads, setback)
+        : null,
     [boundary, zoning, scenario, roads, setback]
   );
 
@@ -396,10 +513,14 @@ export function PlanningMassingView({
   const selectedMass = selectedFloorId
     ? data.model.floors.find((floor) => floor.id === selectedFloorId) ?? null
     : null;
-  const visibleFloors = showBasements ? data.model.floors : data.model.aboveGroundFloors;
+  const visibleFloors = showBasements
+    ? data.model.floors
+    : data.model.aboveGroundFloors;
 
   return (
     <div>
+      <CapacityNotice model={data.model} />
+
       <div
         style={{
           display: "flex",
@@ -411,7 +532,7 @@ export function PlanningMassingView({
         }}
       >
         <div style={{ fontSize: 10.5, color: "var(--fg-faint)" }}>
-          층별 용도·층고·외곽선 비율·북측 후퇴·계획 위치 반영
+          프로그램 면적 자동 맞춤 · 층고 · 평면 축척 · 북측 후퇴 · 계획 위치 반영
         </div>
         {data.model.basementFloors.length > 0 && (
           <button
@@ -421,7 +542,9 @@ export function PlanningMassingView({
               border: "1px solid var(--border)",
               borderRadius: 7,
               padding: "5px 8px",
-              background: showBasements ? "var(--bg-sunken)" : "var(--bg-elev)",
+              background: showBasements
+                ? "var(--bg-sunken)"
+                : "var(--bg-elev)",
               color: "var(--fg-muted)",
               fontSize: 10.5,
               cursor: "pointer",
@@ -439,12 +562,17 @@ export function PlanningMassingView({
             border: "1px solid var(--border)",
             borderRadius: 12,
             overflow: "hidden",
-            background: "linear-gradient(180deg, var(--bg-elev), var(--bg-sunken))",
+            background:
+              "linear-gradient(180deg, var(--bg-elev), var(--bg-sunken))",
           }}
         >
           <Canvas
             camera={{
-              position: [data.extent * 1.8, data.extent * 1.8, data.extent * 2.2],
+              position: [
+                data.extent * 1.8,
+                data.extent * 1.8,
+                data.extent * 2.2,
+              ],
               fov: 45,
               near: 0.1,
               far: data.extent * 25,
@@ -459,7 +587,11 @@ export function PlanningMassingView({
                 showBasements={showBasements}
                 selectedFloorId={selectedFloorId}
                 hoveredFloorId={hoveredFloorId}
-                onSelect={(id) => setSelectedFloorId((current) => current === id ? null : id)}
+                onSelect={(id) =>
+                  setSelectedFloorId((current) =>
+                    current === id ? null : id
+                  )
+                }
                 onHover={setHoveredFloorId}
               />
             </Suspense>
@@ -478,25 +610,80 @@ export function PlanningMassingView({
         >
           {selectedMass ? (
             <div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
                 <strong style={{ fontSize: 15 }}>{selectedMass.label}</strong>
-                <span className="ui-tag">{USE_LABEL[selectedMass.dominantUse]}</span>
+                <span className="ui-tag">
+                  {USE_LABEL[selectedMass.dominantUse]}
+                </span>
+                <span
+                  className="ui-tag"
+                  style={{
+                    color: selectedMass.fitsEnvelope
+                      ? "var(--pos-fg)"
+                      : "var(--neg-fg)",
+                  }}
+                >
+                  {selectedMass.fitsEnvelope ? "면적 수용" : "면적 초과"}
+                </span>
               </div>
-              <p style={{ margin: "5px 0 10px", fontSize: 10.5, color: "var(--fg-muted)" }}>
+              <p
+                style={{
+                  margin: "5px 0 10px",
+                  fontSize: 10.5,
+                  color: "var(--fg-muted)",
+                }}
+              >
                 {floorUseSummary(selectedMass)}
               </p>
-              <InfoRow label="프로그램 면적" value={`${num(selectedMass.programAreaSqm, 1)}㎡`} />
-              <InfoRow label="3D 외곽선 면적" value={`${num(selectedMass.visualAreaSqm, 1)}㎡`} />
-              <InfoRow label="면적 정합" value={areaDifferenceLabel(selectedMass)} />
-              <InfoRow label="층고" value={`${selectedMass.floorHeightM.toFixed(1)}m`} />
-              <InfoRow label="외곽선 비율" value={`${selectedMass.footprintScalePct.toFixed(0)}%`} />
+              <InfoRow
+                label="프로그램 면적"
+                value={`${num(selectedMass.programAreaSqm, 1)}㎡`}
+              />
+              <InfoRow
+                label="법규상 최대 외곽선"
+                value={`${num(selectedMass.envelopeAreaSqm, 1)}㎡`}
+              />
+              <InfoRow
+                label="3D 반영 면적"
+                value={`${num(selectedMass.visualAreaSqm, 1)}㎡`}
+              />
+              <InfoRow
+                label="배치 판정"
+                value={areaDifferenceLabel(selectedMass)}
+              />
+              <InfoRow
+                label="층고"
+                value={`${selectedMass.floorHeightM.toFixed(1)}m`}
+              />
+              <InfoRow
+                label="사용자 평면 축척"
+                value={`${selectedMass.footprintScalePct.toFixed(0)}%`}
+              />
+              <InfoRow
+                label="법규 외곽선 대비 실제 축척"
+                value={`${selectedMass.appliedScalePct.toFixed(0)}%`}
+              />
               <InfoRow
                 label="북측 후퇴"
-                value={`${(scenario.placement.northSetbackM + selectedMass.northSetbackM).toFixed(1)}m`}
+                value={`${(
+                  scenario.placement.northSetbackM +
+                  selectedMass.northSetbackM
+                ).toFixed(1)}m`}
               />
               <InfoRow
                 label="법규 엔진 이격"
-                value={selectedMass.requiredSetbackM > 0 ? `${selectedMass.requiredSetbackM.toFixed(1)}m` : "없음"}
+                value={
+                  selectedMass.requiredSetbackM > 0
+                    ? `${selectedMass.requiredSetbackM.toFixed(1)}m`
+                    : "없음"
+                }
               />
               <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
                 {selectedMass.zones.map((zone, index) => (
@@ -515,7 +702,11 @@ export function PlanningMassingView({
                     <span>{USE_LABEL[zone.useType]}</span>
                     <span style={{ color: "var(--fg-muted)" }}>
                       {num(zone.areaSqm, 0)}㎡
-                      {zone.unitCount > 0 ? ` · ${zone.unitCount}${zone.useType === "residential" ? "세대" : "실"}` : ""}
+                      {zone.unitCount > 0
+                        ? ` · ${zone.unitCount}${
+                            zone.useType === "residential" ? "세대" : "실"
+                          }`
+                        : ""}
                     </span>
                   </div>
                 ))}
@@ -523,9 +714,20 @@ export function PlanningMassingView({
             </div>
           ) : (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>층 선택</div>
-              <p style={{ margin: "0 0 10px", fontSize: 10.5, lineHeight: 1.5, color: "var(--fg-muted)" }}>
-                3D 매스 또는 아래 층 목록을 누르면 층별 프로그램과 형상 정보를 확인할 수 있습니다.
+              <div
+                style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}
+              >
+                층 선택
+              </div>
+              <p
+                style={{
+                  margin: "0 0 10px",
+                  fontSize: 10.5,
+                  lineHeight: 1.5,
+                  color: "var(--fg-muted)",
+                }}
+              >
+                3D 매스 또는 아래 층 목록을 누르면 층별 프로그램과 법규 외곽선 수용 여부를 확인할 수 있습니다.
               </p>
               <div style={{ display: "grid", gap: 5 }}>
                 {[...visibleFloors]
@@ -537,10 +739,16 @@ export function PlanningMassingView({
                       onClick={() => setSelectedFloorId(mass.id)}
                       style={{
                         width: "100%",
-                        border: "1px solid var(--border-faint, var(--border))",
+                        border: `1px solid ${
+                          mass.fitsEnvelope
+                            ? "var(--border-faint, var(--border))"
+                            : "var(--neg-fg)"
+                        }`,
                         borderRadius: 7,
                         padding: "7px 8px",
-                        background: "var(--bg-elev)",
+                        background: mass.fitsEnvelope
+                          ? "var(--bg-elev)"
+                          : "var(--neg-soft)",
                         display: "flex",
                         justifyContent: "space-between",
                         gap: 8,
@@ -551,7 +759,17 @@ export function PlanningMassingView({
                       }}
                     >
                       <strong>{mass.label}</strong>
-                      <span style={{ color: "var(--fg-muted)" }}>{floorUseSummary(mass)}</span>
+                      <span
+                        style={{
+                          color: mass.fitsEnvelope
+                            ? "var(--fg-muted)"
+                            : "var(--neg-fg)",
+                        }}
+                      >
+                        {mass.fitsEnvelope
+                          ? floorUseSummary(mass)
+                          : `${num(mass.capacityShortfallSqm, 1)}㎡ 초과`}
+                      </span>
                     </button>
                   ))}
               </div>
@@ -561,18 +779,32 @@ export function PlanningMassingView({
       </div>
 
       {data.warnings.length > 0 && (
-        <p style={{ margin: "8px 0 0", fontSize: 10, lineHeight: 1.45, color: "var(--warn-fg)" }}>
+        <p
+          style={{
+            margin: "8px 0 0",
+            fontSize: 10,
+            lineHeight: 1.45,
+            color: "var(--warn-fg)",
+          }}
+        >
           건축가능영역 엔진: {data.warnings.join(" · ")}
         </p>
       )}
-      <p style={{ margin: "8px 0 0", fontSize: 10, lineHeight: 1.45, color: "var(--fg-faint)" }}>
-        3D 외곽선 면적과 입력한 층 프로그램 면적이 다르면 우측 패널에 차이를 표시합니다. 실별 평면 분할, 코어 위치, 구조 그리드는 아직 포함하지 않습니다.
+      <p
+        style={{
+          margin: "8px 0 0",
+          fontSize: 10,
+          lineHeight: 1.45,
+          color: "var(--fg-faint)",
+        }}
+      >
+        프로그램 면적이 법규 외곽선 안에 들어오면 3D를 해당 면적에 자동 맞춥니다. 초과하는 경우에는 가능한 외곽선까지만 표시하며, 정북일조 적용 여부와 경계 조건은 인허가 단계에서 최종 확인해야 합니다. 실별 평면, 코어, 구조 그리드는 아직 포함하지 않습니다.
       </p>
 
       <style jsx>{`
         .planning-massing-layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 220px;
+          grid-template-columns: minmax(0, 1fr) 230px;
           gap: 10px;
         }
         @media (max-width: 760px) {
@@ -581,7 +813,7 @@ export function PlanningMassingView({
           }
           .planning-massing-layout aside {
             height: auto !important;
-            max-height: 320px;
+            max-height: 340px;
           }
         }
       `}</style>
