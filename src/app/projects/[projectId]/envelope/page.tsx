@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/three/guard-empty-paths";
 import { use } from "react";
 import { PlanningScenarioWorkspaceV4 } from "@/components/planning/PlanningScenarioWorkspaceV4";
 import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacementWorkspace";
