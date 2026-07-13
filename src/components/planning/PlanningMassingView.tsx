@@ -4,6 +4,7 @@ import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
+import "@/lib/three/guard-empty-paths";
 import {
   calcBuildableArea,
   type LngLat,
@@ -94,11 +95,20 @@ function floorUseSummary(mass: PlanningFloorMass): string {
     : useText;
 }
 
+function hasRenderableShape(points: LocalPlanPoint[]): boolean {
+  return (
+    points.length >= 3 &&
+    points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z)) &&
+    polygonAreaSqm(points) > 0.0001
+  );
+}
+
 function shapeGeometry(
   points: LocalPlanPoint[],
   baseHeightM: number,
   topHeightM: number
-): THREE.ExtrudeGeometry {
+): THREE.BufferGeometry {
+  if (!hasRenderableShape(points)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   points.forEach((point, index) => {
     if (index === 0) shape.moveTo(point.x, point.z);
@@ -130,6 +140,7 @@ function FloorMassMesh({
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
 }) {
+  const renderable = hasRenderableShape(mass.shape);
   const geometry = useMemo(
     () => shapeGeometry(mass.shape, mass.baseHeightM, mass.topHeightM),
     [mass.shape, mass.baseHeightM, mass.topHeightM]
@@ -147,6 +158,10 @@ function FloorMassMesh({
     mass.dominantUse === "piloti" ||
     mass.dominantUse === "parking";
   const overCapacity = !mass.fitsEnvelope;
+  const unsupported = mass.level > 1 && !mass.supportedByLowerFloor;
+  const invalid = overCapacity || unsupported;
+
+  if (!renderable) return null;
 
   return (
     <group>
@@ -168,24 +183,38 @@ function FloorMassMesh({
       >
         <meshStandardMaterial
           color={
-            active
-              ? "#ef4444"
-              : overCapacity
-                ? "#dc2626"
-                : USE_COLOR[mass.dominantUse]
+            unsupported
+              ? "#dc2626"
+              : active
+                ? "#ef4444"
+                : overCapacity
+                  ? "#dc2626"
+                  : USE_COLOR[mass.dominantUse]
           }
           transparent
-          opacity={active ? 0.9 : lowOpacity ? 0.34 : 0.7}
+          opacity={
+            unsupported
+              ? active
+                ? 0.28
+                : 0.12
+              : active
+                ? 0.9
+                : lowOpacity
+                  ? 0.34
+                  : 0.7
+          }
           roughness={0.58}
           metalness={0.04}
+          wireframe={unsupported}
           side={THREE.DoubleSide}
+          depthWrite={!unsupported}
         />
       </mesh>
       <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
         <lineBasicMaterial
-          color={active || overCapacity ? "#991b1b" : "#334155"}
+          color={invalid ? "#991b1b" : "#334155"}
           transparent
-          opacity={0.58}
+          opacity={unsupported ? 0.95 : 0.58}
         />
       </lineSegments>
       <Text
@@ -195,12 +224,18 @@ function FloorMassMesh({
           labelPoint.z,
         ]}
         fontSize={Math.max(0.65, extent * 0.055)}
-        color={active || overCapacity ? "#991b1b" : "#334155"}
+        color={invalid ? "#991b1b" : "#334155"}
         anchorX="left"
         anchorY="middle"
         maxWidth={extent * 1.1}
       >
-        {`${mass.label} · ${floorUseSummary(mass)}${overCapacity ? " · 면적 초과" : ""}`}
+        {`${mass.label} · ${floorUseSummary(mass)}${
+          unsupported
+            ? " · 하부 지지면 부족"
+            : overCapacity
+              ? " · 면적 초과"
+              : ""
+        }`}
       </Text>
     </group>
   );
@@ -208,6 +243,7 @@ function FloorMassMesh({
 
 function ParcelPlate({ shape }: { shape: LocalPlanPoint[] }) {
   const geometry = useMemo(() => {
+    if (!hasRenderableShape(shape)) return new THREE.BufferGeometry();
     const parcelShape = new THREE.Shape();
     shape.forEach((point, index) => {
       if (index === 0) parcelShape.moveTo(point.x, point.z);
@@ -354,7 +390,6 @@ function createPlanningMassData(
     /주거/.test(zoning),
     edgeSetbacks
   );
-  // 지하층에는 정북일조 계단식 외곽선을 재사용하지 않고 측면·도로 이격만 적용한다.
   const basementBuildable = calcBuildableArea(
     boundary,
     0.5,
@@ -425,6 +460,9 @@ function createPlanningMassData(
 }
 
 function areaDifferenceLabel(mass: PlanningFloorMass): string {
+  if (mass.level > 1 && !mass.supportedByLowerFloor) {
+    return `하부 지지 중첩 ${num(mass.supportOverlapRatio * 100, 0)}% · 구조 연결 검토`;
+  }
   if (!mass.fitsEnvelope) {
     return `법규 외곽선보다 ${num(mass.capacityShortfallSqm, 1)}㎡ 초과`;
   }
@@ -440,7 +478,23 @@ function areaDifferenceLabel(mass: PlanningFloorMass): string {
 
 function CapacityNotice({ model }: { model: PlanningMassModel }) {
   const capacity = model.capacity;
-  const ok = capacity.allFloorsFit;
+  const unsupported = model.aboveGroundFloors.filter(
+    (floor) => floor.level > 1 && !floor.supportedByLowerFloor
+  );
+  const areaOk = capacity.allFloorsFit;
+  const supportOk = unsupported.length === 0;
+  const ok = areaOk && supportOk;
+  const title = !areaOk
+    ? "층별 프로그램 면적 초과"
+    : !supportOk
+      ? "상층 하부 지지면 부족"
+      : "배치 면적·층간 연결 가능";
+  const message = !areaOk
+    ? `${capacity.overCapacityFloorCount}개 층이 법규 외곽선보다 총 ${num(capacity.totalShortfallSqm, 1)}㎡ 큽니다. 3D는 현재 가능한 면적까지만 표시합니다.`
+    : !supportOk
+      ? `${unsupported.map((floor) => floor.label).join(", ")}이 아래층과 충분히 겹치지 않습니다. 빨간 와이어프레임은 확정 매스가 아닌 검토 후보입니다.`
+      : "각 층 프로그램 면적이 법규 외곽선 안에 있고 상층이 바로 아래층과 최소 지지 중첩을 확보합니다.";
+
   return (
     <div
       style={{
@@ -454,12 +508,8 @@ function CapacityNotice({ model }: { model: PlanningMassModel }) {
         lineHeight: 1.5,
       }}
     >
-      <strong>{ok ? "배치 면적 수용 가능" : "층별 프로그램 면적 초과"}</strong>
-      <span style={{ marginLeft: 7 }}>
-        {ok
-          ? "3D는 각 층 프로그램 면적을 법규 외곽선 안에서 자동 맞춤했습니다."
-          : `${capacity.overCapacityFloorCount}개 층이 법규 외곽선보다 총 ${num(capacity.totalShortfallSqm, 1)}㎡ 큽니다. 3D는 현재 가능한 면적까지만 표시합니다.`}
-      </span>
+      <strong>{title}</strong>
+      <span style={{ marginLeft: 7 }}>{message}</span>
     </div>
   );
 }
@@ -625,12 +675,19 @@ export function PlanningMassingView({
                 <span
                   className="ui-tag"
                   style={{
-                    color: selectedMass.fitsEnvelope
-                      ? "var(--pos-fg)"
-                      : "var(--neg-fg)",
+                    color:
+                      selectedMass.fitsEnvelope &&
+                      selectedMass.supportedByLowerFloor
+                        ? "var(--pos-fg)"
+                        : "var(--neg-fg)",
                   }}
                 >
-                  {selectedMass.fitsEnvelope ? "면적 수용" : "면적 초과"}
+                  {!selectedMass.fitsEnvelope
+                    ? "면적 초과"
+                    : selectedMass.level > 1 &&
+                        !selectedMass.supportedByLowerFloor
+                      ? "하부 지지 부족"
+                      : "배치 가능"}
                 </span>
               </div>
               <p
@@ -658,6 +715,12 @@ export function PlanningMassingView({
                 label="배치 판정"
                 value={areaDifferenceLabel(selectedMass)}
               />
+              {selectedMass.level > 1 && (
+                <InfoRow
+                  label="하부 지지 중첩"
+                  value={`${num(selectedMass.supportOverlapRatio * 100, 0)}%`}
+                />
+              )}
               <InfoRow
                 label="층고"
                 value={`${selectedMass.floorHeightM.toFixed(1)}m`}
@@ -732,46 +795,53 @@ export function PlanningMassingView({
               <div style={{ display: "grid", gap: 5 }}>
                 {[...visibleFloors]
                   .sort((a, b) => b.level - a.level)
-                  .map((mass) => (
-                    <button
-                      type="button"
-                      key={mass.id}
-                      onClick={() => setSelectedFloorId(mass.id)}
-                      style={{
-                        width: "100%",
-                        border: `1px solid ${
-                          mass.fitsEnvelope
-                            ? "var(--border-faint, var(--border))"
-                            : "var(--neg-fg)"
-                        }`,
-                        borderRadius: 7,
-                        padding: "7px 8px",
-                        background: mass.fitsEnvelope
-                          ? "var(--bg-elev)"
-                          : "var(--neg-soft)",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        color: "var(--fg)",
-                        fontFamily: "inherit",
-                        fontSize: 10.5,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <strong>{mass.label}</strong>
-                      <span
+                  .map((mass) => {
+                    const unsupported =
+                      mass.level > 1 && !mass.supportedByLowerFloor;
+                    const invalid = !mass.fitsEnvelope || unsupported;
+                    return (
+                      <button
+                        type="button"
+                        key={mass.id}
+                        onClick={() => setSelectedFloorId(mass.id)}
                         style={{
-                          color: mass.fitsEnvelope
-                            ? "var(--fg-muted)"
-                            : "var(--neg-fg)",
+                          width: "100%",
+                          border: `1px solid ${
+                            invalid
+                              ? "var(--neg-fg)"
+                              : "var(--border-faint, var(--border))"
+                          }`,
+                          borderRadius: 7,
+                          padding: "7px 8px",
+                          background: invalid
+                            ? "var(--neg-soft)"
+                            : "var(--bg-elev)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          color: "var(--fg)",
+                          fontFamily: "inherit",
+                          fontSize: 10.5,
+                          cursor: "pointer",
                         }}
                       >
-                        {mass.fitsEnvelope
-                          ? floorUseSummary(mass)
-                          : `${num(mass.capacityShortfallSqm, 1)}㎡ 초과`}
-                      </span>
-                    </button>
-                  ))}
+                        <strong>{mass.label}</strong>
+                        <span
+                          style={{
+                            color: invalid
+                              ? "var(--neg-fg)"
+                              : "var(--fg-muted)",
+                          }}
+                        >
+                          {!mass.fitsEnvelope
+                            ? `${num(mass.capacityShortfallSqm, 1)}㎡ 초과`
+                            : unsupported
+                              ? `하부 중첩 ${num(mass.supportOverlapRatio * 100, 0)}%`
+                              : floorUseSummary(mass)}
+                        </span>
+                      </button>
+                    );
+                  })}
               </div>
             </div>
           )}
@@ -798,7 +868,7 @@ export function PlanningMassingView({
           color: "var(--fg-faint)",
         }}
       >
-        프로그램 면적이 법규 외곽선 안에 들어오면 3D를 해당 면적에 자동 맞춥니다. 초과하는 경우에는 가능한 외곽선까지만 표시하며, 정북일조 적용 여부와 경계 조건은 인허가 단계에서 최종 확인해야 합니다. 실별 평면, 코어, 구조 그리드는 아직 포함하지 않습니다.
+        프로그램 면적이 법규 외곽선 안에 들어오면 3D를 해당 면적에 자동 맞춥니다. 아래층과 충분히 겹치지 않는 상층은 빨간 와이어프레임 후보로 표시하며 대표안 확정 전에 구조 전이 또는 배치 조정이 필요합니다. 정북일조와 구조 적합성은 인허가·구조설계 단계에서 최종 확인해야 합니다.
       </p>
 
       <style jsx>{`
