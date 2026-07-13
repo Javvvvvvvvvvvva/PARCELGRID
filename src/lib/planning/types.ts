@@ -58,6 +58,11 @@ export type ParkingStrategy =
   | "mechanical"
   | "mixed";
 
+export type ParkingOrientation =
+  | "auto"
+  | "parallel-front"
+  | "perpendicular-front";
+
 export interface PlanningPlacement {
   rotationDeg: number;
   offsetXM: number;
@@ -68,8 +73,20 @@ export interface PlanningPlacement {
 
 export interface PlanningParking {
   strategy: ParkingStrategy;
+  /** 사용자가 저장한 계획 주차대수. 실제 배치 엔진 결과와 비교한다. */
   providedCars: number;
   notes?: string;
+  /** Stage 2 주차면 자동 배치 방향. */
+  orientation?: ParkingOrientation;
+  /** 예비 주차면 폭·길이와 통로 폭. 관할 기준에 따라 조정 가능하다. */
+  stallWidthM?: number;
+  stallDepthM?: number;
+  aisleWidthM?: number;
+  entryWidthM?: number;
+  /** 필로티 내부 계단·엘리베이터·로비 등 주차 불가 코어 면적. */
+  coreAreaSqm?: number;
+  /** 기둥과 구조 여유로 감소하는 개략 주차 효율. */
+  columnLossPct?: number;
 }
 
 export type PlanningCheckStatus = "pass" | "review" | "fail" | "unknown";
