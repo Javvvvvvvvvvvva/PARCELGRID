@@ -32,8 +32,17 @@ export interface PlanningFloorMass {
   floorHeightM: number;
   shape: LocalPlanPoint[];
   programAreaSqm: number;
+  /** 법규 엔진이 해당 층에 허용한 최대 외곽선 면적. */
+  envelopeAreaSqm: number;
+  /** 프로그램 면적과 법규 외곽선 중 더 작은 3D 목표 면적. */
+  targetAreaSqm: number;
   visualAreaSqm: number;
   areaDifferencePct: number;
+  /** 프로그램 면적이 법규 외곽선보다 큰 경우의 초과 면적. */
+  capacityShortfallSqm: number;
+  fitsEnvelope: boolean;
+  /** 법규 외곽선을 기준으로 실제 적용된 선형 축척. */
+  appliedScalePct: number;
   footprintScalePct: number;
   northSetbackM: number;
   requiredSetbackM: number;
@@ -44,16 +53,28 @@ export interface PlanningFloorMass {
   zones: PlanningMassZoneSummary[];
 }
 
+export interface PlanningMassCapacitySummary {
+  allFloorsFit: boolean;
+  overCapacityFloorCount: number;
+  totalShortfallSqm: number;
+  maxShortfallSqm: number;
+}
+
 export interface PlanningMassModel {
   floors: PlanningFloorMass[];
   aboveGroundFloors: PlanningFloorMass[];
   basementFloors: PlanningFloorMass[];
   totalHeightM: number;
   basementDepthM: number;
+  capacity: PlanningMassCapacitySummary;
 }
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 export function polygonAreaSqm(points: LocalPlanPoint[]): number {
@@ -94,14 +115,25 @@ export function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
   return { x: x / divisor, z: z / divisor };
 }
 
+/**
+ * 법규 외곽선 안에서 프로그램 면적을 우선 맞춘 뒤 사용자가 지정한 선형 외곽선 비율을 적용한다.
+ * targetAreaSqm을 생략하면 기존처럼 법규 외곽선 자체에 footprintScalePct만 적용한다.
+ */
 export function transformPlanningFootprint(
   points: LocalPlanPoint[],
   footprintScalePct: number,
   northSetbackM: number,
-  placement: PlanningPlacement
+  placement: PlanningPlacement,
+  targetAreaSqm?: number
 ): LocalPlanPoint[] {
   const center = polygonCentroid(points);
-  const scale = Math.min(1, Math.max(0.1, footprintScalePct / 100));
+  const envelopeAreaSqm = polygonAreaSqm(points);
+  const manualScale = clamp(footprintScalePct / 100, 0.1, 1);
+  const areaFitScale =
+    targetAreaSqm != null && targetAreaSqm > 0 && envelopeAreaSqm > 0
+      ? Math.sqrt(Math.min(targetAreaSqm, envelopeAreaSqm) / envelopeAreaSqm)
+      : 1;
+  const scale = clamp(areaFitScale * manualScale, 0.01, 1);
   const angle = (placement.rotationDeg * Math.PI) / 180;
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
@@ -152,16 +184,26 @@ function buildMass(
   baseHeightM: number,
   topHeightM: number
 ): PlanningFloorMass {
+  const programAreaSqm = floorProgramArea(floor);
+  const measuredEnvelopeAreaSqm = polygonAreaSqm(envelope.shape);
+  const envelopeAreaSqm = measuredEnvelopeAreaSqm > 0
+    ? measuredEnvelopeAreaSqm
+    : nonNegative(envelope.envelopeAreaSqm);
+  const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
   const shape = transformPlanningFootprint(
     envelope.shape,
     floor.footprintScalePct,
     floor.northSetbackM,
-    placement
+    placement,
+    targetAreaSqm
   );
-  const programAreaSqm = floorProgramArea(floor);
   const visualAreaSqm = polygonAreaSqm(shape);
   const areaDifferencePct = programAreaSqm > 0
     ? ((visualAreaSqm - programAreaSqm) / programAreaSqm) * 100
+    : 0;
+  const capacityShortfallSqm = Math.max(0, programAreaSqm - envelopeAreaSqm);
+  const appliedScalePct = envelopeAreaSqm > 0
+    ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
     : 0;
 
   return {
@@ -173,8 +215,13 @@ function buildMass(
     floorHeightM: nonNegative(floor.floorHeightM),
     shape,
     programAreaSqm,
+    envelopeAreaSqm,
+    targetAreaSqm,
     visualAreaSqm,
     areaDifferencePct,
+    capacityShortfallSqm,
+    fitsEnvelope: capacityShortfallSqm <= 0.1,
+    appliedScalePct,
     footprintScalePct: floor.footprintScalePct,
     northSetbackM: nonNegative(floor.northSetbackM),
     requiredSetbackM: nonNegative(envelope.requiredSetbackM),
@@ -187,6 +234,26 @@ function buildMass(
       areaSqm: nonNegative(zone.areaSqm),
       unitCount: Math.max(0, Math.floor(zone.unitCount)),
     })),
+  };
+}
+
+export function summarizePlanningMassCapacity(
+  floors: PlanningFloorMass[]
+): PlanningMassCapacitySummary {
+  const overCapacity = floors.filter((floor) => !floor.fitsEnvelope);
+  const totalShortfallSqm = overCapacity.reduce(
+    (sum, floor) => sum + floor.capacityShortfallSqm,
+    0
+  );
+  const maxShortfallSqm = overCapacity.reduce(
+    (max, floor) => Math.max(max, floor.capacityShortfallSqm),
+    0
+  );
+  return {
+    allFloorsFit: overCapacity.length === 0,
+    overCapacityFloorCount: overCapacity.length,
+    totalShortfallSqm,
+    maxShortfallSqm,
   };
 }
 
@@ -228,8 +295,7 @@ export function buildPlanningMassModel(
   let currentDepthM = 0;
   const basementFloors = basementPrograms.map((floor) => {
     const height = nonNegative(floor.floorHeightM);
-    // Normalize the first basement ceiling to positive zero. JavaScript preserves -0,
-    // which is numerically equivalent but fails strict Object.is comparisons in tests.
+    // Avoid JavaScript's negative zero at the ground line.
     const top = currentDepthM === 0 ? 0 : -currentDepthM;
     currentDepthM += height;
     const base = -currentDepthM;
@@ -242,11 +308,13 @@ export function buildPlanningMassModel(
     );
   });
 
+  const floors = [...aboveGroundFloors, ...basementFloors];
   return {
-    floors: [...aboveGroundFloors, ...basementFloors],
+    floors,
     aboveGroundFloors,
     basementFloors,
     totalHeightM: currentHeightM,
     basementDepthM: currentDepthM,
+    capacity: summarizePlanningMassCapacity(floors),
   };
 }
