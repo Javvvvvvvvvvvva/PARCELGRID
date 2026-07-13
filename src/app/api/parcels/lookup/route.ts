@@ -21,10 +21,8 @@ import {
   estimateUnitAreaSqm,
   type BuildingLookupResult,
 } from "@/lib/integrations/molit-building";
-import {
-  attachExistingBuildingGeometry,
-  fetchExistingBuildingGeometry,
-} from "@/lib/integrations/vworld-buildings";
+import { attachExistingBuildingGeometry } from "@/lib/integrations/vworld-buildings";
+import { fetchExistingBuildingGeometry } from "@/lib/integrations/vworld-buildings-client";
 import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 
 export const runtime = "nodejs";
