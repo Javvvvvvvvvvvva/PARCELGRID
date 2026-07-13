@@ -90,14 +90,18 @@ export function polygonAreaSqm(points: LocalPlanPoint[]): number {
 
 export function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
   if (points.length === 0) return { x: 0, z: 0 };
-  const signedArea = points.reduce((sum, current, index) => {
-    const next = points[(index + 1) % points.length];
-    return sum + current.x * next.z - next.x * current.z;
-  }, 0) / 2;
+  const signedArea =
+    points.reduce((sum, current, index) => {
+      const next = points[(index + 1) % points.length];
+      return sum + current.x * next.z - next.x * current.z;
+    }, 0) / 2;
 
   if (Math.abs(signedArea) < 1e-9) {
     return points.reduce(
-      (sum, point) => ({ x: sum.x + point.x / points.length, z: sum.z + point.z / points.length }),
+      (sum, point) => ({
+        x: sum.x + point.x / points.length,
+        z: sum.z + point.z / points.length,
+      }),
       { x: 0, z: 0 }
     );
   }
@@ -117,16 +121,24 @@ export function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
 
 /**
  * 법규 외곽선 안에서 프로그램 면적을 우선 맞춘 뒤 사용자가 지정한 선형 외곽선 비율을 적용한다.
+ *
+ * 면적 축척은 각 층 자체 중심을 기준으로 수행하지만, 건물 회전은 모든 층이 공유하는
+ * rotationPivot을 기준으로 수행한다. 그래야 층별 법규 외곽선 중심이 서로 달라도
+ * 90도 회전 시 층간 상대 위치와 후퇴 관계가 하나의 건물처럼 함께 회전한다.
+ *
  * targetAreaSqm을 생략하면 기존처럼 법규 외곽선 자체에 footprintScalePct만 적용한다.
+ * rotationPivot을 생략하면 해당 층 중심을 사용해 단일 외곽선 호출의 기존 동작을 유지한다.
  */
 export function transformPlanningFootprint(
   points: LocalPlanPoint[],
   footprintScalePct: number,
   northSetbackM: number,
   placement: PlanningPlacement,
-  targetAreaSqm?: number
+  targetAreaSqm?: number,
+  rotationPivot?: LocalPlanPoint
 ): LocalPlanPoint[] {
-  const center = polygonCentroid(points);
+  const floorCenter = polygonCentroid(points);
+  const pivot = rotationPivot ?? floorCenter;
   const envelopeAreaSqm = polygonAreaSqm(points);
   const manualScale = clamp(footprintScalePct / 100, 0.1, 1);
   const areaFitScale =
@@ -139,15 +151,21 @@ export function transformPlanningFootprint(
   const sin = Math.sin(angle);
 
   return points.map((point) => {
-    const scaledX = (point.x - center.x) * scale;
-    const scaledZ = (point.z - center.z) * scale;
-    const rotatedX = scaledX * cos - scaledZ * sin;
-    const rotatedZ = scaledX * sin + scaledZ * cos;
+    // 1) 해당 층 면적은 그 층의 중심을 기준으로 축척한다.
+    const scaledX = floorCenter.x + (point.x - floorCenter.x) * scale;
+    const scaledZ = floorCenter.z + (point.z - floorCenter.z) * scale;
+
+    // 2) 축척된 층 전체는 건물 공통 기준점을 중심으로 함께 회전한다.
+    const pivotX = scaledX - pivot.x;
+    const pivotZ = scaledZ - pivot.z;
+    const rotatedX = pivotX * cos - pivotZ * sin;
+    const rotatedZ = pivotX * sin + pivotZ * cos;
+
     return {
-      x: center.x + rotatedX + placement.offsetXM,
+      x: pivot.x + rotatedX + placement.offsetXM,
       // Local z grows toward the south. A north setback therefore moves the mass south.
       z:
-        center.z +
+        pivot.z +
         rotatedZ +
         placement.offsetZM +
         nonNegative(placement.northSetbackM) +
@@ -157,12 +175,18 @@ export function transformPlanningFootprint(
 }
 
 function floorProgramArea(floor: FloorProgram): number {
-  return floor.zones.reduce((sum, zone) => sum + nonNegative(zone.areaSqm), 0);
+  return floor.zones.reduce(
+    (sum, zone) => sum + nonNegative(zone.areaSqm),
+    0
+  );
 }
 
 function countUnits(floor: FloorProgram, uses: FloorUseType[]): number {
   return floor.zones.reduce(
-    (sum, zone) => uses.includes(zone.useType) ? sum + Math.max(0, Math.floor(zone.unitCount)) : sum,
+    (sum, zone) =>
+      uses.includes(zone.useType)
+        ? sum + Math.max(0, Math.floor(zone.unitCount))
+        : sum,
     0
   );
 }
@@ -171,9 +195,13 @@ function dominantUse(floor: FloorProgram): FloorUseType | "mixed" {
   const positive = floor.zones.filter((zone) => zone.areaSqm > 0);
   if (positive.length === 0) return "other";
   const byUse = new Map<FloorUseType, number>();
-  positive.forEach((zone) => byUse.set(zone.useType, (byUse.get(zone.useType) ?? 0) + zone.areaSqm));
+  positive.forEach((zone) =>
+    byUse.set(zone.useType, (byUse.get(zone.useType) ?? 0) + zone.areaSqm)
+  );
   const ranked = [...byUse.entries()].sort((a, b) => b[1] - a[1]);
-  if (ranked.length > 1 && ranked[1][1] >= ranked[0][1] * 0.6) return "mixed";
+  if (ranked.length > 1 && ranked[1][1] >= ranked[0][1] * 0.6) {
+    return "mixed";
+  }
   return ranked[0][0];
 }
 
@@ -181,30 +209,38 @@ function buildMass(
   floor: FloorProgram,
   envelope: PlanningEnvelopeStep,
   placement: PlanningPlacement,
+  rotationPivot: LocalPlanPoint,
   baseHeightM: number,
   topHeightM: number
 ): PlanningFloorMass {
   const programAreaSqm = floorProgramArea(floor);
   const measuredEnvelopeAreaSqm = polygonAreaSqm(envelope.shape);
-  const envelopeAreaSqm = measuredEnvelopeAreaSqm > 0
-    ? measuredEnvelopeAreaSqm
-    : nonNegative(envelope.envelopeAreaSqm);
+  const envelopeAreaSqm =
+    measuredEnvelopeAreaSqm > 0
+      ? measuredEnvelopeAreaSqm
+      : nonNegative(envelope.envelopeAreaSqm);
   const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
   const shape = transformPlanningFootprint(
     envelope.shape,
     floor.footprintScalePct,
     floor.northSetbackM,
     placement,
-    targetAreaSqm
+    targetAreaSqm,
+    rotationPivot
   );
   const visualAreaSqm = polygonAreaSqm(shape);
-  const areaDifferencePct = programAreaSqm > 0
-    ? ((visualAreaSqm - programAreaSqm) / programAreaSqm) * 100
-    : 0;
-  const capacityShortfallSqm = Math.max(0, programAreaSqm - envelopeAreaSqm);
-  const appliedScalePct = envelopeAreaSqm > 0
-    ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
-    : 0;
+  const areaDifferencePct =
+    programAreaSqm > 0
+      ? ((visualAreaSqm - programAreaSqm) / programAreaSqm) * 100
+      : 0;
+  const capacityShortfallSqm = Math.max(
+    0,
+    programAreaSqm - envelopeAreaSqm
+  );
+  const appliedScalePct =
+    envelopeAreaSqm > 0
+      ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
+      : 0;
 
   return {
     id: floor.id,
@@ -262,14 +298,18 @@ export function buildPlanningMassModel(
   envelopeSteps: PlanningEnvelopeStep[],
   placement: PlanningPlacement
 ): PlanningMassModel {
-  const envelopeByLevel = new Map(envelopeSteps.map((step) => [step.level, step]));
-  const fallbackEnvelope = envelopeSteps.find((step) => step.level === 1) ?? envelopeSteps[0] ?? {
-    level: 1,
-    shape: [],
-    envelopeAreaSqm: 0,
-    requiredSetbackM: 0,
-    envelopeAvailable: false,
-  };
+  const envelopeByLevel = new Map(
+    envelopeSteps.map((step) => [step.level, step])
+  );
+  const fallbackEnvelope =
+    envelopeSteps.find((step) => step.level === 1) ??
+    envelopeSteps[0] ?? {
+      level: 1,
+      shape: [],
+      envelopeAreaSqm: 0,
+      requiredSetbackM: 0,
+      envelopeAvailable: false,
+    };
 
   const groundPrograms = floorPrograms
     .filter((floor) => floor.level > 0)
@@ -277,6 +317,14 @@ export function buildPlanningMassModel(
   const basementPrograms = floorPrograms
     .filter((floor) => floor.level < 0)
     .sort((a, b) => b.level - a.level); // B1, B2, B3
+
+  // 지상 1층(또는 가장 낮은 지상층)의 법규 외곽선 중심을 건물 전체 회전축으로 사용한다.
+  // 지상층이 없는 경우에는 fallback 외곽선 중심을 사용한다.
+  const pivotEnvelope =
+    (groundPrograms.length > 0
+      ? envelopeByLevel.get(groundPrograms[0].level)
+      : undefined) ?? fallbackEnvelope;
+  const rotationPivot = polygonCentroid(pivotEnvelope.shape);
 
   let currentHeightM = 0;
   const aboveGroundFloors = groundPrograms.map((floor) => {
@@ -287,6 +335,7 @@ export function buildPlanningMassModel(
       floor,
       envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
       placement,
+      rotationPivot,
       base,
       currentHeightM
     );
@@ -303,6 +352,7 @@ export function buildPlanningMassModel(
       floor,
       envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
       placement,
+      rotationPivot,
       base,
       top
     );
