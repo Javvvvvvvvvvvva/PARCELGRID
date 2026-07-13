@@ -160,7 +160,8 @@ export interface PlanningScenarioSummary {
   rentableAreaSqm: number;
   residentialUnitCount: number;
   commercialUnitCount: number;
-  /** 주거 세대 + 상가·업무 호실의 합계. */
+  totalUnitCount: number;
+  /** 기존 화면 호환용 주거 세대수 alias. */
   unitCount: number;
   providedCars: number;
 }
