@@ -72,20 +72,42 @@ describe("Stage 2 planning massing", () => {
     expect(model.aboveGroundFloors[1].topHeightM).toBeCloseTo(6.6, 5);
     expect(model.basementFloors[0].baseHeightM).toBeCloseTo(-3.3, 5);
     expect(model.basementFloors[0].topHeightM).toBe(0);
-    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(64, 5);
+    // 60㎡ 프로그램을 먼저 맞춘 뒤 80% 선형 축척을 적용하므로 60 × 0.8² = 38.4㎡.
+    expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(38.4, 5);
     expect(model.aboveGroundFloors[1].residentialUnits).toBe(2);
     expect(model.aboveGroundFloors[0].commercialUnits).toBe(1);
     expect(model.aboveGroundFloors[0].dominantUse).toBe("retail");
   });
 
-  it("reports the difference between programmed and visual footprint areas", () => {
+  it("fits the 3D footprint to programmed area when the legal envelope is large enough", () => {
     const floor = createFloorProgram(1, [createFloorZone("residential", 50, 1)], 3);
     floor.footprintScalePct = 100;
 
     const model = buildPlanningMassModel([floor], envelopeSteps, placement);
+    const mass = model.aboveGroundFloors[0];
 
-    expect(model.aboveGroundFloors[0].programAreaSqm).toBe(50);
-    expect(model.aboveGroundFloors[0].visualAreaSqm).toBeCloseTo(100, 5);
-    expect(model.aboveGroundFloors[0].areaDifferencePct).toBeCloseTo(100, 5);
+    expect(mass.programAreaSqm).toBe(50);
+    expect(mass.envelopeAreaSqm).toBeCloseTo(100, 5);
+    expect(mass.visualAreaSqm).toBeCloseTo(50, 5);
+    expect(mass.areaDifferencePct).toBeCloseTo(0, 5);
+    expect(mass.capacityShortfallSqm).toBe(0);
+    expect(mass.fitsEnvelope).toBe(true);
+    expect(model.capacity.allFloorsFit).toBe(true);
+  });
+
+  it("caps the 3D footprint and reports a legal-envelope capacity shortfall", () => {
+    const floor = createFloorProgram(1, [createFloorZone("residential", 120, 2)], 3);
+    floor.footprintScalePct = 100;
+
+    const model = buildPlanningMassModel([floor], envelopeSteps, placement);
+    const mass = model.aboveGroundFloors[0];
+
+    expect(mass.programAreaSqm).toBe(120);
+    expect(mass.envelopeAreaSqm).toBeCloseTo(100, 5);
+    expect(mass.visualAreaSqm).toBeCloseTo(100, 5);
+    expect(mass.capacityShortfallSqm).toBeCloseTo(20, 5);
+    expect(mass.fitsEnvelope).toBe(false);
+    expect(model.capacity.overCapacityFloorCount).toBe(1);
+    expect(model.capacity.totalShortfallSqm).toBeCloseTo(20, 5);
   });
 });
