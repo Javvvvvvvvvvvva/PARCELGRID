@@ -35,9 +35,11 @@ function distributeUnits(totalUnits: number, floors: number): number[] {
 
 export function createBlankScenarioForParcel(
   parcel: PlanningScenarioParcelSeed,
-  name = "새 계획안"
+  name = "새 계획안",
+  projectId?: string
 ): PlanningScenario {
   const scenario = createBlankPlanningScenario({
+    projectId,
     name,
     origin: "custom",
     acquisitionCostManwon: parcel.acquisitionCostManwon,
@@ -59,10 +61,11 @@ export function createBlankScenarioForParcel(
 
 export function createStarterPlanningScenario(
   parcel: PlanningScenarioParcelSeed,
-  legacyPlan?: EnvelopePlan | null
+  legacyPlan?: EnvelopePlan | null,
+  projectId?: string
 ): PlanningScenario {
   if (!legacyPlan) {
-    return createBlankScenarioForParcel(parcel, "현재 계획 초안");
+    return createBlankScenarioForParcel(parcel, "현재 계획 초안", projectId);
   }
 
   const floors = clamp(Math.floor(legacyPlan.floors || 1), 1, 30);
@@ -75,6 +78,7 @@ export function createStarterPlanningScenario(
   const footprint = Math.min(maxFootprintArea(parcel), targetGfa / floors);
   const unitsByFloor = distributeUnits(legacyPlan.units, floors);
   const scenario = createBlankPlanningScenario({
+    projectId,
     name: "기존 입력안",
     origin: "legacy",
     acquisitionCostManwon: parcel.acquisitionCostManwon,
