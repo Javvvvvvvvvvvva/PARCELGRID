@@ -129,6 +129,8 @@ export interface PlanningEconomicsPreview {
 
 export interface PlanningScenario {
   id: string;
+  /** 브라우저에 여러 프로젝트가 공존할 때 계획안이 섞이지 않도록 하는 프로젝트 키. */
+  projectId?: string;
   name: string;
   description?: string;
   origin: PlanningScenarioOrigin;
