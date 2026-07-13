@@ -183,7 +183,7 @@ describe("Stage 2 planning massing", () => {
     expect(model.aboveGroundFloors[1].visualAreaSqm).toBeCloseTo(100, 4);
   });
 
-  it("uses a clean four-corner plan inside a kinked upper-floor envelope", () => {
+  it("preserves a kinked legal-envelope shape instead of forcing a rectangle", () => {
     const lower = createFloorProgram(
       1,
       [createFloorZone("residential", 30, 1)],
@@ -226,9 +226,57 @@ describe("Stage 2 planning massing", () => {
     );
     const upperMass = model.aboveGroundFloors[1];
 
-    expect(upperMass.shape).toHaveLength(4);
+    expect(upperMass.shape).toHaveLength(6);
     expect(upperMass.visualAreaSqm).toBeCloseTo(6, 3);
     expect(polygonInsidePolygon(upperMass.shape, kinkedUpper).fits).toBe(true);
     expect(upperMass.fitsEnvelope).toBe(true);
+  });
+
+  it("moves a small upper footprint toward the lower floor while staying in its legal envelope", () => {
+    const lower = createFloorProgram(
+      1,
+      [createFloorZone("residential", 80, 1)],
+      3
+    );
+    const upper = createFloorProgram(
+      2,
+      [createFloorZone("residential", 4, 1)],
+      3
+    );
+    const shiftedUpperEnvelope = square.map((point) => ({
+      x: point.x,
+      z: point.z + 8,
+    }));
+    const steps: PlanningEnvelopeStep[] = [
+      {
+        level: 1,
+        shape: square,
+        envelopeAreaSqm: 100,
+        requiredSetbackM: 0,
+        envelopeAvailable: true,
+      },
+      {
+        level: 2,
+        shape: shiftedUpperEnvelope,
+        envelopeAreaSqm: 100,
+        requiredSetbackM: 4,
+        envelopeAvailable: true,
+      },
+    ];
+
+    const model = buildPlanningMassModel(
+      [lower, upper],
+      steps,
+      { ...placement, offsetXM: 0, offsetZM: 0 }
+    );
+    const upperMass = model.aboveGroundFloors[1];
+
+    expect(upperMass.shape).toHaveLength(4);
+    expect(upperMass.visualAreaSqm).toBeCloseTo(4, 4);
+    expect(upperMass.supportedByLowerFloor).toBe(true);
+    expect(upperMass.supportOverlapRatio).toBeGreaterThanOrEqual(0.12);
+    expect(
+      polygonInsidePolygon(upperMass.shape, shiftedUpperEnvelope).fits
+    ).toBe(true);
   });
 });
