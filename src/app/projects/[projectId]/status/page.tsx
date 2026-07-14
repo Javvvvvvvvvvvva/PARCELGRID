@@ -31,7 +31,7 @@ import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 const ExistingBuildingMass = dynamic(
   () =>
     import("@/components/ui/ExistingBuildingMass").then((m) => m.ExistingBuildingMass),
-  { ssr: false, loading: () => <div style={{ height: 360, background: "var(--bg-sunken)" }} /> }
+  { ssr: false, loading: () => <div style={{ height: 460, background: "var(--bg-sunken)" }} /> }
 );
 
 const SQM_PER_PYEONG = 3.305785;
@@ -350,12 +350,12 @@ export default function StatusPage({
         ) : (
           <p style={{ fontSize: 13, color: "var(--fg-muted)" }}>좌표 정보가 없어 지도를 표시할 수 없습니다.</p>
         )}
-          <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-            우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표입니다.
-          </p>
+        <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
+          우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표입니다.
+        </p>
       </Panel>
 
-      {/* ④ 기존 건물 3D + ⑤ 알고리즘 요약 */}
+      {/* ④ 기존 건물 개략 매스 + ⑤ 알고리즘 요약 */}
       <div
         style={{
           display: "grid",
@@ -365,15 +365,20 @@ export default function StatusPage({
           alignItems: "start",
         }}
       >
-        <Panel title="④ 기존 건물 3D" source="건축물대장 기반 단순 매스 · 신축 아님">
+        <Panel
+          title="④ 기존 건물 개략 매스"
+          source="VWorld 필지·도로 GIS · MOLIT 건축물대장"
+        >
           <ExistingBuildingMass
             boundary={parcel.boundary}
+            roads={parcel.roads}
             currentBuilding={currentBuilding}
             lotArea={parcel.lotArea}
-            height={400}
+            height={460}
           />
-          <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-            건축물대장 기반 현재 건물 매스 · 드래그로 회전
+          <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)", lineHeight: 1.55 }}>
+            지도 정합은 북쪽과 도로 방향을 고정합니다. 3D 조감에서는 자유 회전할 수 있습니다.
+            건물 외곽은 건축물대장 면적에 맞춘 개략 형상이며 실제 배치도는 아닙니다.
           </p>
         </Panel>
 
