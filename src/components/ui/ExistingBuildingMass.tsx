@@ -7,6 +7,7 @@
  *   1. VWorld GIS건물통합정보(dt_d010)의 실제 건물 외곽선·위치
  *   2. 데이터가 없으면 기존 방식(필지 형상 × 건폐율)의 개략 매스 fallback
  *
+ * 대상 필지 주변의 dt_d010 건물은 방향 판단을 위한 반투명 컨텍스트로만 표시한다.
  * 높이 방향은 건축물대장 또는 dt_d010의 층수·높이 속성을 사용하며,
  * 층별 후퇴·지붕·출입구·창호는 현황 도면이 없으므로 표현하지 않는다.
  */
@@ -47,10 +48,13 @@ const LOT_EDGE = "#9a8767";
 const BUILDING_COLOR = "#d9e0e5";
 const BUILDING_EDGE = "#64748b";
 const BASEMENT_COLOR = "#566371";
+const CONTEXT_BUILDING_COLOR = "#7f8c99";
+const CONTEXT_BUILDING_OPACITY = 0.1;
 const ROAD_COLOR = "#59636e";
 const ROAD_CENTER_COLOR = "#d8dde1";
 const SCHEMATIC_ROAD_WIDTH_M = 1.45;
 const FRONT_ROAD_MAX_DISTANCE_M = 12;
+const MAX_CONTEXT_HEIGHT_M = 24;
 
 function openRing<T extends [number, number] | Pt>(ring: T[]): T[] {
   if (ring.length <= 1) return ring;
@@ -221,6 +225,27 @@ function FloorMass({
   );
 }
 
+function ContextMass({ polygon, height }: { polygon: LocalPolygon; height: number }) {
+  const resolvedHeight = Math.max(2.6, Math.min(MAX_CONTEXT_HEIGHT_M, height));
+  const geometry = useMemo(
+    () => extrudePolygon(polygon, resolvedHeight),
+    [polygon, resolvedHeight]
+  );
+  return (
+    <mesh geometry={geometry} position={[0, GRADE_Y + 0.04, 0]} renderOrder={0}>
+      <meshStandardMaterial
+        color={CONTEXT_BUILDING_COLOR}
+        transparent
+        opacity={CONTEXT_BUILDING_OPACITY}
+        depthWrite={false}
+        roughness={1}
+        metalness={0}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+
 function RoadRibbon({ road, extent }: { road: LocalRoad; extent: number }) {
   const segments = useMemo(() => {
     const result: { key: string; x: number; z: number; length: number; angle: number }[] = [];
@@ -348,18 +373,34 @@ function modelFromFootprint(
   };
 }
 
+function modelExtent(models: BuildingModel[], initial: number): number {
+  let value = initial;
+  for (const model of models) {
+    for (const polygon of model.polygons) {
+      for (const ring of polygon) {
+        for (const point of ring) {
+          value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
+        }
+      }
+    }
+  }
+  return value;
+}
+
 function SceneContent({
   boundary,
   roads,
   currentBuilding,
   lotArea,
   showBasement,
+  showContext,
 }: {
   boundary: LngLat[];
   roads: RoadInput[];
   currentBuilding: BuildingLookupResult | null | undefined;
   lotArea: number;
   showBasement: boolean;
+  showContext: boolean;
 }) {
   const main =
     currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
@@ -407,22 +448,27 @@ function SceneContent({
     ];
   }, [geometry, floorHeight, currentBuilding, local, lotArea, lotRing, main]);
 
-  const extent = useMemo(() => {
+  const contextModels = useMemo(() => {
+    if (!local || !showContext || !geometry?.contextFootprints?.length) return [];
+    return geometry.contextFootprints
+      .map((footprint) => modelFromFootprint(footprint, local.center, 3, undefined))
+      .filter((model): model is BuildingModel => model !== null);
+  }, [geometry, local, showContext]);
+
+  const subjectExtent = useMemo(() => {
     let value = 8;
     lotRing.forEach((point) => {
       value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
     });
-    for (const model of models) {
-      for (const polygon of model.polygons) {
-        for (const ring of polygon) {
-          for (const point of ring) {
-            value = Math.max(value, Math.hypot(point.x, point.z) + 2.5);
-          }
-        }
-      }
-    }
-    return value;
+    return modelExtent(models, value);
   }, [lotRing, models]);
+
+  const extent = useMemo(() => {
+    if (!showContext || contextModels.length === 0) return subjectExtent;
+    const fullContextExtent = modelExtent(contextModels, subjectExtent);
+    const contextFrameLimit = Math.max(subjectExtent * 2.8, 28);
+    return Math.min(fullContextExtent, contextFrameLimit);
+  }, [contextModels, showContext, subjectExtent]);
 
   const maxHeight = models.reduce((max, model) => Math.max(max, model.totalHeightM), 0);
   if (lotRing.length < 3) return null;
@@ -445,6 +491,17 @@ function SceneContent({
         <shadowMaterial transparent opacity={0.06} />
       </mesh>
       <gridHelper args={[extent * 2.6, 18, "#d7dde1", "#eaedef"]} position={[0, 0, 0]} />
+
+      {showContext &&
+        contextModels.flatMap((model) =>
+          model.polygons.map((polygon, polygonIndex) => (
+            <ContextMass
+              key={`context-${model.key}-${polygonIndex}`}
+              polygon={polygon}
+              height={model.totalHeightM}
+            />
+          ))
+        )}
 
       {primaryRoad && <RoadRibbon road={primaryRoad} extent={extent} />}
       <SubjectLot ring={lotRing} cutaway={showBasement} />
@@ -506,10 +563,12 @@ function ModelHud({
   currentBuilding,
   lotArea,
   roadName,
+  contextCount,
 }: {
   currentBuilding: BuildingLookupResult;
   lotArea: number;
   roadName: string | null;
+  contextCount: number;
 }) {
   const geometry = getExistingBuildingGeometry(currentBuilding);
   const actual = geometry?.status === "matched" && geometry.footprints.length > 0;
@@ -532,6 +591,7 @@ function ModelHud({
   const labels = [
     actual ? "실제 외곽선" : "개략 형상",
     ...(actual ? [`건물 ${geometry.footprints.length}개 형상`] : []),
+    ...(contextCount > 0 ? [`주변 건물 ${contextCount}동`] : []),
     `지상 최대 ${groundFloors}층`,
     ...(basementFloors > 0 ? [`지하 최대 ${basementFloors}층`] : []),
     ...(roadName !== null ? [roadName || "전면도로"] : []),
@@ -547,6 +607,7 @@ function ModelHud({
         gap: 6,
         flexWrap: "wrap",
         pointerEvents: "none",
+        maxWidth: "calc(100% - 180px)",
       }}
     >
       {labels.map((label) => (
@@ -604,6 +665,7 @@ export function ExistingBuildingMass({
   const storedRoads = useProjectStore((state) => state.data?.parcel.roads ?? []);
   const resolvedRoads = roads.length > 0 ? roads : storedRoads;
   const [showBasement, setShowBasement] = useState(false);
+  const [showContext, setShowContext] = useState(true);
   const [canvasKey, setCanvasKey] = useState(0);
 
   const hasBuilding = Boolean(
@@ -612,6 +674,7 @@ export function ExistingBuildingMass({
   const geometry = getExistingBuildingGeometry(currentBuilding);
   const actualGeometry =
     geometry?.status === "matched" && geometry.footprints.length > 0;
+  const contextCount = geometry?.contextFootprints?.length ?? 0;
   const openBoundary = useMemo(() => {
     if (!boundary || boundary.length < 3) return null;
     return openRing(boundary);
@@ -652,7 +715,7 @@ export function ExistingBuildingMass({
     );
   }
 
-  const cameraDistance = extent * 1.3;
+  const cameraDistance = extent * (showContext && contextCount > 0 ? 2.2 : 1.3);
 
   return (
     <div
@@ -667,7 +730,7 @@ export function ExistingBuildingMass({
       }}
     >
       <Canvas
-        key={canvasKey}
+        key={`${canvasKey}-${showContext ? "context" : "subject"}`}
         shadows
         dpr={[1, 1.5]}
         style={{ cursor: "grab", touchAction: "none" }}
@@ -680,6 +743,7 @@ export function ExistingBuildingMass({
             currentBuilding={hasBuilding ? currentBuilding : null}
             lotArea={lotArea}
             showBasement={showBasement}
+            showContext={showContext}
           />
         </Suspense>
       </Canvas>
@@ -689,10 +753,31 @@ export function ExistingBuildingMass({
           currentBuilding={currentBuilding}
           lotArea={lotArea}
           roadName={primaryRoad ? primaryRoad.name ?? "" : null}
+          contextCount={contextCount}
         />
       )}
 
-      <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 6 }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          display: "flex",
+          gap: 6,
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
+          maxWidth: 250,
+        }}
+      >
+        {contextCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowContext((value) => !value)}
+            style={controlStyle(showContext)}
+          >
+            {showContext ? "주변 숨기기" : "주변 보기"}
+          </button>
+        )}
         {hasBuilding && basementFloors > 0 && (
           <button
             type="button"
@@ -736,7 +821,7 @@ export function ExistingBuildingMass({
             position: "absolute",
             right: 12,
             bottom: 12,
-            maxWidth: 360,
+            maxWidth: 390,
             padding: "7px 9px",
             borderRadius: 7,
             background: "rgba(255,255,255,0.94)",
@@ -748,7 +833,11 @@ export function ExistingBuildingMass({
           }}
         >
           {actualGeometry
-            ? "건물 외곽선·위치는 VWorld GIS건물통합정보 기반입니다. 층별 후퇴·지붕·출입구는 미반영이며, 도로 폭은 상징적으로 표시합니다."
+            ? `대상 건물 외곽선·위치는 VWorld GIS건물통합정보 기반입니다.${
+                contextCount > 0
+                  ? ` 주변 ${contextCount}동은 약 ${geometry?.contextRadiusM ?? 35}m 범위의 방향 확인용 반투명 매스입니다.`
+                  : ""
+              } 층별 후퇴·지붕·출입구는 미반영이며, 도로 폭은 상징적으로 표시합니다.`
             : geometry?.status === "error"
               ? "GIS건물통합정보 조회에 실패해 필지 형상과 건폐율을 이용한 개략 매스를 표시합니다."
               : "일치하는 GIS 건물 형상이 없어 필지 형상과 건폐율을 이용한 개략 매스를 표시합니다."}
