@@ -2,11 +2,17 @@
 
 /**
  * Stage 1 — 기존 건물 개략 매스.
- * 필지·도로를 동일한 WGS84 원점으로 투영해 실제 방향 관계를 유지한다.
- * 건물 외곽은 건축물대장 건축면적에 맞춰 필지 형상을 축소한 개략 형상이다.
+ * 필지와 도로는 동일한 WGS84 원점으로 투영해 실제 방향 관계를 유지한다.
+ * 건물 외곽은 건축물대장 건축면적에 맞춘 개략 형상이며 실제 배치도가 아니다.
  */
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import {
+  Suspense,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Line, OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
@@ -25,18 +31,19 @@ type Pt = { x: number; z: number };
 type ViewMode = "aligned" | "orbit";
 type RoadSegment = { name: string | null; a: Pt; b: Pt };
 
-const FLOOR_GAP = 0.1;
-const GRADE_Y = 0.06;
+const GRADE_Y = 0.08;
+const FLOOR_LINE_OFFSET = 0.015;
 const ROAD_ESTIMATED_WIDTH_M = 4.5;
+const ROAD_OUTER_GAP_M = 0.35;
 
-const ABOVE_COLOR = "#d9dee5";
-const ABOVE_EDGE = "#7f95ad";
+const ABOVE_COLOR = "#d7dde5";
+const ABOVE_EDGE = "#71839a";
 const BASEMENT_COLOR = "#536579";
 const BASEMENT_EDGE = "#334155";
-const SUBJECT_LOT = "#e9f3ff";
+const SUBJECT_LOT = "#eaf3ff";
 const SUBJECT_LOT_EDGE = "#2563eb";
-const ROAD_COLOR = "#64748b";
-const PRIMARY_ROAD_COLOR = "#475569";
+const ROAD_COLOR = "#94a3b8";
+const PRIMARY_ROAD_COLOR = "#334155";
 
 function openRing(boundary: LngLat[]): LngLat[] {
   if (
@@ -55,57 +62,81 @@ function closeRing(boundary: LngLat[]): LngLat[] {
   return [...open, open[0]];
 }
 
-function ringCentroidPt(ring: Pt[]): Pt {
+function ringCentroid(ring: Pt[]): Pt {
+  if (ring.length === 0) return { x: 0, z: 0 };
   let x = 0;
   let z = 0;
-  for (const p of ring) {
-    x += p.x;
-    z += p.z;
+  for (const point of ring) {
+    x += point.x;
+    z += point.z;
   }
   return { x: x / ring.length, z: z / ring.length };
 }
 
-function boundaryToLocalRing(boundary: LngLat[]): { ring: Pt[]; origin: LngLat } | null {
+function boundaryToLocalRing(
+  boundary: LngLat[]
+): { ring: Pt[]; origin: LngLat } | null {
   const closed = closeRing(boundary);
   if (closed.length < 4) return null;
+
   const projected = projectPolygon(closed);
   if (!projected) return null;
 
-  const openPts = openRing(projected.points as LngLat[]);
+  const points = projected.points;
+  const openPoints =
+    points.length > 1 &&
+    points[0][0] === points[points.length - 1][0] &&
+    points[0][1] === points[points.length - 1][1]
+      ? points.slice(0, -1)
+      : points;
+
   return {
-    ring: openPts.map(([x, y]) => ({ x, z: -y })),
+    ring: openPoints.map(([x, y]) => ({ x, z: -y })),
     origin: [projected.center.lng, projected.center.lat],
   };
 }
 
 function lngLatToLocal(point: LngLat, origin: LngLat): Pt {
   const lngMetersPerDeg = 111320 * Math.cos((origin[1] * Math.PI) / 180);
-  const latMetersPerDeg = 110540;
   return {
     x: (point[0] - origin[0]) * lngMetersPerDeg,
-    z: -(point[1] - origin[1]) * latMetersPerDeg,
+    z: -(point[1] - origin[1]) * 110540,
   };
 }
 
 function scaleRingTowardCenter(ring: Pt[], areaRatio: number): Pt[] {
-  const factor = Math.sqrt(Math.max(0.04, Math.min(1, areaRatio)));
-  const c = ringCentroidPt(ring);
-  return ring.map((p) => ({
-    x: c.x + (p.x - c.x) * factor,
-    z: c.z + (p.z - c.z) * factor,
+  const targetRatio = Math.max(0.04, Math.min(0.92, areaRatio));
+  const factor = Math.sqrt(targetRatio) * 0.985;
+  const center = ringCentroid(ring);
+  return ring.map((point) => ({
+    x: center.x + (point.x - center.x) * factor,
+    z: center.z + (point.z - center.z) * factor,
   }));
 }
 
-function extrudeShape(ring: Pt[], depth: number): THREE.ExtrudeGeometry {
+function extrudeShape(ring: Pt[], height: number): THREE.ExtrudeGeometry {
   const shape = new THREE.Shape();
-  ring.forEach((p, i) => {
-    if (i === 0) shape.moveTo(p.x, p.z);
-    else shape.lineTo(p.x, p.z);
+  ring.forEach((point, index) => {
+    if (index === 0) shape.moveTo(point.x, point.z);
+    else shape.lineTo(point.x, point.z);
   });
   shape.closePath();
-  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
-  geo.rotateX(-Math.PI / 2);
-  return geo;
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: height,
+    bevelEnabled: false,
+    steps: 1,
+  });
+  geometry.rotateX(-Math.PI / 2);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function horizontalRingPoints(
+  ring: Pt[],
+  y: number
+): [number, number, number][] {
+  return [...ring, ring[0]].map((point) => [point.x, y, point.z]);
 }
 
 function cardinalDirection(x: number, z: number): string {
@@ -116,21 +147,23 @@ function cardinalDirection(x: number, z: number): string {
 
 function majorAxisLabel(ring: Pt[]): string {
   if (ring.length < 3) return "확인 불가";
-  const c = ringCentroidPt(ring);
+  const center = ringCentroid(ring);
   let xx = 0;
   let zz = 0;
   let xz = 0;
-  for (const p of ring) {
-    const x = p.x - c.x;
-    const z = p.z - c.z;
+
+  for (const point of ring) {
+    const x = point.x - center.x;
+    const z = point.z - center.z;
     xx += x * x;
     zz += z * z;
     xz += x * z;
   }
+
   const theta = 0.5 * Math.atan2(2 * xz, xx - zz);
-  const dx = Math.cos(theta);
-  const dz = Math.sin(theta);
-  const bearing = ((Math.atan2(dx, -dz) * 180) / Math.PI + 360) % 180;
+  const bearing =
+    ((Math.atan2(Math.cos(theta), -Math.sin(theta)) * 180) / Math.PI + 360) %
+    180;
 
   if (bearing < 22.5 || bearing >= 157.5) return "남북";
   if (bearing < 67.5) return "북동–남서";
@@ -146,14 +179,15 @@ function clipSegmentToSquare(a: Pt, b: Pt, limit: number): [Pt, Pt] | null {
   const p = [-dx, dx, -dz, dz];
   const q = [a.x + limit, limit - a.x, a.z + limit, limit - a.z];
 
-  for (let i = 0; i < 4; i += 1) {
-    if (Math.abs(p[i]) < 1e-9) {
-      if (q[i] < 0) return null;
+  for (let index = 0; index < 4; index += 1) {
+    if (Math.abs(p[index]) < 1e-9) {
+      if (q[index] < 0) return null;
       continue;
     }
-    const r = q[i] / p[i];
-    if (p[i] < 0) t0 = Math.max(t0, r);
-    else t1 = Math.min(t1, r);
+
+    const ratio = q[index] / p[index];
+    if (p[index] < 0) t0 = Math.max(t0, ratio);
+    else t1 = Math.min(t1, ratio);
     if (t0 > t1) return null;
   }
 
@@ -169,75 +203,110 @@ function buildRoadSegments(
   limit: number
 ): RoadSegment[] {
   const segments: RoadSegment[] = [];
+
   for (const road of roads) {
     const points = road.points.map((point) => lngLatToLocal(point, origin));
-    for (let i = 0; i < points.length - 1; i += 1) {
-      const clipped = clipSegmentToSquare(points[i], points[i + 1], limit);
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const clipped = clipSegmentToSquare(points[index], points[index + 1], limit);
       if (!clipped) continue;
       const [a, b] = clipped;
-      if (Math.hypot(b.x - a.x, b.z - a.z) < 0.2) continue;
+      if (Math.hypot(b.x - a.x, b.z - a.z) < 0.25) continue;
       segments.push({ name: road.name, a, b });
     }
   }
+
   return segments;
 }
 
 function SubjectLot({ ring }: { ring: Pt[] }) {
-  const geometry = useMemo(() => extrudeShape(ring, 0.08), [ring]);
-  const linePoints = useMemo(
-    () => [...ring, ring[0]].map((p) => [p.x, GRADE_Y + 0.1, p.z] as [number, number, number]),
+  const geometry = useMemo(() => extrudeShape(ring, 0.06), [ring]);
+  const outline = useMemo(
+    () => horizontalRingPoints(ring, GRADE_Y + 0.065),
     [ring]
   );
 
   return (
     <group>
-      <mesh geometry={geometry} receiveShadow position={[0, GRADE_Y, 0]}>
+      <mesh geometry={geometry} position={[0, GRADE_Y, 0]} receiveShadow>
         <meshStandardMaterial
           color={SUBJECT_LOT}
           transparent
-          opacity={0.72}
+          opacity={0.78}
           roughness={0.9}
-          metalness={0}
         />
       </mesh>
-      <Line points={linePoints} color={SUBJECT_LOT_EDGE} lineWidth={2.2} />
+      <Line points={outline} color={SUBJECT_LOT_EDGE} lineWidth={2.4} />
     </group>
   );
 }
 
+function roadOutwardNormal(segment: RoadSegment, lotCenter: Pt): Pt {
+  const dx = segment.b.x - segment.a.x;
+  const dz = segment.b.z - segment.a.z;
+  const length = Math.hypot(dx, dz) || 1;
+  let nx = -dz / length;
+  let nz = dx / length;
+
+  const midpoint = {
+    x: (segment.a.x + segment.b.x) / 2,
+    z: (segment.a.z + segment.b.z) / 2,
+  };
+  const towardRoad = {
+    x: midpoint.x - lotCenter.x,
+    z: midpoint.z - lotCenter.z,
+  };
+
+  if (nx * towardRoad.x + nz * towardRoad.z < 0) {
+    nx *= -1;
+    nz *= -1;
+  }
+
+  return { x: nx, z: nz };
+}
+
 function RoadSegmentMesh({
   segment,
+  lotCenter,
   primary,
 }: {
   segment: RoadSegment;
+  lotCenter: Pt;
   primary: boolean;
 }) {
   const geometry = useMemo(() => {
-    const { a, b } = segment;
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const length = Math.hypot(dx, dz) || 1;
-    const nx = (-dz / length) * (ROAD_ESTIMATED_WIDTH_M / 2);
-    const nz = (dx / length) * (ROAD_ESTIMATED_WIDTH_M / 2);
+    const normal = roadOutwardNormal(segment, lotCenter);
+    const innerOffset = ROAD_OUTER_GAP_M;
+    const outerOffset = ROAD_OUTER_GAP_M + ROAD_ESTIMATED_WIDTH_M;
+
     const vertices = new Float32Array([
-      a.x + nx, 0, a.z + nz,
-      a.x - nx, 0, a.z - nz,
-      b.x - nx, 0, b.z - nz,
-      b.x + nx, 0, b.z + nz,
+      segment.a.x + normal.x * innerOffset,
+      0,
+      segment.a.z + normal.z * innerOffset,
+      segment.a.x + normal.x * outerOffset,
+      0,
+      segment.a.z + normal.z * outerOffset,
+      segment.b.x + normal.x * outerOffset,
+      0,
+      segment.b.z + normal.z * outerOffset,
+      segment.b.x + normal.x * innerOffset,
+      0,
+      segment.b.z + normal.z * innerOffset,
     ]);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-    geo.setIndex([0, 1, 2, 0, 2, 3]);
-    geo.computeVertexNormals();
-    return geo;
-  }, [segment]);
+
+    const result = new THREE.BufferGeometry();
+    result.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+    result.setIndex([0, 1, 2, 0, 2, 3]);
+    result.computeVertexNormals();
+    return result;
+  }, [lotCenter, segment]);
 
   return (
-    <mesh geometry={geometry} position={[0, 0.015, 0]} receiveShadow>
+    <mesh geometry={geometry} position={[0, 0.025, 0]} receiveShadow>
       <meshStandardMaterial
         color={primary ? PRIMARY_ROAD_COLOR : ROAD_COLOR}
-        roughness={0.95}
-        metalness={0}
+        transparent={!primary}
+        opacity={primary ? 1 : 0.72}
+        roughness={0.96}
       />
     </mesh>
   );
@@ -245,29 +314,43 @@ function RoadSegmentMesh({
 
 function RoadLayer({
   segments,
+  lotCenter,
   primaryRoadName,
 }: {
   segments: RoadSegment[];
+  lotCenter: Pt;
   primaryRoadName: string | null;
 }) {
   const labelSegment = useMemo(() => {
-    const candidates = segments.filter(
+    const matching = segments.filter(
       (segment) => primaryRoadName && segment.name === primaryRoadName
     );
-    const pool = candidates.length > 0 ? candidates : segments;
+    const pool = matching.length > 0 ? matching : segments;
+
     return pool.reduce<RoadSegment | null>((best, segment) => {
       if (!best) return segment;
-      const bestDist = Math.hypot(
-        (best.a.x + best.b.x) / 2,
-        (best.a.z + best.b.z) / 2
+      const bestDistance = Math.hypot(
+        (best.a.x + best.b.x) / 2 - lotCenter.x,
+        (best.a.z + best.b.z) / 2 - lotCenter.z
       );
-      const dist = Math.hypot(
-        (segment.a.x + segment.b.x) / 2,
-        (segment.a.z + segment.b.z) / 2
+      const distance = Math.hypot(
+        (segment.a.x + segment.b.x) / 2 - lotCenter.x,
+        (segment.a.z + segment.b.z) / 2 - lotCenter.z
       );
-      return dist < bestDist ? segment : best;
+      return distance < bestDistance ? segment : best;
     }, null);
-  }, [segments, primaryRoadName]);
+  }, [lotCenter, primaryRoadName, segments]);
+
+  const labelPosition = useMemo(() => {
+    if (!labelSegment) return null;
+    const normal = roadOutwardNormal(labelSegment, lotCenter);
+    const offset = ROAD_OUTER_GAP_M + ROAD_ESTIMATED_WIDTH_M * 0.55;
+    return [
+      (labelSegment.a.x + labelSegment.b.x) / 2 + normal.x * offset,
+      0.18,
+      (labelSegment.a.z + labelSegment.b.z) / 2 + normal.z * offset,
+    ] as [number, number, number];
+  }, [labelSegment, lotCenter]);
 
   return (
     <group>
@@ -275,21 +358,19 @@ function RoadLayer({
         <RoadSegmentMesh
           key={`${segment.name ?? "road"}-${index}`}
           segment={segment}
+          lotCenter={lotCenter}
           primary={Boolean(primaryRoadName && segment.name === primaryRoadName)}
         />
       ))}
-      {labelSegment && (primaryRoadName || labelSegment.name) && (
+
+      {labelSegment && labelPosition && (primaryRoadName || labelSegment.name) && (
         <Text
-          position={[
-            (labelSegment.a.x + labelSegment.b.x) / 2,
-            0.35,
-            (labelSegment.a.z + labelSegment.b.z) / 2,
-          ]}
-          fontSize={0.65}
+          position={labelPosition}
+          fontSize={0.62}
           color="#334155"
           anchorX="center"
-          anchorY="bottom"
-          outlineWidth={0.03}
+          anchorY="middle"
+          outlineWidth={0.035}
           outlineColor="#ffffff"
         >
           {primaryRoadName || labelSegment.name || "도로"}
@@ -299,89 +380,128 @@ function RoadLayer({
   );
 }
 
-function FloorSlab({
+function BuildingMass({
   ring,
-  baseY,
-  height,
-  floor,
-  kind,
+  groundFloors,
+  basementFloors,
+  aboveHeight,
+  floorHeight,
+  showBasement,
 }: {
   ring: Pt[];
-  baseY: number;
-  height: number;
-  floor: number;
-  kind: "above" | "below";
+  groundFloors: number;
+  basementFloors: number;
+  aboveHeight: number;
+  floorHeight: number;
+  showBasement: boolean;
 }) {
-  const geometry = useMemo(() => extrudeShape(ring, height), [ring, height]);
-  const edges = useMemo(() => new THREE.EdgesGeometry(geometry, 20), [geometry]);
-  const fill = kind === "below" ? BASEMENT_COLOR : ABOVE_COLOR;
-  const edge = kind === "below" ? BASEMENT_EDGE : ABOVE_EDGE;
-  const label = kind === "below" ? `B${floor}` : `${floor}F`;
-  const edgeX = ring.reduce((max, p) => (p.x > max ? p.x : max), ring[0]?.x ?? 0) + 0.3;
-  const edgeZ = ring.reduce((sum, p) => sum + p.z, 0) / ring.length;
+  const aboveGeometry = useMemo(
+    () => (aboveHeight > 0 ? extrudeShape(ring, aboveHeight) : null),
+    [aboveHeight, ring]
+  );
+  const aboveEdges = useMemo(
+    () => (aboveGeometry ? new THREE.EdgesGeometry(aboveGeometry, 28) : null),
+    [aboveGeometry]
+  );
+
+  const basementHeight = basementFloors * floorHeight;
+  const basementGeometry = useMemo(
+    () => (basementHeight > 0 ? extrudeShape(ring, basementHeight) : null),
+    [basementHeight, ring]
+  );
+  const basementEdges = useMemo(
+    () => (basementGeometry ? new THREE.EdgesGeometry(basementGeometry, 28) : null),
+    [basementGeometry]
+  );
+
+  const floorLines = useMemo(() => {
+    if (groundFloors <= 1 || aboveHeight <= 0) return [];
+    return Array.from({ length: groundFloors - 1 }, (_, index) => {
+      const y = GRADE_Y + (aboveHeight * (index + 1)) / groundFloors;
+      return horizontalRingPoints(ring, y + FLOOR_LINE_OFFSET);
+    });
+  }, [aboveHeight, groundFloors, ring]);
+
+  if (!aboveGeometry) return null;
 
   return (
     <group>
-      <mesh geometry={geometry} position={[0, baseY, 0]} castShadow receiveShadow>
-        <meshStandardMaterial
-          color={fill}
-          transparent={kind === "above"}
-          opacity={kind === "above" ? 0.94 : 0.9}
-          roughness={0.65}
-          metalness={0.01}
+      {showBasement && basementGeometry && (
+        <group position={[0, GRADE_Y - basementHeight, 0]}>
+          <mesh geometry={basementGeometry} castShadow receiveShadow>
+            <meshStandardMaterial
+              color={BASEMENT_COLOR}
+              transparent
+              opacity={0.56}
+              roughness={0.8}
+            />
+          </mesh>
+          {basementEdges && (
+            <lineSegments geometry={basementEdges}>
+              <lineBasicMaterial color={BASEMENT_EDGE} />
+            </lineSegments>
+          )}
+        </group>
+      )}
+
+      <group position={[0, GRADE_Y, 0]}>
+        <mesh geometry={aboveGeometry} castShadow receiveShadow>
+          <meshStandardMaterial color={ABOVE_COLOR} roughness={0.72} />
+        </mesh>
+        {aboveEdges && (
+          <lineSegments geometry={aboveEdges}>
+            <lineBasicMaterial color={ABOVE_EDGE} />
+          </lineSegments>
+        )}
+      </group>
+
+      {floorLines.map((points, index) => (
+        <Line
+          key={`floor-${index}`}
+          points={points}
+          color="#91a0b2"
+          lineWidth={1}
         />
-      </mesh>
-      <lineSegments geometry={edges} position={[0, baseY, 0]}>
-        <lineBasicMaterial color={edge} />
-      </lineSegments>
-      <Text
-        position={[edgeX, baseY + height / 2, edgeZ]}
-        fontSize={0.46}
-        color={kind === "below" ? "#f8fafc" : "#475569"}
-        anchorX="left"
-        anchorY="middle"
-      >
-        {label}
-      </Text>
+      ))}
     </group>
   );
 }
 
 function NorthArrow({ extent }: { extent: number }) {
-  const x = -extent * 0.68;
-  const z = extent * 0.66;
-  const length = Math.max(2.5, Math.min(5, extent * 0.32));
+  const x = -extent * 0.7;
+  const z = extent * 0.68;
+  const length = Math.max(2.5, Math.min(5, extent * 0.34));
   const tipZ = z - length;
 
   return (
     <group>
       <Line
         points={[
-          [x, 0.18, z],
-          [x, 0.18, tipZ],
+          [x, 0.2, z],
+          [x, 0.2, tipZ],
         ]}
         color="#0f172a"
-        lineWidth={2.4}
+        lineWidth={2.5}
       />
       <Line
         points={[
-          [x, 0.18, tipZ],
-          [x - 0.55, 0.18, tipZ + 0.85],
+          [x, 0.2, tipZ],
+          [x - 0.55, 0.2, tipZ + 0.85],
         ]}
         color="#0f172a"
-        lineWidth={2.4}
+        lineWidth={2.5}
       />
       <Line
         points={[
-          [x, 0.18, tipZ],
-          [x + 0.55, 0.18, tipZ + 0.85],
+          [x, 0.2, tipZ],
+          [x + 0.55, 0.2, tipZ + 0.85],
         ]}
         color="#0f172a"
-        lineWidth={2.4}
+        lineWidth={2.5}
       />
       <Text
-        position={[x, 0.32, tipZ - 0.75]}
-        fontSize={0.72}
+        position={[x, 0.32, tipZ - 0.72]}
+        fontSize={0.7}
         color="#0f172a"
         anchorX="center"
         anchorY="middle"
@@ -408,25 +528,16 @@ function CameraController({
   const { camera } = useThree();
 
   useEffect(() => {
-    const target = new THREE.Vector3(0, targetY, 0);
-    const position =
-      viewMode === "aligned"
-        ? new THREE.Vector3(extent * 1.05, extent * 0.95, extent * 1.25)
-        : new THREE.Vector3(extent * 1.35, extent * 0.9, extent * 1.35);
+    if (viewMode === "aligned") {
+      camera.position.set(0, extent * 2.75, 0.001);
+      camera.up.set(0, 0, -1);
+      camera.lookAt(0, 0, 0);
+    } else {
+      camera.position.set(extent * 1.25, extent * 0.95, extent * 1.35);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(0, targetY, 0);
+    }
 
-    const direction = target.clone().sub(position).normalize();
-    const north = new THREE.Vector3(0, 0, -1);
-    const projectedNorth = north
-      .clone()
-      .sub(direction.clone().multiplyScalar(north.dot(direction)));
-
-    camera.position.copy(position);
-    camera.up.copy(
-      projectedNorth.lengthSq() > 1e-6
-        ? projectedNorth.normalize()
-        : new THREE.Vector3(0, 1, 0)
-    );
-    camera.lookAt(target);
     camera.updateProjectionMatrix();
   }, [camera, extent, resetKey, targetY, viewMode]);
 
@@ -456,6 +567,8 @@ function SceneContent({
 
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
   const lotRing = useMemo(() => local?.ring ?? [], [local]);
+  const lotCenter = useMemo(() => ringCentroid(lotRing), [lotRing]);
+
   const footprint = useMemo(() => {
     if (lotRing.length < 3) return [];
     const ratio =
@@ -463,20 +576,20 @@ function SceneContent({
         ? main.buildingArea / lotArea
         : main?.buildingCoverage
           ? main.buildingCoverage / 100
-          : 0.6;
+          : 0.55;
     return scaleRingTowardCenter(lotRing, ratio);
-  }, [lotRing, main, lotArea]);
+  }, [lotArea, lotRing, main]);
 
   const extent = useMemo(() => {
     let value = 8;
-    lotRing.forEach((point) => {
-      value = Math.max(value, Math.hypot(point.x, point.z) + 4);
-    });
+    for (const point of lotRing) {
+      value = Math.max(value, Math.hypot(point.x, point.z) + 4.5);
+    }
     return value;
   }, [lotRing]);
 
   const roadSegments = useMemo(
-    () => (local ? buildRoadSegments(roads, local.origin, extent * 1.45) : []),
+    () => (local ? buildRoadSegments(roads, local.origin, extent * 1.5) : []),
     [extent, local, roads]
   );
   const frontage = useMemo(
@@ -484,57 +597,53 @@ function SceneContent({
     [boundary, roads]
   );
 
-  const groundFloors = main?.groundFloors ?? 0;
-  const basementFloors = main?.undergroundFloors ?? 0;
-  const floorH = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
+  const groundFloors = Math.max(0, main?.groundFloors ?? 0);
+  const basementFloors = Math.max(0, main?.undergroundFloors ?? 0);
+  const floorHeight = currentBuilding
+    ? estimateFloorHeightM(currentBuilding) ?? 3
+    : 3;
   const aboveHeight =
-    main && main.height > 0 && groundFloors > 0 ? main.height : groundFloors * floorH;
-
-  const aboveSlabs = useMemo(() => {
-    if (groundFloors <= 0 || aboveHeight <= 0) return [];
-    const slabH =
-      (aboveHeight - FLOOR_GAP * Math.max(0, groundFloors - 1)) / groundFloors;
-    return Array.from({ length: groundFloors }, (_, index) => ({
-      floor: index + 1,
-      baseY: GRADE_Y + index * (slabH + FLOOR_GAP),
-      height: slabH,
-    }));
-  }, [groundFloors, aboveHeight]);
-
-  const belowSlabs = useMemo(() => {
-    if (basementFloors <= 0) return [];
-    return Array.from({ length: basementFloors }, (_, index) => ({
-      floor: index + 1,
-      baseY: GRADE_Y - (index + 1) * floorH,
-      height: floorH,
-    }));
-  }, [basementFloors, floorH]);
+    main && main.height > 0 && groundFloors > 0
+      ? main.height
+      : groundFloors * floorHeight;
+  const targetY = aboveHeight * 0.25;
 
   if (lotRing.length < 3) return null;
-
-  const targetY = aboveHeight * 0.26;
 
   return (
     <>
       <color attach="background" args={["#f8fafc"]} />
-      <ambientLight intensity={1.05} />
-      <directionalLight position={[8, 18, 10]} intensity={0.62} castShadow />
-      <directionalLight position={[-6, 12, -8]} intensity={0.18} />
+      <ambientLight intensity={1.15} />
+      <directionalLight position={[8, 18, 10]} intensity={0.58} castShadow />
+      <directionalLight position={[-7, 11, -8]} intensity={0.22} />
 
       <gridHelper
-        args={[extent * 2.9, Math.max(10, Math.round(extent * 1.4)), "#d8e1eb", "#edf2f7"]}
+        args={[
+          extent * 3,
+          Math.max(12, Math.round(extent * 1.5)),
+          "#dce4ed",
+          "#edf2f7",
+        ]}
         position={[0, 0, 0]}
       />
-      <RoadLayer segments={roadSegments} primaryRoadName={frontage?.roadName ?? null} />
+
+      <RoadLayer
+        segments={roadSegments}
+        lotCenter={lotCenter}
+        primaryRoadName={frontage?.roadName ?? null}
+      />
       <SubjectLot ring={lotRing} />
 
-      {showBasement &&
-        belowSlabs.map((slab) => (
-          <FloorSlab key={`b${slab.floor}`} ring={footprint} {...slab} kind="below" />
-        ))}
-      {aboveSlabs.map((slab) => (
-        <FloorSlab key={`a${slab.floor}`} ring={footprint} {...slab} kind="above" />
-      ))}
+      {footprint.length >= 3 && groundFloors > 0 && (
+        <BuildingMass
+          ring={footprint}
+          groundFloors={groundFloors}
+          basementFloors={basementFloors}
+          aboveHeight={aboveHeight}
+          floorHeight={floorHeight}
+          showBasement={showBasement}
+        />
+      )}
 
       <NorthArrow extent={extent} />
       <CameraController
@@ -547,21 +656,21 @@ function SceneContent({
         key={`${viewMode}-${resetKey}`}
         makeDefault
         enableRotate={viewMode === "orbit"}
-        enablePan
+        enablePan={viewMode === "orbit"}
         enableZoom
         enableDamping
         dampingFactor={0.08}
         rotateSpeed={0.8}
-        minDistance={extent * 0.75}
+        minDistance={extent * 0.7}
         maxDistance={extent * 4}
         maxPolarAngle={Math.PI / 2.05}
-        target={[0, targetY, 0]}
+        target={[0, viewMode === "aligned" ? 0 : targetY, 0]}
       />
     </>
   );
 }
 
-function Chip({ children, active = false }: { children: React.ReactNode; active?: boolean }) {
+function Chip({ children, active = false }: { children: ReactNode; active?: boolean }) {
   return (
     <span
       style={{
@@ -589,7 +698,7 @@ function ControlButton({
   active = false,
   onClick,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   active?: boolean;
   onClick: () => void;
 }) {
@@ -659,18 +768,20 @@ export function ExistingBuildingMass({
 
   const ratios = useMemo(() => {
     if (!main || lotArea <= 0) return undefined;
-    const bcrFromArea = (main.buildingArea / lotArea) * 100;
-    const bcrPct = main.buildingCoverage > 0 ? main.buildingCoverage : bcrFromArea;
+    const calculated = (main.buildingArea / lotArea) * 100;
+    const bcrPct = main.buildingCoverage > 0 ? main.buildingCoverage : calculated;
     return { bcrPct, buildingAreaSqm: main.buildingArea };
-  }, [main, lotArea]);
+  }, [lotArea, main]);
 
   const frontageLabel = useMemo(() => {
     if (!frontage || frontage.frontIndex < 0 || !local) {
       return roads.length > 0 ? "접도 방향 확인 필요" : "도로 중심선 데이터 없음";
     }
+
     const a = local.ring[frontage.frontIndex];
     const b = local.ring[(frontage.frontIndex + 1) % local.ring.length];
     if (!a || !b) return frontage.roadName ? `${frontage.roadName} 접도` : "접도 확인";
+
     const direction = cardinalDirection((a.x + b.x) / 2, (a.z + b.z) / 2);
     return `${direction}측 ${frontage.roadName ?? "도로"} 접도`;
   }, [frontage, local, roads.length]);
@@ -712,7 +823,7 @@ export function ExistingBuildingMass({
       <Canvas
         shadows
         style={{ cursor: viewMode === "orbit" ? "grab" : "default", touchAction: "none" }}
-        camera={{ position: [14, 10, 14], fov: 40 }}
+        camera={{ position: [14, 10, 14], fov: 38, near: 0.1, far: 2000 }}
       >
         <Suspense fallback={null}>
           <SceneContent
@@ -777,71 +888,74 @@ export function ExistingBuildingMass({
         </div>
       </div>
 
-      {hasBuilding && main && ratios && (
-        <div
-          style={{
-            position: "absolute",
-            left: 12,
-            bottom: 12,
-            maxWidth: 420,
-            padding: "9px 11px",
-            background: "rgba(255,255,255,0.96)",
-            borderRadius: 7,
-            border: "1px solid #dbe3ec",
-            boxShadow: "0 4px 14px rgba(15,23,42,0.08)",
-            fontSize: 11.5,
-            lineHeight: 1.55,
-            color: "#475569",
-            pointerEvents: "none",
-          }}
-        >
-          <div style={{ fontWeight: 700, color: "#334155" }}>
-            건축면적 {ratios.buildingAreaSqm.toFixed(1)}㎡ · 건폐율 {ratios.bcrPct.toFixed(1)}%
-          </div>
-          <div>{frontageLabel}</div>
-          <div>개략 매스 장축 {axisLabel} 방향</div>
-        </div>
-      )}
-
       <div
         style={{
           position: "absolute",
+          left: 12,
           right: 12,
           bottom: 12,
-          maxWidth: 410,
-          padding: "8px 10px",
-          background: "rgba(255,255,255,0.94)",
-          borderRadius: 7,
-          border: "1px solid #dbe3ec",
-          fontSize: 10.8,
-          lineHeight: 1.5,
-          color: "#64748b",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
           pointerEvents: "none",
-          textAlign: "left",
         }}
       >
-        필지·도로는 동일한 GIS 좌표계로 정합했습니다. 건물 외곽은 건축물대장 면적에 맞춘
-        개략 형상이며, 도로 폭 {ROAD_ESTIMATED_WIDTH_M}m는 시각화용 추정값입니다.
-      </div>
+        {hasBuilding && main && ratios ? (
+          <div
+            style={{
+              flex: "1 1 260px",
+              maxWidth: 420,
+              padding: "9px 11px",
+              background: "rgba(255,255,255,0.96)",
+              borderRadius: 7,
+              border: "1px solid #dbe3ec",
+              boxShadow: "0 4px 14px rgba(15,23,42,0.08)",
+              fontSize: 11.5,
+              lineHeight: 1.55,
+              color: "#475569",
+            }}
+          >
+            <div style={{ fontWeight: 700, color: "#334155" }}>
+              건축면적 {ratios.buildingAreaSqm.toFixed(1)}㎡ · 건폐율 {ratios.bcrPct.toFixed(1)}%
+            </div>
+            <div>{frontageLabel}</div>
+            <div>개략 매스 장축 {axisLabel} 방향</div>
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: "7px 10px",
+              background: "rgba(255,255,255,0.96)",
+              borderRadius: 7,
+              border: "1px solid #dbe3ec",
+              fontSize: 12,
+              color: "var(--fg-muted)",
+            }}
+          >
+            현재 건물 없음
+          </div>
+        )}
 
-      {!hasBuilding && (
         <div
           style={{
-            position: "absolute",
-            bottom: 12,
-            left: 12,
-            padding: "6px 10px",
-            background: "rgba(255,255,255,0.95)",
-            borderRadius: 6,
-            fontSize: 12,
-            color: "var(--fg-muted)",
-            border: "1px solid #e2e8f0",
-            pointerEvents: "none",
+            flex: "1 1 300px",
+            maxWidth: 500,
+            padding: "8px 10px",
+            background: "rgba(255,255,255,0.94)",
+            borderRadius: 7,
+            border: "1px solid #dbe3ec",
+            fontSize: 10.8,
+            lineHeight: 1.5,
+            color: "#64748b",
           }}
         >
-          현재 건물 없음
+          지도 정합은 북쪽을 화면 위로 고정합니다. 도로 띠는 필지 바깥 방향으로만 표시하며,
+          폭 {ROAD_ESTIMATED_WIDTH_M}m는 시각화용 추정값입니다. 건물 외곽은 건축물대장 면적에
+          맞춘 평지붕 개략 매스이며 실제 배치도는 아닙니다.
         </div>
-      )}
+      </div>
     </div>
   );
 }
