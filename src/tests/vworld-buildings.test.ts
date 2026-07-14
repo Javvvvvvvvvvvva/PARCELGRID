@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import {
   attachExistingBuildingGeometry,
+  calculateFootprintParcelOverlap,
   normalizeViolationStatus,
   parseBuildingFeatureCollection,
 } from "@/lib/integrations/vworld-buildings";
@@ -24,6 +25,18 @@ function polygon(lngOffset = 0, latOffset = 0) {
       [127.03212 + lngOffset, 37.65012 + latOffset],
       [127.03198 + lngOffset, 37.65012 + latOffset],
       [127.03198 + lngOffset, 37.64998 + latOffset],
+    ],
+  ];
+}
+
+function rectangle(minLng: number, minLat: number, maxLng: number, maxLat: number) {
+  return [
+    [
+      [minLng, minLat],
+      [maxLng, minLat],
+      [maxLng, maxLat],
+      [minLng, maxLat],
+      [minLng, minLat],
     ],
   ];
 }
@@ -66,6 +79,7 @@ describe("VWorld dt_d010 building geometry", () => {
     expect(result.queryFeatureCount).toBe(3);
     expect(result.footprints).toHaveLength(2);
     expect(result.footprints.every((item) => item.matchMethod === "pnu")).toBe(true);
+    expect(result.footprints.every((item) => item.parcelOverlapStatus === "verified")).toBe(true);
     expect(result.footprints[0].polygons[0][0].length).toBeGreaterThanOrEqual(4);
   });
 
@@ -92,6 +106,34 @@ describe("VWorld dt_d010 building geometry", () => {
     expect(result.footprints).toHaveLength(1);
     expect(result.footprints[0].id).toBe("geometry-match");
     expect(result.footprints[0].matchMethod).toBe("geometry");
+    expect(result.rejectedFootprintCount).toBe(1);
+  });
+
+  it("rejects an exact-PNU footprint when less than 60% lies inside the parcel", () => {
+    const mostlyOutside = rectangle(127.03217, 37.64998, 127.03231, 37.65012);
+    const result = parseBuildingFeatureCollection(
+      { type: "FeatureCollection", features: [feature(PNU, "wrong-pnu-shape", mostlyOutside)] },
+      { pnu: PNU, boundary, center }
+    );
+
+    expect(result.status).toBe("not_found");
+    expect(result.footprints).toHaveLength(0);
+    expect(result.rejectedFootprintCount).toBe(1);
+  });
+
+  it("keeps a 60-85% boundary-straddling footprint but marks it for review", () => {
+    const boundaryStraddling = rectangle(127.0321, 37.64998, 127.03224, 37.65012);
+    const overlap = calculateFootprintParcelOverlap(boundaryStraddling, boundary);
+    const result = parseBuildingFeatureCollection(
+      { type: "FeatureCollection", features: [feature(PNU, "boundary-building", boundaryStraddling)] },
+      { pnu: PNU, boundary, center }
+    );
+
+    expect(overlap).toBeGreaterThan(0.6);
+    expect(overlap).toBeLessThan(0.85);
+    expect(result.status).toBe("matched");
+    expect(result.footprints[0].parcelOverlapStatus).toBe("review");
+    expect(result.reviewFootprintCount).toBe(1);
   });
 
   it("attaches geometry without replacing MOLIT building attributes", () => {
