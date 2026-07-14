@@ -1,9 +1,16 @@
+import {
+  area as turfArea,
+  featureCollection,
+  intersect,
+  polygon as turfPolygon,
+} from "@turf/turf";
 import type {
   BuildingInfo,
   BuildingLookupResult,
   RedevelopmentSignal,
 } from "@/lib/integrations/molit-building";
 import type {
+  BuildingParcelOverlapStatus,
   BuildingPolygon,
   ExistingBuildingFootprint,
   ExistingBuildingGeometry,
@@ -15,6 +22,9 @@ const KEY = process.env.VWORLD_API_KEY;
 const DOMAIN = process.env.VWORLD_API_DOMAIN ?? "http://localhost:3000";
 const WFS_URL = "https://api.vworld.kr/ned/wfs/BldgisSpceService";
 const LAYER = "dt_d010";
+
+const REVIEW_MIN_OVERLAP = 0.6;
+const VERIFIED_MIN_OVERLAP = 0.85;
 
 interface RawBuildingFeature {
   id?: string;
@@ -36,6 +46,11 @@ export interface ExistingBuildingGeometryQuery {
   pnu: string;
   boundary: LngLat[];
   center: { lat: number; lng: number };
+}
+
+interface AssessedFootprint {
+  footprint: ExistingBuildingFootprint;
+  accepted: boolean;
 }
 
 function asText(value: unknown): string {
@@ -148,47 +163,53 @@ function polygonsAreaSqm(polygons: BuildingPolygon[]): number {
   }, 0);
 }
 
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length > 1) {
-    const first = ring[0];
-    const last = ring[ring.length - 1];
-    if (first[0] === last[0] && first[1] === last[1]) return ring.slice(0, -1);
-  }
-  return ring;
+function closeRing(ring: LngLat[]): LngLat[] {
+  if (ring.length === 0) return [];
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  return first[0] === last[0] && first[1] === last[1]
+    ? ring
+    : [...ring, first];
 }
 
-function pointInRing(point: LngLat, ring: LngLat[]): boolean {
-  const open = openRing(ring);
-  let inside = false;
-  for (let i = 0, j = open.length - 1; i < open.length; j = i++) {
-    const [xi, yi] = open[i];
-    const [xj, yj] = open[j];
-    const intersects =
-      yi > point[1] !== yj > point[1] &&
-      point[0] < ((xj - xi) * (point[1] - yi)) / (yj - yi + Number.EPSILON) + xi;
-    if (intersects) inside = !inside;
-  }
-  return inside;
-}
+/**
+ * 건물 외곽 면적 중 대상 필지 내부에 실제로 포함되는 비율을 계산한다.
+ * PNU 일치 여부와 별개로 도형 교차를 검증해 인접 필지 오매칭을 차단한다.
+ */
+export function calculateFootprintParcelOverlap(
+  polygons: BuildingPolygon[],
+  parcelBoundary: LngLat[]
+): number {
+  const parcelRing = closeRing(parcelBoundary);
+  if (parcelRing.length < 4) return 0;
 
-function ringCentroid(ring: LngLat[]): LngLat {
-  const open = openRing(ring);
-  const sum = open.reduce(
-    (acc, point) => ({ lng: acc.lng + point[0], lat: acc.lat + point[1] }),
-    { lng: 0, lat: 0 }
-  );
-  return [sum.lng / open.length, sum.lat / open.length];
-}
+  try {
+    const parcel = turfPolygon([parcelRing]);
+    let footprintArea = 0;
+    let intersectionArea = 0;
 
-function footprintTouchesParcel(polygons: BuildingPolygon[], parcelBoundary: LngLat[]): boolean {
-  for (const polygon of polygons) {
-    const outer = polygon[0];
-    if (!outer) continue;
-    const centroid = ringCentroid(outer);
-    if (pointInRing(centroid, parcelBoundary)) return true;
-    if (outer.some((point) => pointInRing(point, parcelBoundary))) return true;
+    for (const polygon of polygons) {
+      const rings = polygon.map(closeRing).filter((ring) => ring.length >= 4);
+      if (rings.length === 0) continue;
+
+      try {
+        const footprint = turfPolygon(rings);
+        const area = turfArea(footprint);
+        if (!Number.isFinite(area) || area <= 0) continue;
+
+        footprintArea += area;
+        const shared = intersect(featureCollection([parcel, footprint]));
+        if (shared) intersectionArea += turfArea(shared);
+      } catch {
+        // 개별 폴리곤이 유효하지 않으면 나머지 정상 폴리곤만 평가한다.
+      }
+    }
+
+    if (footprintArea <= 0) return 0;
+    return Math.max(0, Math.min(1, intersectionArea / footprintArea));
+  } catch {
+    return 0;
   }
-  return false;
 }
 
 function property(props: Record<string, unknown>, ...keys: string[]): unknown {
@@ -239,6 +260,30 @@ function parseFeature(
   };
 }
 
+function assessFeatures(
+  features: RawBuildingFeature[],
+  query: ExistingBuildingGeometryQuery,
+  matchMethod: "pnu" | "geometry"
+): AssessedFootprint[] {
+  return features
+    .map((feature) => parseFeature(feature, query.center, matchMethod))
+    .filter((footprint): footprint is ExistingBuildingFootprint => footprint !== null)
+    .map((footprint) => {
+      const ratio = calculateFootprintParcelOverlap(footprint.polygons, query.boundary);
+      const overlapStatus: BuildingParcelOverlapStatus =
+        ratio >= VERIFIED_MIN_OVERLAP ? "verified" : "review";
+
+      return {
+        footprint: {
+          ...footprint,
+          parcelOverlapRatio: Math.round(ratio * 1000) / 1000,
+          parcelOverlapStatus: overlapStatus,
+        },
+        accepted: ratio >= REVIEW_MIN_OVERLAP,
+      };
+    });
+}
+
 export function parseBuildingFeatureCollection(
   raw: unknown,
   query: ExistingBuildingGeometryQuery
@@ -251,23 +296,36 @@ export function parseBuildingFeatureCollection(
     (feature) =>
       normalizePnu(property(feature.properties ?? {}, "pnu", "PNU")) === normalizedTargetPnu
   );
-  const candidateFeatures = exact.length > 0 ? exact : features;
-  const method = exact.length > 0 ? "pnu" : "geometry";
 
-  const footprints = candidateFeatures
-    .map((feature) => parseFeature(feature, query.center, method))
-    .filter((footprint): footprint is ExistingBuildingFootprint => footprint !== null)
-    .filter(
-      (footprint) =>
-        method === "pnu" || footprintTouchesParcel(footprint.polygons, query.boundary)
-    )
-    .sort((a, b) => b.footprintAreaSqm - a.footprintAreaSqm);
+  let assessed = assessFeatures(
+    exact.length > 0 ? exact : features,
+    query,
+    exact.length > 0 ? "pnu" : "geometry"
+  );
+  let rejectedFootprintCount = assessed.filter((item) => !item.accepted).length;
+  let footprints = assessed.filter((item) => item.accepted).map((item) => item.footprint);
+
+  // PNU가 일치해도 실제 도형이 필지와 맞지 않으면 주변 비-PNU 후보를 한 번 더 검사한다.
+  if (exact.length > 0 && footprints.length === 0) {
+    const exactSet = new Set(exact);
+    const fallbackCandidates = features.filter((feature) => !exactSet.has(feature));
+    assessed = assessFeatures(fallbackCandidates, query, "geometry");
+    rejectedFootprintCount += assessed.filter((item) => !item.accepted).length;
+    footprints = assessed.filter((item) => item.accepted).map((item) => item.footprint);
+  }
+
+  footprints.sort((a, b) => b.footprintAreaSqm - a.footprintAreaSqm);
+  const reviewFootprintCount = footprints.filter(
+    (footprint) => footprint.parcelOverlapStatus === "review"
+  ).length;
 
   return {
     source: "vworld-dt_d010",
     status: footprints.length > 0 ? "matched" : "not_found",
     footprints,
     queryFeatureCount: features.length,
+    rejectedFootprintCount,
+    reviewFootprintCount,
   };
 }
 
