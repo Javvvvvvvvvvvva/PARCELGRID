@@ -25,6 +25,8 @@ const LAYER = "dt_d010";
 
 const REVIEW_MIN_OVERLAP = 0.6;
 const VERIFIED_MIN_OVERLAP = 0.85;
+export const BUILDING_CONTEXT_RADIUS_M = 35;
+const MAX_CONTEXT_FOOTPRINTS = 24;
 
 interface RawBuildingFeature {
   id?: string;
@@ -172,6 +174,13 @@ function closeRing(ring: LngLat[]): LngLat[] {
     : [...ring, first];
 }
 
+function openRing(ring: LngLat[]): LngLat[] {
+  if (ring.length <= 1) return ring;
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  return first[0] === last[0] && first[1] === last[1] ? ring.slice(0, -1) : ring;
+}
+
 /**
  * 건물 외곽 면적 중 대상 필지 내부에 실제로 포함되는 비율을 계산한다.
  * PNU 일치 여부와 별개로 도형 교차를 검증해 인접 필지 오매칭을 차단한다.
@@ -284,6 +293,45 @@ function assessFeatures(
     });
 }
 
+function footprintCentroid(footprint: ExistingBuildingFootprint): LngLat | null {
+  const points: LngLat[] = [];
+  for (const polygon of footprint.polygons) {
+    const outer = polygon[0];
+    if (!outer) continue;
+    points.push(...openRing(outer));
+  }
+  if (points.length === 0) return null;
+  const sum = points.reduce(
+    (value, point) => ({ lng: value.lng + point[0], lat: value.lat + point[1] }),
+    { lng: 0, lat: 0 }
+  );
+  return [sum.lng / points.length, sum.lat / points.length];
+}
+
+function collectContextFootprints(
+  features: RawBuildingFeature[],
+  excludedFeatures: Set<RawBuildingFeature>,
+  excludedIds: Set<string>,
+  query: ExistingBuildingGeometryQuery
+): ExistingBuildingFootprint[] {
+  return features
+    .filter((feature) => !excludedFeatures.has(feature))
+    .map((feature) => parseFeature(feature, query.center, "geometry"))
+    .filter((footprint): footprint is ExistingBuildingFootprint => footprint !== null)
+    .filter((footprint) => !excludedIds.has(footprint.id) && footprint.footprintAreaSqm >= 2)
+    .map((footprint) => {
+      const centroid = footprintCentroid(footprint);
+      return {
+        footprint,
+        distanceM: centroid ? distanceScore(centroid, query.center) : Infinity,
+      };
+    })
+    .filter((item) => item.distanceM <= BUILDING_CONTEXT_RADIUS_M)
+    .sort((a, b) => a.distanceM - b.distanceM)
+    .slice(0, MAX_CONTEXT_FOOTPRINTS)
+    .map((item) => item.footprint);
+}
+
 export function parseBuildingFeatureCollection(
   raw: unknown,
   query: ExistingBuildingGeometryQuery
@@ -296,6 +344,7 @@ export function parseBuildingFeatureCollection(
     (feature) =>
       normalizePnu(property(feature.properties ?? {}, "pnu", "PNU")) === normalizedTargetPnu
   );
+  const exactSet = new Set(exact);
 
   let assessed = assessFeatures(
     exact.length > 0 ? exact : features,
@@ -307,7 +356,6 @@ export function parseBuildingFeatureCollection(
 
   // PNU가 일치해도 실제 도형이 필지와 맞지 않으면 주변 비-PNU 후보를 한 번 더 검사한다.
   if (exact.length > 0 && footprints.length === 0) {
-    const exactSet = new Set(exact);
     const fallbackCandidates = features.filter((feature) => !exactSet.has(feature));
     assessed = assessFeatures(fallbackCandidates, query, "geometry");
     rejectedFootprintCount += assessed.filter((item) => !item.accepted).length;
@@ -315,6 +363,13 @@ export function parseBuildingFeatureCollection(
   }
 
   footprints.sort((a, b) => b.footprintAreaSqm - a.footprintAreaSqm);
+  const selectedIds = new Set(footprints.map((footprint) => footprint.id));
+  const contextFootprints = collectContextFootprints(
+    features,
+    exactSet,
+    selectedIds,
+    query
+  );
   const reviewFootprintCount = footprints.filter(
     (footprint) => footprint.parcelOverlapStatus === "review"
   ).length;
@@ -323,6 +378,8 @@ export function parseBuildingFeatureCollection(
     source: "vworld-dt_d010",
     status: footprints.length > 0 ? "matched" : "not_found",
     footprints,
+    contextFootprints,
+    contextRadiusM: BUILDING_CONTEXT_RADIUS_M,
     queryFeatureCount: features.length,
     rejectedFootprintCount,
     reviewFootprintCount,
@@ -341,8 +398,9 @@ function bboxForBoundary(boundary: LngLat[], center: { lat: number; lng: number 
     maxLng = Math.max(maxLng, lng);
     maxLat = Math.max(maxLat, lat);
   }
-  const padLat = 12 / 111_000;
-  const padLng = 12 / (111_000 * Math.cos((center.lat * Math.PI) / 180));
+  const padLat = BUILDING_CONTEXT_RADIUS_M / 111_000;
+  const lngScale = 111_000 * Math.cos((center.lat * Math.PI) / 180);
+  const padLng = lngScale > 0 ? BUILDING_CONTEXT_RADIUS_M / lngScale : padLat;
   return `${minLng - padLng},${minLat - padLat},${maxLng + padLng},${maxLat + padLat},EPSG:4326`;
 }
 
@@ -358,7 +416,7 @@ export async function fetchExistingBuildingGeometry(
   url.searchParams.set("typeName", LAYER);
   url.searchParams.set("srsName", "EPSG:4326");
   url.searchParams.set("bbox", bboxForBoundary(query.boundary, query.center));
-  url.searchParams.set("maxFeatures", "50");
+  url.searchParams.set("maxFeatures", "100");
   url.searchParams.set("outputFormat", "application/json");
   url.searchParams.set("key", KEY);
   url.searchParams.set("domain", DOMAIN);
