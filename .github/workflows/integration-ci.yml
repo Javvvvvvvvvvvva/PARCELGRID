@@ -34,26 +34,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run Stage 1 GIS tests
-        id: stage1
-        continue-on-error: true
         run: |
           pnpm exec vitest run \
             src/tests/vworld-buildings.test.ts \
             src/tests/status-insights.test.ts \
             src/tests/geo/normalize-road-lines.test.ts \
-            --reporter=verbose > stage1-tests.log 2>&1
-
-      - name: Upload Stage 1 test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: stage1-tests-log
-          path: stage1-tests.log
-          if-no-files-found: error
-
-      - name: Stop after Stage 1 failure
-        if: steps.stage1.outcome == 'failure'
-        run: exit 1
+            --reporter=verbose
 
       - name: Run Stage 2 planning tests
         run: |
@@ -64,7 +50,21 @@ jobs:
             --reporter=verbose
 
       - name: Typecheck
-        run: pnpm exec tsc --noEmit
+        id: typecheck
+        continue-on-error: true
+        run: pnpm exec tsc --noEmit > typecheck.log 2>&1
+
+      - name: Upload typecheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-log
+          path: typecheck.log
+          if-no-files-found: error
+
+      - name: Stop after typecheck failure
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
 
       - name: Build
         run: pnpm build
