@@ -18,6 +18,7 @@ import {
   lookupZoningByPNU,
 } from "@/lib/integrations/vworld";
 import { lookupBuildingByJibun, estimateUnitAreaSqm } from "@/lib/integrations/molit-building";
+import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
 
 export const runtime = "nodejs";
 
@@ -56,6 +57,10 @@ export async function POST(req: NextRequest) {
         { status: 502 }
       );
     }
+
+    // VWorld MultiLineString의 분리된 선분이 평탄화된 레거시 응답을 정규화한다.
+    // 이 처리가 없으면 서로 다른 도로 끝점 사이에 가짜 대각선이 생길 수 있다.
+    const normalizedRoads = normalizeRoadLines(cadastral.roads);
 
     // 3. V월드 용도지역 정보 (PNU 기반)
     let zoning;
@@ -103,7 +108,7 @@ export async function POST(req: NextRequest) {
       pnu: cadastral.pnu,
       lotArea: cadastral.lotAreaSqm,
       boundary: cadastral.boundary,
-      roads: cadastral.roads,
+      roads: normalizedRoads,
       jimok: cadastral.jimok,
       jimokCode: cadastral.jimokCode,
       jimokCategory: cadastral.jimokCategory,
