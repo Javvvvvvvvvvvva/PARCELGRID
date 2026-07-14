@@ -123,7 +123,7 @@ describe("VWorld dt_d010 building geometry", () => {
 
   it("keeps a 60-85% boundary-straddling footprint but marks it for review", () => {
     const boundaryStraddling = rectangle(127.0321, 37.64998, 127.03224, 37.65012);
-    const overlap = calculateFootprintParcelOverlap(boundaryStraddling, boundary);
+    const overlap = calculateFootprintParcelOverlap([boundaryStraddling], boundary);
     const result = parseBuildingFeatureCollection(
       { type: "FeatureCollection", features: [feature(PNU, "boundary-building", boundaryStraddling)] },
       { pnu: PNU, boundary, center }
