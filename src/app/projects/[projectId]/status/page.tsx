@@ -27,6 +27,7 @@ import {
 import { num, pyeong } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
+import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
 
 const ExistingBuildingMass = dynamic(
   () =>
@@ -81,6 +82,11 @@ export default function StatusPage({
     if (!main || !parcel?.lotArea) return null;
     return computeExistingRatios(main, parcel.lotArea);
   }, [main, parcel?.lotArea]);
+
+  const normalizedRoads = useMemo(
+    () => normalizeRoadLines(parcel?.roads ?? []),
+    [parcel?.roads]
+  );
 
   const allComps: CompVM[] = data?.comps ?? [];
 
@@ -371,7 +377,7 @@ export default function StatusPage({
         >
           <ExistingBuildingMass
             boundary={parcel.boundary}
-            roads={parcel.roads}
+            roads={normalizedRoads}
             currentBuilding={currentBuilding}
             lotArea={parcel.lotArea}
             height={460}
