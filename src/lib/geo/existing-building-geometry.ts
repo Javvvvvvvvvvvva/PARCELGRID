@@ -33,9 +33,14 @@ export interface ExistingBuildingFootprint {
 export interface ExistingBuildingGeometry {
   source: "vworld-dt_d010";
   status: BuildingGeometryStatus;
+  /** 대상 필지의 현재 건물 형상. */
   footprints: ExistingBuildingFootprint[];
+  /** 대상 필지를 둘러싼 인접 건물 형상. 현황 3D에서만 반투명 컨텍스트로 사용한다. */
+  contextFootprints?: ExistingBuildingFootprint[];
+  /** 주변 건물을 수집한 필지 경계 기준 거리. */
+  contextRadiusM?: number;
   queryFeatureCount: number;
-  /** 필지 겹침 60% 미만으로 자동 제외한 형상 수. */
+  /** 필지 겹침 60% 미만으로 자동 제외한 대상 후보 수. */
   rejectedFootprintCount?: number;
   /** 필지 겹침 60~85%로 추가 확인이 필요한 채택 형상 수. */
   reviewFootprintCount?: number;
