@@ -3,6 +3,7 @@ import type { BuildingPolygon, LngLat } from "@/lib/geo/existing-building-geomet
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import {
   attachExistingBuildingGeometry,
+  BUILDING_CONTEXT_RADIUS_M,
   calculateFootprintParcelOverlap,
   normalizeViolationStatus,
   parseBuildingFeatureCollection,
@@ -87,6 +88,24 @@ describe("VWorld dt_d010 building geometry", () => {
     expect(result.footprints.every((item) => item.matchMethod === "pnu")).toBe(true);
     expect(result.footprints.every((item) => item.parcelOverlapStatus === "verified")).toBe(true);
     expect(result.footprints[0].polygons[0][0].length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("keeps nearby non-subject buildings as bounded context", () => {
+    const result = parseBuildingFeatureCollection(
+      {
+        type: "FeatureCollection",
+        features: [
+          feature(PNU, "main"),
+          feature("1132010500109990001", "near-east", polygon(0.00024, 0)),
+          feature("1132010500109990002", "far-away", polygon(0.001, 0.001)),
+        ],
+      },
+      { pnu: PNU, boundary, center }
+    );
+
+    expect(result.contextRadiusM).toBe(BUILDING_CONTEXT_RADIUS_M);
+    expect(result.contextFootprints?.map((item) => item.id)).toEqual(["near-east"]);
+    expect(result.contextFootprints?.some((item) => item.id === "main")).toBe(false);
   });
 
   it("normalizes EPSG:4326 axis-swapped coordinates around the target parcel", () => {
