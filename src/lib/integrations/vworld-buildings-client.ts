@@ -1,5 +1,6 @@
 import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 import {
+  BUILDING_CONTEXT_RADIUS_M,
   parseBuildingFeatureCollection,
   type ExistingBuildingGeometryQuery,
 } from "@/lib/integrations/vworld-buildings";
@@ -30,9 +31,9 @@ function bboxForBoundary(
     maxLat = Math.max(maxLat, lat);
   }
 
-  const padLat = 12 / 111_000;
+  const padLat = BUILDING_CONTEXT_RADIUS_M / 111_000;
   const lngScale = 111_000 * Math.cos((center.lat * Math.PI) / 180);
-  const padLng = lngScale > 0 ? 12 / lngScale : padLat;
+  const padLng = lngScale > 0 ? BUILDING_CONTEXT_RADIUS_M / lngScale : padLat;
 
   // BldgisSpceService accepts the successful terminal-test form:
   // minLng,minLat,maxLng,maxLat. Do not append a CRS token here.
@@ -54,7 +55,7 @@ export function buildExistingBuildingWfsUrl(
   url.searchParams.set("TYPENAME", LAYER);
   url.searchParams.set("SRSNAME", "EPSG:4326");
   url.searchParams.set("BBOX", bboxForBoundary(query.boundary, query.center));
-  url.searchParams.set("MAXFEATURES", "50");
+  url.searchParams.set("MAXFEATURES", "100");
   url.searchParams.set("OUTPUT", "application/json");
   url.searchParams.set("KEY", KEY);
   url.searchParams.set("DOMAIN", DOMAIN);
