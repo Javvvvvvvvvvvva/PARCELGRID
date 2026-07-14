@@ -4,6 +4,7 @@ export type BuildingPolygon = BuildingRing[];
 
 export type BuildingGeometryStatus = "matched" | "not_found" | "error";
 export type BuildingGeometryMatchMethod = "pnu" | "geometry";
+export type BuildingParcelOverlapStatus = "verified" | "review";
 export type ViolationStatus = "yes" | "no" | "unknown";
 
 export interface ExistingBuildingFootprint {
@@ -23,6 +24,10 @@ export interface ExistingBuildingFootprint {
   violationRaw: string;
   matchMethod: BuildingGeometryMatchMethod;
   source: "vworld-dt_d010";
+  /** 건물 외곽 면적 중 대상 필지 내부와 겹치는 비율 (0~1). */
+  parcelOverlapRatio?: number;
+  /** 85% 이상 verified, 60~85% review. 60% 미만 형상은 결과에서 제외한다. */
+  parcelOverlapStatus?: BuildingParcelOverlapStatus;
 }
 
 export interface ExistingBuildingGeometry {
@@ -30,6 +35,10 @@ export interface ExistingBuildingGeometry {
   status: BuildingGeometryStatus;
   footprints: ExistingBuildingFootprint[];
   queryFeatureCount: number;
+  /** 필지 겹침 60% 미만으로 자동 제외한 형상 수. */
+  rejectedFootprintCount?: number;
+  /** 필지 겹침 60~85%로 추가 확인이 필요한 채택 형상 수. */
+  reviewFootprintCount?: number;
 }
 
 export interface BuildingLookupWithGeometry {
