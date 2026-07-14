@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BuildingPolygon, LngLat } from "@/lib/geo/existing-building-geometry";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import {
   attachExistingBuildingGeometry,
@@ -8,7 +9,7 @@ import {
 } from "@/lib/integrations/vworld-buildings";
 
 const PNU = "1132010500102810023";
-const boundary: [number, number][] = [
+const boundary: LngLat[] = [
   [127.0319, 37.6499],
   [127.0322, 37.6499],
   [127.0322, 37.6502],
@@ -17,7 +18,7 @@ const boundary: [number, number][] = [
 ];
 const center = { lng: 127.03205, lat: 37.65005 };
 
-function polygon(lngOffset = 0, latOffset = 0) {
+function polygon(lngOffset = 0, latOffset = 0): BuildingPolygon {
   return [
     [
       [127.03198 + lngOffset, 37.64998 + latOffset],
@@ -29,7 +30,12 @@ function polygon(lngOffset = 0, latOffset = 0) {
   ];
 }
 
-function rectangle(minLng: number, minLat: number, maxLng: number, maxLat: number) {
+function rectangle(
+  minLng: number,
+  minLat: number,
+  maxLng: number,
+  maxLat: number
+): BuildingPolygon {
   return [
     [
       [minLng, minLat],
@@ -41,7 +47,7 @@ function rectangle(minLng: number, minLat: number, maxLng: number, maxLat: numbe
   ];
 }
 
-function feature(pnu: string, id: string, coordinates = polygon()) {
+function feature(pnu: string, id: string, coordinates: BuildingPolygon = polygon()) {
   return {
     type: "Feature",
     id,
@@ -84,7 +90,9 @@ describe("VWorld dt_d010 building geometry", () => {
   });
 
   it("normalizes EPSG:4326 axis-swapped coordinates around the target parcel", () => {
-    const swapped = polygon().map((ring) => ring.map(([lng, lat]) => [lat, lng]));
+    const swapped: BuildingPolygon = polygon().map((ring) =>
+      ring.map(([lng, lat]) => [lat, lng] as LngLat)
+    );
     const result = parseBuildingFeatureCollection(
       { type: "FeatureCollection", features: [feature(PNU, "swapped", swapped)] },
       { pnu: PNU, boundary, center }
