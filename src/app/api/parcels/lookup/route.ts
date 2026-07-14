@@ -24,6 +24,7 @@ import {
 import { attachExistingBuildingGeometry } from "@/lib/integrations/vworld-buildings";
 import { fetchExistingBuildingGeometry } from "@/lib/integrations/vworld-buildings-client";
 import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
+import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
 
 export const runtime = "nodejs";
 
@@ -62,6 +63,10 @@ export async function POST(req: NextRequest) {
         { status: 502 }
       );
     }
+
+    // MultiLineString이 평탄화된 레거시 응답에서 서로 다른 도로 끝점이
+    // 가짜 대각선으로 연결되는 문제를 신규 프로젝트 저장 전에 제거한다.
+    const normalizedRoads = normalizeRoadLines(cadastral.roads);
 
     // 3~5. PNU가 확보된 뒤 독립 조회를 병렬 실행
     const zoningPromise = lookupZoningByPNU(cadastral.pnu);
@@ -140,7 +145,7 @@ export async function POST(req: NextRequest) {
       pnu: cadastral.pnu,
       lotArea: cadastral.lotAreaSqm,
       boundary: cadastral.boundary,
-      roads: cadastral.roads,
+      roads: normalizedRoads,
       jimok: cadastral.jimok,
       jimokCode: cadastral.jimokCode,
       jimokCategory: cadastral.jimokCategory,
