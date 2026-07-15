@@ -8,6 +8,7 @@ on:
       - stage2/envelope-data-bridge
       - stage2/planning-geometry-contract
       - stage2/sketchup-dae-export
+      - stage2/cadastral-road-context
   push:
     branches:
       - integration/stage2-status-gis-footprint
@@ -15,6 +16,7 @@ on:
       - stage2/planning-geometry-contract
       - stage2/sketchup-dae-export
       - stage2/cadastral-road-context
+      - stage2/upis-road-boundaries
 
 permissions:
   contents: read
@@ -63,6 +65,7 @@ jobs:
             src/tests/planning-sketchup-export-package.test.ts \
             src/tests/planning-sketchup-dae-export.test.ts \
             src/tests/planning-cadastral-road-context.test.ts \
+            src/tests/planning-upis-road-boundaries.test.ts \
             --reporter=verbose
 
       - name: Typecheck
