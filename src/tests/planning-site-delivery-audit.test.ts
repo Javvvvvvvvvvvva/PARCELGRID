@@ -16,7 +16,7 @@ const square = (minX: number, minZ: number, maxX: number, maxZ: number) => [
 
 function planning(): PlanningGeometrySnapshot {
   const parcel = square(-10, -10, 10, 10);
-  const floor = {
+  const floor: PlanningGeometrySnapshot["building"]["floors"][number] = {
     id: "floor-1",
     label: "1층",
     level: 1,
@@ -24,15 +24,20 @@ function planning(): PlanningGeometrySnapshot {
     baseHeightM: 0,
     topHeightM: 3.6,
     programAreaSqm: 100,
+    targetAreaSqm: 100,
     visualAreaSqm: 100,
     envelopeAreaSqm: 400,
     areaDifferenceSqm: 0,
     areaDifferencePct: 0,
-    areaStatus: "pass" as const,
+    areaStatus: "pass",
+    appliedScalePct: 100,
     footprintScalePct: 100,
     capacityShortfallSqm: 0,
+    northSetbackM: 0,
+    requiredSetbackM: 0,
+    envelopeAvailable: true,
     shape: square(-5, -5, 5, 5),
-    dominantUse: "residential" as const,
+    dominantUse: "residential",
     zones: [],
     residentialUnits: 1,
     commercialUnits: 0,
