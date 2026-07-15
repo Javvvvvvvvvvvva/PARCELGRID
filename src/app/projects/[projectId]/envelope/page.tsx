@@ -3,6 +3,7 @@
 import "@/lib/three/guard-empty-paths";
 import { use } from "react";
 import { PlanningScenarioWorkspaceV4 } from "@/components/planning/PlanningScenarioWorkspaceV4";
+import { PlanningGeometryContractPanel } from "@/components/planning/PlanningGeometryContractPanel";
 import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacementWorkspace";
 import { ScenarioParkingWorkspace } from "@/components/planning/ScenarioParkingWorkspace";
 import { ScenarioChangeWorkspace } from "@/components/planning/ScenarioChangeWorkspace";
@@ -16,6 +17,7 @@ export default function EnvelopePage({
   return (
     <>
       <PlanningScenarioWorkspaceV4 projectId={projectId} />
+      <PlanningGeometryContractPanel projectId={projectId} />
       <ScenarioPlacementWorkspace projectId={projectId} />
       <ScenarioParkingWorkspace projectId={projectId} />
       <ScenarioChangeWorkspace projectId={projectId} />
