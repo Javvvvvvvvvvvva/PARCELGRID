@@ -136,7 +136,7 @@ describe("SketchUp site delivery export", () => {
     expect(result.combinedDaeText).toContain("PG_PROPOSED_MASS");
     expect(result.combinedDaeText).toContain("PG_ROAD_BOUNDARY_UPIS");
     expect(result.combinedDaeText).toContain("PG_ADJACENT_PARCELS");
-    expect(result.combinedDaeText.match(/<visual_scene/g)).toHaveLength(1);
+    expect(result.combinedDaeText.match(/<visual_scene\s/g)).toHaveLength(1);
     expect(result.metadataText).toContain("deliveryAudit");
     expect(result.metadataText).toContain(result.combinedDaeFilename);
     expect(result.readmeText).toContain("권장 가져오기");
