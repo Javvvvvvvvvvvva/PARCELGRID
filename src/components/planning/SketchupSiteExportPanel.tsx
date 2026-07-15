@@ -9,7 +9,8 @@ import {
 } from "@/lib/geo/cadastral-context";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildSketchupExportPackage } from "@/lib/planning/sketchup-export-package";
-import { downloadSketchupSiteExport } from "@/lib/planning/sketchup-site-export";
+import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
+import { downloadSketchupSiteDeliveryExport } from "@/lib/planning/sketchup-site-delivery-export";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
 
@@ -33,6 +34,24 @@ const cell = {
   borderBottom: "1px solid var(--border)",
   textAlign: "left" as const,
 };
+
+const CHECK_TONE = {
+  pass: {
+    label: "통과",
+    background: "var(--pos-soft)",
+    color: "var(--pos-fg)",
+  },
+  review: {
+    label: "확인",
+    background: "var(--warn-soft)",
+    color: "var(--warn-fg)",
+  },
+  fail: {
+    label: "차단",
+    background: "var(--neg-soft)",
+    color: "var(--neg-fg)",
+  },
+} as const;
 
 export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   const data = useProjectStore((state) => state.data);
@@ -130,17 +149,23 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       targetPnu,
       parcels,
     });
+    const audit = buildSiteDeliveryAudit({
+      planning,
+      context: basePackage.context,
+      cadastral,
+    });
 
-    return { planning, basePackage, cadastral };
+    return { planning, basePackage, cadastral, audit };
   }, [parcel, parcels, projectId, scenario, targetBoundary, targetPnu]);
 
   if (!parcel || !targetBoundary || !scenario || !packageData) return null;
 
-  const { planning, basePackage, cadastral } = packageData;
+  const { planning, basePackage, cadastral, audit } = packageData;
   const locked =
     representativeGeometry?.scenarioId === planning.scenarioId &&
     representativeGeometry?.geometryHash === planning.geometryHash;
   const canDownload =
+    audit.exportable &&
     basePackage.validation.exportable &&
     locked &&
     loadState === "ready" &&
@@ -163,10 +188,11 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
 
   const handleDownload = () => {
     setMessage(null);
-    if (!basePackage.validation.exportable) {
+    if (!audit.exportable || !basePackage.validation.exportable) {
       setMessage({
         tone: "fail",
         text:
+          audit.checks.find((check) => check.status === "fail")?.message ??
           basePackage.validation.blockingReasons[0] ??
           "계획 매스 Geometry Contract를 먼저 수정하세요.",
       });
@@ -185,7 +211,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
     }
 
     try {
-      const result = downloadSketchupSiteExport({
+      const result = downloadSketchupSiteDeliveryExport({
         basePackage,
         cadastral,
         targetBoundary,
@@ -193,7 +219,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       });
       setMessage({
         tone: "success",
-        text: `${result.filename} 다운로드를 시작했습니다. model.dae와 site-context.dae를 같은 SketchUp 파일에 순서대로 가져오세요.`,
+        text: `${result.filename} 다운로드를 시작했습니다. SketchUp에서는 ${result.preferredImportFilename} 파일 하나를 먼저 가져오세요.`,
       });
     } catch (error) {
       setMessage({
@@ -228,13 +254,27 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
     ["PG_NORTH", 1, "정북 방향"],
   ];
 
+  const auditTone = CHECK_TONE[audit.status];
+
   return (
     <Panel
       title="SketchUp 통합 사이트 패키지"
-      source="계획 매스·주변 건물·지적선·UPIS 도로 경계·DXF/GeoJSON"
+      source="단일 통합 DAE · 분리 DAE · 지적 DXF · WGS84 GeoJSON"
       bodyStyle={{ padding: "var(--s5)" }}
     >
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+        <span
+          style={{
+            padding: "4px 8px",
+            borderRadius: 999,
+            background: auditTone.background,
+            color: auditTone.color,
+            fontSize: 10.5,
+            fontWeight: 750,
+          }}
+        >
+          설계 전달 {auditTone.label}
+        </span>
         <span className="ui-tag">{canDownload ? "통합 Export 가능" : "Export 준비 중"}</span>
         <span className="ui-tag">활성 도로: {sourceLabel}</span>
         <span className="ui-tag">도로 경계 {cadastral.roadParcels.length}개</span>
@@ -242,10 +282,18 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
         {locked && <span className="ui-tag">대표 계획 매스 잠김</span>}
       </div>
 
-      <p style={{ margin: "8px 0 0", fontSize: 11, lineHeight: 1.55, color: "var(--fg-muted)" }}>
-        ZIP에는 계획·주변 건물 DAE, 도로·지적 컨텍스트 DAE, 2D DXF, WGS84
-        GeoJSON과 검증 metadata가 함께 들어갑니다. 두 DAE는 동일한 meter 단위와 원점을
-        사용하므로 순서대로 가져오면 자동으로 겹칩니다.
+      <p
+        style={{
+          margin: "8px 0 0",
+          fontSize: 11,
+          lineHeight: 1.55,
+          color: "var(--fg-muted)",
+        }}
+      >
+        ZIP의 권장 파일은 계획 매스·주변 건물·필지·도로 경계를 모두 포함한
+        <strong> combined.dae</strong>입니다. 모델과 사이트를 나눈 두 DAE는 좌표 정합을
+        별도로 검증할 때 사용하고, DXF와 GeoJSON은 2D 지적선 및 원좌표 확인용으로
+        유지합니다.
       </p>
 
       <div
@@ -256,7 +304,11 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           marginTop: 14,
         }}
       >
-        <Metric label="도로 경계 출처" value={sourceLabel} sub={sourceSummary?.upisDataCode ?? "VWorld"} />
+        <Metric
+          label="도로 경계 출처"
+          value={sourceLabel}
+          sub={sourceSummary?.upisDataCode ?? "VWorld"}
+        />
         <Metric
           label="도로 폭 · 최소"
           value={primary?.widthMinM == null ? "미확인" : `${num(primary.widthMinM, 2)}m`}
@@ -282,6 +334,91 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       {loadState === "loading" && <Notice>지적·UPIS 도로 경계를 조회하고 있습니다.</Notice>}
       {message && <Notice tone={message.tone}>{message.text}</Notice>}
 
+      <div
+        style={{
+          marginTop: 14,
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "10px 12px",
+            borderBottom: "1px solid var(--border)",
+            fontSize: 11.5,
+            fontWeight: 760,
+          }}
+        >
+          설계 전달 준비 체크
+        </div>
+        <div style={{ display: "grid" }}>
+          {audit.checks.map((check) => {
+            const tone = CHECK_TONE[check.status];
+            return (
+              <div
+                key={check.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "70px minmax(125px, 180px) 1fr",
+                  gap: 10,
+                  alignItems: "center",
+                  padding: "9px 12px",
+                  borderBottom: "1px solid var(--border)",
+                  fontSize: 10.5,
+                }}
+              >
+                <span
+                  style={{
+                    justifySelf: "start",
+                    padding: "3px 7px",
+                    borderRadius: 999,
+                    background: tone.background,
+                    color: tone.color,
+                    fontWeight: 750,
+                  }}
+                >
+                  {tone.label}
+                </span>
+                <strong>{check.label}</strong>
+                <span style={{ color: "var(--fg-muted)", lineHeight: 1.45 }}>
+                  {check.message}
+                </span>
+              </div>
+            );
+          })}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "70px minmax(125px, 180px) 1fr",
+              gap: 10,
+              alignItems: "center",
+              padding: "9px 12px",
+              fontSize: 10.5,
+            }}
+          >
+            <span
+              style={{
+                justifySelf: "start",
+                padding: "3px 7px",
+                borderRadius: 999,
+                background: locked ? "var(--pos-soft)" : "var(--warn-soft)",
+                color: locked ? "var(--pos-fg)" : "var(--warn-fg)",
+                fontWeight: 750,
+              }}
+            >
+              {locked ? "통과" : "확인"}
+            </span>
+            <strong>대표안 잠금</strong>
+            <span style={{ color: "var(--fg-muted)" }}>
+              {locked
+                ? `대표 Geometry Snapshot ${planning.geometryHash}과 일치합니다.`
+                : "현재 계획안을 대표안으로 확정해야 다운로드할 수 있습니다."}
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div style={{ marginTop: 14, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
           <thead>
@@ -294,7 +431,9 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           <tbody>
             {rows.map(([name, count, purpose]) => (
               <tr key={name}>
-                <td style={cell}><code>{name}</code></td>
+                <td style={cell}>
+                  <code>{name}</code>
+                </td>
                 <td style={cell}>{count}</td>
                 <td style={cell}>{purpose}</td>
               </tr>
@@ -315,8 +454,9 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           flexWrap: "wrap",
         }}
       >
-        <div style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>
+        <div style={{ fontSize: 10.5, color: "var(--fg-muted)", maxWidth: 850 }}>
           UPIS 도로 경계는 개략설계용 도시계획 도형이며 현황측량을 대체하지 않습니다.
+          확인 항목은 metadata와 README에도 기록됩니다.
         </div>
         <button
           type="button"
@@ -333,7 +473,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
             cursor: canDownload ? "pointer" : "not-allowed",
           }}
         >
-          {canDownload ? "SketchUp 통합 패키지 다운로드" : "대표안·도로 경계 확인 필요"}
+          {canDownload ? "SketchUp 설계 전달 패키지 다운로드" : "대표안·도로 경계 확인 필요"}
         </button>
       </div>
     </Panel>
