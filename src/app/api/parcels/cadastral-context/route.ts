@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCadastralContextParcels } from "@/lib/integrations/vworld-cadastral-context";
+import {
+  fetchUpisRoadBoundaries,
+  VWORLD_UPIS_ROAD_DATA,
+} from "@/lib/integrations/vworld-upis-roads";
 
 export const runtime = "nodejs";
 
@@ -28,26 +32,80 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const radiusM = Math.min(180, Math.max(40, Number(body.radiusM) || 100));
+  const center = { lat, lng };
+
   try {
-    const parcels = await fetchCadastralContextParcels({
-      targetPnu,
-      center: { lat, lng },
-      radiusM: Math.min(150, Math.max(40, Number(body.radiusM) || 80)),
-      maxCount: 80,
-    });
+    const [cadastralResult, upisResult] = await Promise.allSettled([
+      fetchCadastralContextParcels({
+        targetPnu,
+        center,
+        radiusM,
+        maxCount: 80,
+      }),
+      fetchUpisRoadBoundaries({
+        center,
+        radiusM: Math.max(120, radiusM),
+        maxCount: 40,
+      }),
+    ]);
+
+    const cadastralParcels =
+      cadastralResult.status === "fulfilled" ? cadastralResult.value : [];
+    const upisRoads =
+      upisResult.status === "fulfilled" ? upisResult.value.parcels : [];
+    const upisRoadSummaries =
+      upisResult.status === "fulfilled" ? upisResult.value.summaries : [];
+
+    if (cadastralResult.status === "rejected") {
+      console.warn("주변 연속지적도 조회 실패:", cadastralResult.reason);
+    }
+    if (upisResult.status === "rejected") {
+      console.warn("도시계획 도로 경계 조회 실패:", upisResult.reason);
+    }
+
+    const cadastralRoadCount = cadastralParcels.filter(
+      (parcel) => parcel.jimok.trim() === "도로"
+    ).length;
+    const parcels =
+      cadastralRoadCount > 0
+        ? cadastralParcels
+        : [...cadastralParcels, ...upisRoads];
+
     return NextResponse.json({
-      source: "VWorld LP_PA_CBND_BUBUN",
+      source: "VWorld LP_PA_CBND_BUBUN + LT_C_UPISUQ151",
       targetPnu,
       parcels,
+      sourceSummary: {
+        cadastralParcelCount: cadastralParcels.length,
+        cadastralRoadCount,
+        upisRoadBoundaryCount: upisRoads.length,
+        activeRoadBoundarySource:
+          cadastralRoadCount > 0
+            ? "cadastral-road-parcel"
+            : upisRoads.length > 0
+              ? "upis-road-boundary"
+              : "centerline-reference-only",
+        upisDataCode: VWORLD_UPIS_ROAD_DATA,
+      },
+      upisRoadSummaries,
+      warnings: [
+        ...(cadastralResult.status === "rejected"
+          ? ["연속지적도 주변 필지 조회에 실패했습니다."]
+          : []),
+        ...(upisResult.status === "rejected"
+          ? ["도시계획 도로 경계 API 조회에 실패했습니다."]
+          : []),
+      ],
     });
   } catch (error) {
-    console.error("주변 연속지적도 조회 실패:", error);
+    console.error("지적·도로 context 조회 실패:", error);
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "주변 연속지적도 조회 중 오류가 발생했습니다.",
+            : "지적·도로 context 조회 중 오류가 발생했습니다.",
       },
       { status: 502 }
     );
