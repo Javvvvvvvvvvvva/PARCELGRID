@@ -40,6 +40,7 @@ jobs:
             src/tests/status-insights.test.ts \
             src/tests/geo/normalize-road-lines.test.ts \
             src/tests/geo/select-primary-road.test.ts \
+            src/tests/geo/orientation-display.test.ts \
             --reporter=verbose
 
       - name: Run Stage 2 planning tests
