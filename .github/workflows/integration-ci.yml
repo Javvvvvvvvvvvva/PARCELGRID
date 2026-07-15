@@ -5,10 +5,12 @@ on:
     branches:
       - stage2/planning-scenario-foundation
       - integration/stage2-status-gis-footprint
+      - stage2/envelope-data-bridge
   push:
     branches:
       - integration/stage2-status-gis-footprint
       - stage2/envelope-data-bridge
+      - stage2/planning-geometry-contract
 
 permissions:
   contents: read
@@ -53,6 +55,7 @@ jobs:
             src/tests/planning-calculator.test.ts \
             src/tests/planning-scenario-factory.test.ts \
             src/tests/planning-scenario-finance-bridge.test.ts \
+            src/tests/planning-geometry.test.ts \
             --reporter=verbose
 
       - name: Typecheck
