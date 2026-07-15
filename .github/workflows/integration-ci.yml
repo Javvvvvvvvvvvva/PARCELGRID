@@ -60,21 +60,7 @@ jobs:
             --reporter=verbose
 
       - name: Typecheck
-        id: typecheck
-        continue-on-error: true
-        run: pnpm exec tsc --noEmit > typecheck.log 2>&1
-
-      - name: Upload typecheck diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: typecheck-log
-          path: typecheck.log
-          if-no-files-found: error
-
-      - name: Stop after typecheck failure
-        if: steps.typecheck.outcome == 'failure'
-        run: exit 1
+        run: pnpm exec tsc --noEmit
 
       - name: Build
         run: pnpm build
