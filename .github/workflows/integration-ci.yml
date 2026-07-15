@@ -57,21 +57,7 @@ jobs:
             --reporter=verbose
 
       - name: Run integrated site export test
-        id: site_export
-        continue-on-error: true
-        run: pnpm exec vitest run src/tests/planning-sketchup-site-export.test.ts --reporter=verbose > site-export.log 2>&1
-
-      - name: Upload site export diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-export-test-log
-          path: site-export.log
-          if-no-files-found: error
-
-      - name: Stop after site export failure
-        if: steps.site_export.outcome == 'failure'
-        run: exit 1
+        run: pnpm exec vitest run src/tests/planning-sketchup-site-export.test.ts --reporter=verbose
 
       - name: Run Stage 2 planning tests
         run: |
@@ -89,7 +75,21 @@ jobs:
             --reporter=verbose
 
       - name: Typecheck
-        run: pnpm exec tsc --noEmit
+        id: typecheck
+        continue-on-error: true
+        run: pnpm exec tsc --noEmit > site-typecheck.log 2>&1
+
+      - name: Upload typecheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-typecheck-log
+          path: site-typecheck.log
+          if-no-files-found: error
+
+      - name: Stop after typecheck failure
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
 
       - name: Build
         run: pnpm build
