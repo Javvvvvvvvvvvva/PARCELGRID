@@ -73,12 +73,22 @@ function dxfLayers(snapshot: CadastralContextSnapshot): string[] {
 export function buildCadastralDxf(snapshot: CadastralContextSnapshot): string {
   const layers = dxfLayers(snapshot);
   let tables = dxfPair(0, "SECTION") + dxfPair(2, "TABLES");
-  tables += dxfPair(0, "TABLE") + dxfPair(2, "LAYER") + dxfPair(70, layers.length);
+  tables +=
+    dxfPair(0, "TABLE") +
+    dxfPair(2, "LAYER") +
+    dxfPair(70, layers.length);
   for (const layer of layers) {
     tables += dxfPair(0, "LAYER");
     tables += dxfPair(2, layer);
     tables += dxfPair(70, 0);
-    tables += dxfPair(62, layer === "PG_ROAD_PARCELS" ? 8 : layer === "PG_FRONTAGE" ? 5 : 7);
+    tables += dxfPair(
+      62,
+      layer === "PG_ROAD_PARCELS"
+        ? 8
+        : layer === "PG_FRONTAGE"
+          ? 5
+          : 7
+    );
     tables += dxfPair(6, "CONTINUOUS");
   }
   tables += dxfPair(0, "ENDTAB") + dxfPair(0, "ENDSEC");
@@ -90,7 +100,11 @@ export function buildCadastralDxf(snapshot: CadastralContextSnapshot): string {
     true
   );
   for (const parcel of snapshot.adjacentParcels) {
-    entities += dxfPolyline("PG_ADJACENT_PARCELS", parcel.polygon, true);
+    entities += dxfPolyline(
+      "PG_ADJACENT_PARCELS",
+      parcel.polygon,
+      true
+    );
   }
   for (const parcel of snapshot.roadParcels) {
     entities += dxfPolyline("PG_ROAD_PARCELS", parcel.polygon, true);
@@ -147,7 +161,9 @@ export function buildCadastralGeoJson(input: {
 }): string {
   const { snapshot } = input;
   const origin = snapshot.coordinateSystem.originLngLat;
-  const roadPnus = new Set(snapshot.roadParcels.map((parcel) => parcel.pnu));
+  const roadPnus = new Set(
+    snapshot.roadParcels.map((parcel) => parcel.pnu)
+  );
   const features: Array<Record<string, unknown>> = [];
 
   if (input.targetBoundary.length >= 3) {
@@ -314,7 +330,8 @@ const CRC_TABLE = (() => {
   for (let index = 0; index < 256; index += 1) {
     let value = index;
     for (let bit = 0; bit < 8; bit += 1) {
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      value =
+        value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
     }
     table[index] = value >>> 0;
   }
@@ -431,7 +448,11 @@ export function buildCadastralLineworkPackage(input: {
   const readmeFilename = "README-CADASTRAL-KO.txt";
   const dxfText = buildCadastralDxf(input.snapshot);
   const geojsonText = buildCadastralGeoJson(input);
-  const metadataText = JSON.stringify(buildMetadata(input.snapshot), null, 2);
+  const metadataText = JSON.stringify(
+    buildMetadata(input.snapshot),
+    null,
+    2
+  );
   const readmeText = buildReadme(input.snapshot);
   const encoder = new TextEncoder();
   const zipBytes = buildZip([
@@ -461,7 +482,11 @@ export function downloadCadastralLineworkPackage(input: {
 }): CadastralLineworkExportResult {
   const result = buildCadastralLineworkPackage(input);
   if (typeof window !== "undefined") {
-    const blob = new Blob([result.zipBytes], { type: "application/zip" });
+    const data = result.zipBytes.buffer.slice(
+      result.zipBytes.byteOffset,
+      result.zipBytes.byteOffset + result.zipBytes.byteLength
+    ) as ArrayBuffer;
+    const blob = new Blob([data], { type: "application/zip" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -469,7 +494,7 @@ export function downloadCadastralLineworkPackage(input: {
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
   return result;
 }
