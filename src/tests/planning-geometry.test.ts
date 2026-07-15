@@ -32,9 +32,11 @@ function scenarioWithArea(areaSqm: number, footprintScalePct = 100) {
     projectId: "parcel-1",
     name: "검증 계획안",
   });
-  const floor = createFloorProgram(1, [
-    createFloorZone("residential", areaSqm, 1),
-  ]);
+  scenario.id = "scenario-geometry-1";
+  const zone = createFloorZone("residential", areaSqm, 1);
+  zone.id = "zone-residential-1";
+  const floor = createFloorProgram(1, [zone]);
+  floor.id = "floor-1";
   floor.footprintScalePct = footprintScalePct;
   scenario.floorPrograms = [floor];
   scenario.placement = {
