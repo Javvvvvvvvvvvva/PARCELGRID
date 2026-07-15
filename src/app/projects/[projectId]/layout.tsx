@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
+import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 import { TopBar } from "@/components/ui/TopBar";
 import { WorkRail } from "@/components/ui/WorkRail";
 import { ParcelRail } from "@/components/ui/ParcelRail";
@@ -42,6 +43,10 @@ function ProjectShell({
   const setData = useProjectStore((s) => s.setData);
   const storeData = useProjectStore((s) => s.data);
   const envelopePlan = useProjectStore((s) => s.envelopePlan);
+  const planningScenarios = useProjectStore((s) => s.planningScenarios);
+  const representativePlanningScenarioId = useProjectStore(
+    (s) => s.representativePlanningScenarioId
+  );
   const pathname = usePathname();
   const lastKeyRef = useRef<string>("");
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -64,26 +69,66 @@ function ProjectShell({
   useEffect(() => {
     if (!data) return;
 
-    // 이미 envelope 기반 결과면 그대로 (재계산 불필요 — 무한루프 차단)
+    const projectPlanningScenarios = planningScenarios.filter(
+      (scenario) => scenario.projectId === projectId
+    );
+    const representativeScenario = projectPlanningScenarios.find(
+      (scenario) => scenario.id === representativePlanningScenarioId
+    );
+
+    // 새 Stage 2 대표 계획안이 있으면 구형 EnvelopePlan보다 우선한다.
+    if (representativeScenario && representativePlanningScenarioId) {
+      const planningVersionKey = projectPlanningScenarios
+        .filter(
+          (scenario) =>
+            scenario.id === representativePlanningScenarioId ||
+            scenario.status === "saved"
+        )
+        .map(
+          (scenario) =>
+            `${scenario.id}:${scenario.version}:${scenario.updatedAt}:${scenario.status}`
+        )
+        .sort()
+        .join("|");
+      const key = `${data.meta?.lastSyncedAt ?? ""}|planning|${representativePlanningScenarioId}|${planningVersionKey}`;
+      if (lastKeyRef.current === key) return;
+      lastKeyRef.current = key;
+
+      const recomputed = recomputeFromPlanningScenarios(
+        data.parcel,
+        projectPlanningScenarios,
+        representativePlanningScenarioId,
+        data
+      );
+      setData(recomputed ?? data);
+      return;
+    }
+
+    // 대표 PlanningScenario가 없을 때만 구형 envelope 계획을 호환 처리한다.
     const firstId = data.scenarios?.[0]?.id;
     if (firstId === "ENV-MAIN") {
       setData(data);
       return;
     }
 
-    // 같은 (API data + 계획) 조합은 1번만 처리 (무한루프 차단)
-    const key = `${data.meta?.lastSyncedAt ?? ""}|${envelopePlan?.scenarioType ?? ""}|${envelopePlan?.farPct ?? ""}|${envelopePlan?.floors ?? ""}|${envelopePlan?.units ?? ""}`;
+    const key = `${data.meta?.lastSyncedAt ?? ""}|legacy-envelope|${envelopePlan?.scenarioType ?? ""}|${envelopePlan?.farPct ?? ""}|${envelopePlan?.floors ?? ""}|${envelopePlan?.units ?? ""}`;
     if (lastKeyRef.current === key) return;
     lastKeyRef.current = key;
 
-    // envelope 계획이 있으면 그 값으로 재계산 (단일 진실 소스)
     if (envelopePlan && envelopePlan.scenarioType && data.parcel) {
       const recomputed = recomputeFromEnvelope(data.parcel, envelopePlan, data);
       setData(recomputed ?? data);
     } else {
       setData(data);
     }
-  }, [data, envelopePlan, setData]);
+  }, [
+    data,
+    envelopePlan,
+    planningScenarios,
+    projectId,
+    representativePlanningScenarioId,
+    setData,
+  ]);
 
   if (isLoading) {
     return (
