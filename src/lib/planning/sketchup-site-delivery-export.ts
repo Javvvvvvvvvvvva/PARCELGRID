@@ -22,14 +22,14 @@ export interface SketchupSiteDeliveryExportResult
 }
 
 function sectionContent(document: string, tag: string): string {
-  const startToken = `<${tag}>`;
+  const start = document.indexOf(`<${tag}`);
+  const openingEnd = start < 0 ? -1 : document.indexOf(">", start);
   const endToken = `</${tag}>`;
-  const start = document.indexOf(startToken);
-  const end = document.indexOf(endToken);
-  if (start < 0 || end < 0 || end < start) {
+  const end = openingEnd < 0 ? -1 : document.indexOf(endToken, openingEnd);
+  if (start < 0 || openingEnd < 0 || end < 0 || end < openingEnd) {
     throw new Error(`COLLADA ${tag} section을 찾을 수 없습니다.`);
   }
-  return document.slice(start + startToken.length, end);
+  return document.slice(openingEnd + 1, end);
 }
 
 function appendSection(
