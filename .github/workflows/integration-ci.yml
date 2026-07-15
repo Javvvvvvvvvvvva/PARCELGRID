@@ -10,6 +10,7 @@ on:
       - stage2/sketchup-dae-export
       - stage2/cadastral-road-context
       - stage2/upis-road-boundaries
+      - stage2/upis-road-3d-export
   push:
     branches:
       - integration/stage2-status-gis-footprint
@@ -19,6 +20,7 @@ on:
       - stage2/cadastral-road-context
       - stage2/upis-road-boundaries
       - stage2/upis-road-3d-export
+      - stage2/planning-studio-delivery-hardening
 
 permissions:
   contents: read
@@ -69,6 +71,8 @@ jobs:
             src/tests/planning-cadastral-road-context.test.ts \
             src/tests/planning-upis-road-boundaries.test.ts \
             src/tests/planning-sketchup-site-export.test.ts \
+            src/tests/planning-site-delivery-audit.test.ts \
+            src/tests/planning-sketchup-site-delivery-export.test.ts \
             --reporter=verbose
 
       - name: Typecheck
