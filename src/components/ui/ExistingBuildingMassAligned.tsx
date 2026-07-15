@@ -1,8 +1,16 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
-import { ContactShadows, Edges, Html, Line, OrbitControls } from "@react-three/drei";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { ContactShadows, Edges, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
@@ -18,6 +26,13 @@ import {
   type LocalPoint,
   type LocalRoadLine,
 } from "@/lib/geo/select-primary-road";
+import {
+  angularDifference,
+  bearingFromSceneVector,
+  frontageSideLabel,
+  normalizeBearing,
+  roadAxisLabel,
+} from "@/lib/geo/orientation";
 import { useProjectStore } from "@/lib/stores/project-store";
 
 type Pt = LocalPoint;
@@ -29,6 +44,7 @@ type LocalRoad = LocalRoadLine & {
   distanceM: number;
   alignment: number;
   frontage: { a: Pt; b: Pt };
+  roadSegment: { a: Pt; b: Pt };
 };
 
 type BuildingModel = {
@@ -55,6 +71,7 @@ const FRONTAGE_COLOR = "#2563eb";
 const SCHEMATIC_ROAD_WIDTH_M = 1.45;
 const FRONT_ROAD_MAX_DISTANCE_M = 12;
 const MAX_CONTEXT_HEIGHT_M = 24;
+const MINI_MAP_SIZE = { width: 166, height: 126, padding: 10 };
 
 function openRing<T extends [number, number] | Pt>(ring: T[]): T[] {
   if (ring.length <= 1) return ring;
@@ -128,13 +145,16 @@ function findPrimaryRoad(boundary: LngLat[], roads: RoadInput[]): LocalRoad | nu
   if (!selection) return null;
 
   const road = localRoads[selection.roadIndex];
-  const a = local.ring[selection.boundarySegmentIndex];
-  const b = local.ring[(selection.boundarySegmentIndex + 1) % local.ring.length];
+  const frontageA = local.ring[selection.boundarySegmentIndex];
+  const frontageB = local.ring[(selection.boundarySegmentIndex + 1) % local.ring.length];
+  const roadA = road.points[selection.roadSegmentIndex];
+  const roadB = road.points[selection.roadSegmentIndex + 1];
   return {
     ...road,
     distanceM: selection.distanceM,
     alignment: selection.alignment,
-    frontage: { a, b },
+    frontage: { a: frontageA, b: frontageB },
+    roadSegment: { a: roadA, b: roadB },
   };
 }
 
@@ -289,52 +309,6 @@ function RoadRibbon({ road, extent }: { road: LocalRoad; extent: number }) {
   );
 }
 
-function NorthMarker({ extent }: { extent: number }) {
-  const origin = useMemo(
-    () => new THREE.Vector3(-extent * 0.63, 0.28, extent * 0.62),
-    [extent]
-  );
-  const arrowLength = Math.max(2.2, extent * 0.2);
-  const arrow = useMemo(
-    () =>
-      new THREE.ArrowHelper(
-        new THREE.Vector3(0, 0, -1),
-        origin,
-        arrowLength,
-        "#334155",
-        0.55,
-        0.28
-      ),
-    [arrowLength, origin]
-  );
-
-  return (
-    <group>
-      <primitive object={arrow} />
-      <Html
-        position={[origin.x, origin.y + 0.2, origin.z - arrowLength - 0.3]}
-        center
-        style={{ pointerEvents: "none" }}
-      >
-        <div
-          style={{
-            padding: "3px 6px",
-            borderRadius: 999,
-            background: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(100,116,139,0.38)",
-            color: "#334155",
-            fontSize: 10,
-            fontWeight: 800,
-            lineHeight: 1,
-          }}
-        >
-          N
-        </div>
-      </Html>
-    </group>
-  );
-}
-
 function modelFromFootprint(
   footprint: ExistingBuildingFootprint,
   center: { lng: number; lat: number },
@@ -408,12 +382,44 @@ function CameraRig({
     } else {
       const targetY = Math.max(0.8, maxHeight * 0.3);
       camera.up.set(0, 1, 0);
-      camera.position.set(extent * 1.18, extent * 0.9, extent * 1.18);
+      // 대상지 남쪽에서 북쪽을 바라보는 정북 기준 조감.
+      camera.position.set(0, extent * 0.95, extent * 1.35);
       camera.lookAt(0, targetY, 0);
     }
     camera.updateProjectionMatrix();
     invalidate();
   }, [camera, extent, invalidate, maxHeight, mode, resetKey]);
+
+  return null;
+}
+
+function CameraHeadingReporter({
+  mode,
+  onHeadingChange,
+}: {
+  mode: ViewMode;
+  onHeadingChange: (bearingDeg: number) => void;
+}) {
+  const { camera } = useThree();
+  const direction = useMemo(() => new THREE.Vector3(), []);
+  const lastBearing = useRef<number | null>(null);
+
+  useFrame(() => {
+    let nextBearing = 0;
+    if (mode === "3d") {
+      camera.getWorldDirection(direction);
+      if (Math.hypot(direction.x, direction.z) <= 1e-6) return;
+      nextBearing = bearingFromSceneVector(direction.x, direction.z);
+    }
+
+    if (
+      lastBearing.current === null ||
+      angularDifference(lastBearing.current, nextBearing) >= 0.75
+    ) {
+      lastBearing.current = nextBearing;
+      onHeadingChange(nextBearing);
+    }
+  });
 
   return null;
 }
@@ -427,6 +433,7 @@ function SceneContent({
   showContext,
   viewMode,
   resetKey,
+  onHeadingChange,
 }: {
   boundary: LngLat[];
   roads: RoadInput[];
@@ -436,6 +443,7 @@ function SceneContent({
   showContext: boolean;
   viewMode: ViewMode;
   resetKey: number;
+  onHeadingChange: (bearingDeg: number) => void;
 }) {
   const main =
     currentBuilding?.buildings.find((building) => building.isMainBuilding) ??
@@ -560,7 +568,6 @@ function SceneContent({
         ]);
       })}
 
-      <NorthMarker extent={extent} />
       {viewMode === "3d" && (
         <ContactShadows
           position={[0, 0.02, 0]}
@@ -571,6 +578,7 @@ function SceneContent({
         />
       )}
       <CameraRig mode={viewMode} extent={extent} maxHeight={maxHeight} resetKey={resetKey} />
+      <CameraHeadingReporter mode={viewMode} onHeadingChange={onHeadingChange} />
       <OrbitControls
         makeDefault
         enableRotate={viewMode === "3d"}
@@ -616,6 +624,12 @@ function ModelHud({
     0,
     ...currentBuilding.buildings.map((building) => building.undergroundFloors)
   );
+  const roadDirection = road
+    ? roadAxisLabel(road.roadSegment.a, road.roadSegment.b)
+    : null;
+  const frontageSide = road
+    ? frontageSideLabel(road.frontage.a, road.frontage.b)
+    : null;
 
   const labels = [
     actual ? "실제 외곽선" : "개략 형상",
@@ -637,7 +651,7 @@ function ModelHud({
         gap: 6,
         flexWrap: "wrap",
         pointerEvents: "none",
-        maxWidth: "calc(100% - 390px)",
+        maxWidth: "calc(100% - 410px)",
       }}
     >
       {labels.map((label) => (
@@ -664,6 +678,7 @@ function ModelHud({
         style={{
           flexBasis: "100%",
           width: "fit-content",
+          maxWidth: 420,
           padding: "7px 9px",
           borderRadius: 7,
           background: "rgba(255,255,255,0.94)",
@@ -674,8 +689,281 @@ function ModelHud({
         }}
       >
         건축면적 {footprintArea.toFixed(1)}㎡ · 건폐율 {bcrPct.toFixed(1)}%
-        {road && ` · 접도 평행도 ${(road.alignment * 100).toFixed(0)}%`}
+        {road && (
+          <>
+            <br />
+            도로 방위 {roadDirection} · 접도면 {frontageSide} · 평행도{" "}
+            {(road.alignment * 100).toFixed(0)}%
+          </>
+        )}
       </div>
+    </div>
+  );
+}
+
+function CompassRose({ headingDeg, viewMode }: { headingDeg: number; viewMode: ViewMode }) {
+  const labels = [
+    { text: "N", bearing: 0, emphasis: true },
+    { text: "E", bearing: 90, emphasis: false },
+    { text: "S", bearing: 180, emphasis: false },
+    { text: "W", bearing: 270, emphasis: false },
+  ];
+  const radius = 32;
+  const center = 42;
+
+  return (
+    <div style={{ display: "grid", justifyItems: "center", gap: 4 }}>
+      <div
+        aria-label="동서남북 나침반"
+        style={{
+          position: "relative",
+          width: 84,
+          height: 84,
+          borderRadius: "50%",
+          background: "rgba(255,255,255,0.92)",
+          border: "1px solid rgba(100,116,139,0.38)",
+          boxShadow: "0 2px 8px rgba(15,23,42,0.08)",
+        }}
+      >
+        {labels.map((label) => {
+          const angle = ((label.bearing - headingDeg) * Math.PI) / 180;
+          const x = center + Math.sin(angle) * radius;
+          const y = center - Math.cos(angle) * radius;
+          return (
+            <span
+              key={label.text}
+              style={{
+                position: "absolute",
+                left: x,
+                top: y,
+                transform: "translate(-50%, -50%)",
+                fontSize: label.emphasis ? 12 : 10,
+                fontWeight: label.emphasis ? 800 : 650,
+                color: label.emphasis ? "#1d4ed8" : "#475569",
+              }}
+            >
+              {label.text}
+            </span>
+          );
+        })}
+        <span
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            width: 6,
+            height: 6,
+            transform: "translate(-50%, -50%)",
+            borderRadius: "50%",
+            background: "#334155",
+          }}
+        />
+      </div>
+      <div style={{ fontSize: 9.5, color: "#64748b", fontWeight: 600 }}>
+        {viewMode === "map" ? "정북 고정" : `카메라 방위 ${Math.round(headingDeg)}°`}
+      </div>
+    </div>
+  );
+}
+
+function polygonPath(
+  polygon: LocalPolygon,
+  project: (point: Pt) => { x: number; y: number }
+): string {
+  return polygon
+    .map((ring) => {
+      const points = ring.map(project);
+      if (points.length < 3) return "";
+      return `${points
+        .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+        .join(" ")} Z`;
+    })
+    .join(" ");
+}
+
+function NorthUpMiniMap({
+  boundary,
+  currentBuilding,
+  road,
+  showContext,
+}: {
+  boundary: LngLat[];
+  currentBuilding: BuildingLookupResult | null | undefined;
+  road: LocalRoad | null;
+  showContext: boolean;
+}) {
+  const geometry = getExistingBuildingGeometry(currentBuilding);
+  const drawing = useMemo(() => {
+    const local = boundaryToLocalRing(boundary);
+    if (!local) return null;
+
+    const subjectPolygons =
+      geometry?.status === "matched"
+        ? geometry.footprints.flatMap((footprint) =>
+            footprint.polygons
+              .map((polygon) => projectBuildingPolygon(polygon, local.center))
+              .filter((polygon) => polygon.length > 0)
+          )
+        : [];
+    const contextPolygons =
+      showContext && geometry?.contextFootprints
+        ? geometry.contextFootprints.flatMap((footprint) =>
+            footprint.polygons
+              .map((polygon) => projectBuildingPolygon(polygon, local.center))
+              .filter((polygon) => polygon.length > 0)
+          )
+        : [];
+    const roadPoints = (road?.points ?? []).filter((point) => Math.hypot(point.x, point.z) <= 48);
+
+    const allPoints: Pt[] = [...local.ring];
+    subjectPolygons.forEach((polygon) => polygon.forEach((ring) => allPoints.push(...ring)));
+    contextPolygons.forEach((polygon) => polygon.forEach((ring) => allPoints.push(...ring)));
+    allPoints.push(...roadPoints);
+    if (allPoints.length === 0) return null;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    allPoints.forEach((point) => {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minZ = Math.min(minZ, point.z);
+      maxZ = Math.max(maxZ, point.z);
+    });
+    const widthM = Math.max(1, maxX - minX);
+    const heightM = Math.max(1, maxZ - minZ);
+    const scale = Math.min(
+      (MINI_MAP_SIZE.width - MINI_MAP_SIZE.padding * 2) / widthM,
+      (MINI_MAP_SIZE.height - MINI_MAP_SIZE.padding * 2) / heightM
+    );
+    const offsetX =
+      MINI_MAP_SIZE.padding + (MINI_MAP_SIZE.width - MINI_MAP_SIZE.padding * 2 - widthM * scale) / 2;
+    const offsetY =
+      MINI_MAP_SIZE.padding + (MINI_MAP_SIZE.height - MINI_MAP_SIZE.padding * 2 - heightM * scale) / 2;
+    const project = (point: Pt) => ({
+      x: offsetX + (point.x - minX) * scale,
+      // 로컬 +Z가 남쪽이므로 SVG 아래쪽과 그대로 일치한다.
+      y: offsetY + (point.z - minZ) * scale,
+    });
+
+    return { local, subjectPolygons, contextPolygons, roadPoints, project };
+  }, [boundary, currentBuilding, geometry, road, showContext]);
+
+  if (!drawing) return null;
+
+  return (
+    <div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: "#475569", marginBottom: 4 }}>
+        북쪽 위 미니맵
+      </div>
+      <svg
+        width={MINI_MAP_SIZE.width}
+        height={MINI_MAP_SIZE.height}
+        viewBox={`0 0 ${MINI_MAP_SIZE.width} ${MINI_MAP_SIZE.height}`}
+        style={{ display: "block", background: "rgba(248,250,252,0.92)", borderRadius: 7 }}
+      >
+        {drawing.contextPolygons.map((polygon, index) => (
+          <path
+            key={`context-${index}`}
+            d={polygonPath(polygon, drawing.project)}
+            fill="#94a3b8"
+            fillOpacity={0.16}
+            stroke="none"
+            fillRule="evenodd"
+          />
+        ))}
+        {drawing.roadPoints.length >= 2 && (
+          <polyline
+            points={drawing.roadPoints
+              .map((point) => {
+                const projected = drawing.project(point);
+                return `${projected.x.toFixed(1)},${projected.y.toFixed(1)}`;
+              })
+              .join(" ")}
+            fill="none"
+            stroke="#59636e"
+            strokeWidth={4}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+        <path
+          d={polygonPath([drawing.local.ring], drawing.project)}
+          fill={LOT_COLOR}
+          stroke={LOT_EDGE}
+          strokeWidth={1.2}
+        />
+        {drawing.subjectPolygons.map((polygon, index) => (
+          <path
+            key={`subject-${index}`}
+            d={polygonPath(polygon, drawing.project)}
+            fill={BUILDING_COLOR}
+            stroke={BUILDING_EDGE}
+            strokeWidth={1.2}
+            fillRule="evenodd"
+          />
+        ))}
+        {road && (
+          <line
+            x1={drawing.project(road.frontage.a).x}
+            y1={drawing.project(road.frontage.a).y}
+            x2={drawing.project(road.frontage.b).x}
+            y2={drawing.project(road.frontage.b).y}
+            stroke={FRONTAGE_COLOR}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+          />
+        )}
+        <text x={MINI_MAP_SIZE.width / 2} y={10} textAnchor="middle" fontSize="9" fontWeight="800" fill="#1d4ed8">
+          N
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function OrientationOverlay({
+  headingDeg,
+  viewMode,
+  boundary,
+  currentBuilding,
+  road,
+  showContext,
+}: {
+  headingDeg: number;
+  viewMode: ViewMode;
+  boundary: LngLat[];
+  currentBuilding: BuildingLookupResult | null | undefined;
+  road: LocalRoad | null;
+  showContext: boolean;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 12,
+        bottom: 12,
+        display: "flex",
+        alignItems: "flex-end",
+        gap: 8,
+        padding: 8,
+        borderRadius: 9,
+        background: "rgba(255,255,255,0.9)",
+        border: "1px solid rgba(148,163,184,0.34)",
+        boxShadow: "0 2px 10px rgba(15,23,42,0.07)",
+        pointerEvents: "none",
+      }}
+    >
+      {viewMode === "3d" && (
+        <NorthUpMiniMap
+          boundary={boundary}
+          currentBuilding={currentBuilding}
+          road={road}
+          showContext={showContext}
+        />
+      )}
+      <CompassRose headingDeg={headingDeg} viewMode={viewMode} />
     </div>
   );
 }
@@ -699,6 +987,10 @@ export function ExistingBuildingMass({
   const [showContext, setShowContext] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [resetKey, setResetKey] = useState(0);
+  const [cameraHeading, setCameraHeading] = useState(0);
+  const handleHeadingChange = useCallback((bearingDeg: number) => {
+    setCameraHeading(normalizeBearing(bearingDeg));
+  }, []);
 
   const hasBuilding = Boolean(
     currentBuilding?.hasBuilding && (currentBuilding.buildings.length ?? 0) > 0
@@ -737,6 +1029,12 @@ export function ExistingBuildingMass({
     );
   }
 
+  const resetNorthAlignedView = (mode: ViewMode) => {
+    setViewMode(mode);
+    setCameraHeading(0);
+    setResetKey((value) => value + 1);
+  };
+
   return (
     <div
       data-building-geometry={actualGeometry ? "actual" : "schematic"}
@@ -754,7 +1052,7 @@ export function ExistingBuildingMass({
         shadows
         dpr={[1, 1.5]}
         style={{ cursor: viewMode === "3d" ? "grab" : "default", touchAction: "none" }}
-        camera={{ position: [20, 30, 20], fov: 35 }}
+        camera={{ position: [0, 30, 20], fov: 35 }}
       >
         <Suspense fallback={null}>
           <SceneContent
@@ -766,6 +1064,7 @@ export function ExistingBuildingMass({
             showContext={showContext}
             viewMode={viewMode}
             resetKey={resetKey}
+            onHeadingChange={handleHeadingChange}
           />
         </Suspense>
       </Canvas>
@@ -788,25 +1087,19 @@ export function ExistingBuildingMass({
           gap: 6,
           flexWrap: "wrap",
           justifyContent: "flex-end",
-          maxWidth: 370,
+          maxWidth: 400,
         }}
       >
         <button
           type="button"
-          onClick={() => {
-            setViewMode("map");
-            setResetKey((value) => value + 1);
-          }}
+          onClick={() => resetNorthAlignedView("map")}
           style={controlStyle(viewMode === "map")}
         >
           지도 정합
         </button>
         <button
           type="button"
-          onClick={() => {
-            setViewMode("3d");
-            setResetKey((value) => value + 1);
-          }}
+          onClick={() => resetNorthAlignedView("3d")}
           style={controlStyle(viewMode === "3d")}
         >
           3D 조감
@@ -831,12 +1124,21 @@ export function ExistingBuildingMass({
         )}
         <button
           type="button"
-          onClick={() => setResetKey((value) => value + 1)}
+          onClick={() => resetNorthAlignedView(viewMode)}
           style={controlStyle(false)}
         >
-          시점 초기화
+          {viewMode === "map" ? "지도 재중심" : "정북 조감"}
         </button>
       </div>
+
+      <OrientationOverlay
+        headingDeg={viewMode === "map" ? 0 : cameraHeading}
+        viewMode={viewMode}
+        boundary={openBoundary}
+        currentBuilding={currentBuilding}
+        road={primaryRoad}
+        showContext={showContext}
+      />
 
       {hasBuilding && (
         <div
@@ -844,7 +1146,7 @@ export function ExistingBuildingMass({
             position: "absolute",
             right: 12,
             bottom: 12,
-            maxWidth: 430,
+            maxWidth: 440,
             padding: "7px 9px",
             borderRadius: 7,
             background: "rgba(255,255,255,0.94)",
@@ -856,15 +1158,15 @@ export function ExistingBuildingMass({
           }}
         >
           {viewMode === "map"
-            ? "지도 정합은 북쪽을 화면 위로 고정합니다. 파란 선은 선택된 접도 필지 경계이며, 도로는 VWorld 중심선 기반 상징 폭입니다."
-            : "3D 조감에서는 자유 회전할 수 있습니다. GIS 건물·도로·필지 좌표 자체는 회전하지 않습니다."}
+            ? "지도 정합은 N=화면 위, E=오른쪽으로 고정됩니다. 파란 선은 선택된 접도 필지 경계이며, 도로는 VWorld 중심선 기반 상징 폭입니다."
+            : "3D 조감은 정북 기준 시점에서 시작합니다. 회전 후에는 나침반이 카메라 방위를 표시하고, 북쪽 위 미니맵은 GIS 좌표를 고정해서 보여줍니다."}
         </div>
       )}
     </div>
   );
 }
 
-function controlStyle(active: boolean): React.CSSProperties {
+function controlStyle(active: boolean): CSSProperties {
   return {
     padding: "6px 9px",
     borderRadius: 7,
