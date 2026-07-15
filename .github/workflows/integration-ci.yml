@@ -56,6 +56,23 @@ jobs:
             src/tests/geo/scene-extrusion.test.ts \
             --reporter=verbose
 
+      - name: Run integrated site export test
+        id: site_export
+        continue-on-error: true
+        run: pnpm exec vitest run src/tests/planning-sketchup-site-export.test.ts --reporter=verbose > site-export.log 2>&1
+
+      - name: Upload site export diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-export-test-log
+          path: site-export.log
+          if-no-files-found: error
+
+      - name: Stop after site export failure
+        if: steps.site_export.outcome == 'failure'
+        run: exit 1
+
       - name: Run Stage 2 planning tests
         run: |
           pnpm exec vitest run \
