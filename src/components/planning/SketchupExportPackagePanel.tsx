@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Panel } from "@/components/ui/primitives";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
+import { downloadSketchupDaeExport } from "@/lib/planning/sketchup-dae-export";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildSketchupExportPackage } from "@/lib/planning/sketchup-export-package";
 import { useProjectStore } from "@/lib/stores/project-store";
@@ -33,6 +34,11 @@ const tableCell = {
   whiteSpace: "nowrap" as const,
 };
 
+type DownloadFeedback = {
+  tone: "success" | "fail";
+  text: string;
+};
+
 export function SketchupExportPackagePanel({ projectId }: { projectId: string }) {
   const data = useProjectStore((state) => state.data);
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
@@ -42,6 +48,8 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
   const representativeGeometrySnapshot = useProjectStore(
     (state) => state.representativeGeometrySnapshot
   );
+  const [downloadFeedback, setDownloadFeedback] =
+    useState<DownloadFeedback | null>(null);
 
   const scenario =
     planningScenarios.find(
@@ -78,6 +86,42 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
     representativeGeometrySnapshot?.scenarioId === exportPackage.scenarioId &&
     representativeGeometrySnapshot?.geometryHash ===
       exportPackage.planningGeometryHash;
+  const canDownload = exportPackage.validation.exportable && planningLocked;
+
+  const handleDownload = () => {
+    setDownloadFeedback(null);
+    if (!exportPackage.validation.exportable) {
+      setDownloadFeedback({
+        tone: "fail",
+        text:
+          exportPackage.validation.blockingReasons[0] ??
+          "계획 매스 기하 오류를 먼저 수정해야 합니다.",
+      });
+      return;
+    }
+    if (!planningLocked) {
+      setDownloadFeedback({
+        tone: "fail",
+        text: "현재 계획안을 대표안으로 확정해 Geometry Snapshot을 잠근 뒤 다운로드하세요.",
+      });
+      return;
+    }
+    try {
+      const result = downloadSketchupDaeExport(exportPackage);
+      setDownloadFeedback({
+        tone: "success",
+        text: `${result.filename} 다운로드를 시작했습니다. ZIP 안의 DAE를 SketchUp에서 COLLADA 형식으로 가져오세요.`,
+      });
+    } catch (error) {
+      setDownloadFeedback({
+        tone: "fail",
+        text:
+          error instanceof Error
+            ? error.message
+            : "SketchUp 패키지 생성 중 알 수 없는 오류가 발생했습니다.",
+      });
+    }
+  };
 
   return (
     <Panel
@@ -128,7 +172,7 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
           >
             대상 계획 매스는 설계 시작 기준으로 엄격하게 검증하고, 주변 건물은
             같은 GIS 좌표의 맥락 레이어로 포함합니다. 등록 높이가 없는 주변 건물은
-            별도 추정 레이어로 분리되어 건축가가 끄고 켤 수 있습니다.
+            별도 추정 그룹으로 분리되어 건축가가 끄고 켤 수 있습니다.
           </p>
         </div>
         <div style={{ minWidth: 205, display: "grid", gap: 4 }}>
@@ -159,7 +203,7 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
         <PackageMetric
           label="층수 기반 높이 추정"
           value={`${context.summary.estimatedHeightBuildings}동`}
-          sub="추정 레이어로 분리"
+          sub="추정 그룹으로 분리"
         />
         <PackageMetric
           label="기본 1층 높이 추정"
@@ -187,7 +231,7 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
         >
           <thead>
             <tr style={{ color: "var(--fg-muted)" }}>
-              <th style={tableCell}>SketchUp 태그</th>
+              <th style={tableCell}>SketchUp 그룹명</th>
               <th style={tableCell}>객체 수</th>
               <th style={tableCell}>정확도</th>
               <th style={tableCell}>용도</th>
@@ -228,6 +272,11 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
           ))}
         </Notice>
       )}
+      {downloadFeedback && (
+        <Notice tone={downloadFeedback.tone === "success" ? "success" : "fail"}>
+          {downloadFeedback.text}
+        </Notice>
+      )}
 
       <div
         style={{
@@ -244,30 +293,45 @@ export function SketchupExportPackagePanel({ projectId }: { projectId: string })
       >
         <div>
           <strong>
-            {exportPackage.validation.exportable
-              ? "파일 생성 조건 통과"
-              : "계획 매스 오류 수정 필요"}
+            {!exportPackage.validation.exportable
+              ? "계획 매스 오류 수정 필요"
+              : planningLocked
+                ? "대표안 잠금 및 파일 생성 조건 통과"
+                : "대표안 확정 후 다운로드 가능"}
           </strong>
-          <div style={{ marginTop: 3, color: "var(--fg-muted)" }}>
-            주변 건물 추정 높이는 다운로드를 차단하지 않으며 metadata와 추정
-            태그에 기록됩니다.
+          <div style={{ marginTop: 3, color: "var(--fg-muted)", maxWidth: 780 }}>
+            ZIP에는 COLLADA DAE, 검증 metadata JSON, SketchUp 가져오기 안내문이
+            포함됩니다. DAE는 PG_* 그룹 계층을 보존하지만 SketchUp Tags 자동 생성은
+            버전에 따라 다를 수 있습니다.
           </div>
         </div>
         <button
           type="button"
-          disabled
-          title="다음 단계에서 DAE/GLB 파일 생성기를 연결합니다."
+          disabled={!canDownload}
+          onClick={handleDownload}
+          title={
+            !exportPackage.validation.exportable
+              ? "계획 매스 기하 오류를 먼저 수정하세요."
+              : !planningLocked
+                ? "대표 계획안을 확정해 Geometry Snapshot을 잠그세요."
+                : "검증된 DAE와 metadata가 포함된 ZIP을 다운로드합니다."
+          }
           style={{
             border: "1px solid var(--border)",
             borderRadius: 8,
-            padding: "8px 11px",
-            background: "var(--bg-sunken)",
-            color: "var(--fg-faint)",
+            padding: "9px 12px",
+            background: canDownload ? "var(--fg)" : "var(--bg-sunken)",
+            color: canDownload ? "var(--bg)" : "var(--fg-faint)",
             fontSize: 10.5,
-            cursor: "not-allowed",
+            fontWeight: 750,
+            cursor: canDownload ? "pointer" : "not-allowed",
           }}
         >
-          SketchUp용 패키지 다운로드 · 다음 단계
+          {canDownload
+            ? "SketchUp용 DAE 패키지 다운로드"
+            : planningLocked
+              ? "SketchUp 다운로드 차단"
+              : "대표안 확정 후 다운로드"}
         </button>
       </div>
     </Panel>
@@ -329,17 +393,27 @@ function Notice({
   tone,
   children,
 }: {
-  tone: "warn" | "fail";
+  tone: "warn" | "fail" | "success";
   children: React.ReactNode;
 }) {
+  const fail = tone === "fail";
+  const success = tone === "success";
   return (
     <div
       style={{
         marginTop: 12,
         padding: "9px 11px",
         borderRadius: 8,
-        background: tone === "fail" ? "var(--neg-soft)" : "var(--warn-soft)",
-        color: tone === "fail" ? "var(--neg-fg)" : "var(--warn-fg)",
+        background: fail
+          ? "var(--neg-soft)"
+          : success
+            ? "var(--pos-soft)"
+            : "var(--warn-soft)",
+        color: fail
+          ? "var(--neg-fg)"
+          : success
+            ? "var(--pos-fg)"
+            : "var(--warn-fg)",
         fontSize: 10.5,
         lineHeight: 1.5,
       }}
