@@ -6,11 +6,13 @@ on:
       - stage2/planning-scenario-foundation
       - integration/stage2-status-gis-footprint
       - stage2/envelope-data-bridge
+      - stage2/planning-geometry-contract
   push:
     branches:
       - integration/stage2-status-gis-footprint
       - stage2/envelope-data-bridge
       - stage2/planning-geometry-contract
+      - stage2/sketchup-dae-export
 
 permissions:
   contents: read
@@ -57,6 +59,7 @@ jobs:
             src/tests/planning-scenario-finance-bridge.test.ts \
             src/tests/planning-geometry.test.ts \
             src/tests/planning-sketchup-export-package.test.ts \
+            src/tests/planning-sketchup-dae-export.test.ts \
             --reporter=verbose
 
       - name: Typecheck
