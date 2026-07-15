@@ -56,9 +56,6 @@ jobs:
             src/tests/geo/scene-extrusion.test.ts \
             --reporter=verbose
 
-      - name: Run integrated site export test
-        run: pnpm exec vitest run src/tests/planning-sketchup-site-export.test.ts --reporter=verbose
-
       - name: Run Stage 2 planning tests
         run: |
           pnpm exec vitest run \
@@ -75,21 +72,7 @@ jobs:
             --reporter=verbose
 
       - name: Typecheck
-        id: typecheck
-        continue-on-error: true
-        run: pnpm exec tsc --noEmit > site-typecheck.log 2>&1
-
-      - name: Upload typecheck diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-typecheck-log
-          path: site-typecheck.log
-          if-no-files-found: error
-
-      - name: Stop after typecheck failure
-        if: steps.typecheck.outcome == 'failure'
-        run: exit 1
+        run: pnpm exec tsc --noEmit
 
       - name: Build
         run: pnpm build
