@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildCadastralContext } from "@/lib/geo/cadastral-context";
-import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import {
+  buildPlanningGeometry,
+  planningRingCentroid,
+  planningRingToLocalMeters,
+} from "@/lib/planning/planning-geometry";
 import { polygonAreaSqm } from "@/lib/planning/planning-massing";
 import { buildSketchupExportPackage } from "@/lib/planning/sketchup-export-package";
 import { buildSketchupSiteExport } from "@/lib/planning/sketchup-site-export";
@@ -51,17 +55,9 @@ function planning() {
     roadSetbackM: 0,
     northSetbackM: 0,
   };
-  const local = localRingToLngLat([
-    [-10, 10],
-    [10, 10],
-    [10, -10],
-    [-10, -10],
-  ]);
+  const origin = planningRingCentroid(boundary);
   const lotAreaSqm = polygonAreaSqm(
-    local.slice(0, -1).map(([lng, lat]) => ({
-      x: (lng - ORIGIN[0]) * 111_000 * Math.cos((ORIGIN[1] * Math.PI) / 180),
-      z: -(lat - ORIGIN[1]) * 111_000,
-    }))
+    planningRingToLocalMeters(boundary, origin)
   );
   return buildPlanningGeometry({
     projectId: "site-export-project",
