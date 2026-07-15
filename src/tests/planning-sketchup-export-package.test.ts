@@ -19,18 +19,19 @@ import {
   createFloorZone,
 } from "@/lib/planning/scenario-utils";
 
+const CENTER: [number, number] = [127.034, 37.65];
+
 function squareBoundary(sizeM = 20): [number, number][] {
-  const centerLng = 127.034;
-  const centerLat = 37.65;
+  const [lng, lat] = CENTER;
   const halfLat = sizeM / 2 / 111_000;
   const halfLng =
-    sizeM / 2 / (111_000 * Math.cos((centerLat * Math.PI) / 180));
+    sizeM / 2 / (111_000 * Math.cos((lat * Math.PI) / 180));
   return [
-    [centerLng - halfLng, centerLat - halfLat],
-    [centerLng + halfLng, centerLat - halfLat],
-    [centerLng + halfLng, centerLat + halfLat],
-    [centerLng - halfLng, centerLat + halfLat],
-    [centerLng - halfLng, centerLat - halfLat],
+    [lng - halfLng, lat - halfLat],
+    [lng + halfLng, lat - halfLat],
+    [lng + halfLng, lat + halfLat],
+    [lng - halfLng, lat + halfLat],
+    [lng - halfLng, lat - halfLat],
   ];
 }
 
@@ -41,26 +42,25 @@ function footprintSquare(
   sizeM: number,
   patch: Partial<ExistingBuildingFootprint> = {}
 ): ExistingBuildingFootprint {
-  const centerLng = 127.034;
-  const centerLat = 37.65;
+  const [centerLng, centerLat] = CENTER;
   const lngScale = 111_000 * Math.cos((centerLat * Math.PI) / 180);
   const lng = centerLng + offsetXM / lngScale;
   const lat = centerLat + offsetNorthM / 111_000;
   const halfLng = sizeM / 2 / lngScale;
   const halfLat = sizeM / 2 / 111_000;
+  const outer: [number, number][] = [
+    [lng - halfLng, lat - halfLat],
+    [lng + halfLng, lat - halfLat],
+    [lng + halfLng, lat + halfLat],
+    [lng - halfLng, lat + halfLat],
+    [lng - halfLng, lat - halfLat],
+  ];
+
   return {
     id,
     pnu: "",
     buildingName: id,
-    polygons: [
-      [
-        [lng - halfLng, lat - halfLat],
-        [lng + halfLng, lat - halfLat],
-        [lng + halfLng, lat + halfLat],
-        [lng - halfLng, lat + halfLat],
-        [lng - halfLng, lat - halfLat],
-      ],
-    ],
+    polygons: [[outer]],
     footprintAreaSqm: sizeM * sizeM,
     totalAreaSqm: 0,
     heightM: 0,
@@ -100,14 +100,11 @@ function planning(footprintScalePct = 100) {
 
   const boundary = squareBoundary();
   const origin = planningRingCentroid(boundary);
-  const lotAreaSqm = polygonAreaSqm(
-    planningRingToLocalMeters(boundary, origin)
-  );
   return buildPlanningGeometry({
     projectId: "parcel-1",
     scenario,
     boundary,
-    lotAreaSqm,
+    lotAreaSqm: polygonAreaSqm(planningRingToLocalMeters(boundary, origin)),
     zoning: "일반상업지역",
     roads: [],
     setback: { road: 0, side: 0, rear: 0 },
@@ -130,29 +127,28 @@ function contextGeometry(
 
 describe("SketchUp Export Package Contract", () => {
   it("separates verified and estimated context building heights", () => {
-    const existing = contextGeometry([
-      footprintSquare("verified", 16, 5, 6, {
-        heightM: 12.4,
-        groundFloors: 4,
-      }),
-      footprintSquare("floor-estimated", -16, 4, 5, {
-        groundFloors: 3,
-      }),
-      footprintSquare("default-estimated", 5, -17, 4),
-    ]);
-
     const result = buildSketchupExportPackage({
       planning: planning(),
-      existingGeometry: existing,
-      generatedAt: "2026-07-14T00:00:00.000Z",
+      existingGeometry: contextGeometry([
+        footprintSquare("verified", 16, 5, 6, {
+          heightM: 12.4,
+          groundFloors: 4,
+        }),
+        footprintSquare("floor-estimated", -16, 4, 5, {
+          groundFloors: 3,
+        }),
+        footprintSquare("default-estimated", 5, -17, 4),
+      ]),
     });
 
     expect(result.validation.exportable).toBe(true);
     expect(result.validation.status).toBe("ready-with-warnings");
-    expect(result.context.summary.totalBuildings).toBe(3);
-    expect(result.context.summary.verifiedHeightBuildings).toBe(1);
-    expect(result.context.summary.estimatedHeightBuildings).toBe(2);
-    expect(result.context.summary.defaultHeightBuildings).toBe(1);
+    expect(result.context.summary).toMatchObject({
+      totalBuildings: 3,
+      verifiedHeightBuildings: 1,
+      estimatedHeightBuildings: 2,
+      defaultHeightBuildings: 1,
+    });
     expect(
       result.context.buildings.find((building) => building.id === "verified")
         ?.heightM
@@ -198,27 +194,17 @@ describe("SketchUp Export Package Contract", () => {
   });
 
   it("changes context and package hashes when surrounding geometry changes", () => {
-    const first = buildSketchupExportPackage({
-      planning: planning(),
-      existingGeometry: contextGeometry([
-        footprintSquare("context", 14, 0, 5, { heightM: 9 }),
-      ]),
-      generatedAt: "2026-07-14T00:00:00.000Z",
-    });
-    const same = buildSketchupExportPackage({
-      planning: planning(),
-      existingGeometry: contextGeometry([
-        footprintSquare("context", 14, 0, 5, { heightM: 9 }),
-      ]),
-      generatedAt: "2026-07-15T00:00:00.000Z",
-    });
-    const changed = buildSketchupExportPackage({
-      planning: planning(),
-      existingGeometry: contextGeometry([
-        footprintSquare("context", 14, 0, 5, { heightM: 12 }),
-      ]),
-      generatedAt: "2026-07-14T00:00:00.000Z",
-    });
+    const make = (heightM: number, generatedAt: string) =>
+      buildSketchupExportPackage({
+        planning: planning(),
+        existingGeometry: contextGeometry([
+          footprintSquare("context", 14, 0, 5, { heightM }),
+        ]),
+        generatedAt,
+      });
+    const first = make(9, "2026-07-14T00:00:00.000Z");
+    const same = make(9, "2026-07-15T00:00:00.000Z");
+    const changed = make(12, "2026-07-14T00:00:00.000Z");
 
     expect(first.contextGeometryHash).toBe(same.contextGeometryHash);
     expect(first.exportPackageHash).toBe(same.exportPackageHash);
@@ -228,17 +214,16 @@ describe("SketchUp Export Package Contract", () => {
   });
 
   it("allows context warnings but blocks a mismatched proposed mass", () => {
+    const existingGeometry = contextGeometry([
+      footprintSquare("estimated", 15, 0, 5, { groundFloors: 2 }),
+    ]);
     const valid = buildSketchupExportPackage({
       planning: planning(),
-      existingGeometry: contextGeometry([
-        footprintSquare("estimated", 15, 0, 5, { groundFloors: 2 }),
-      ]),
+      existingGeometry,
     });
     const invalid = buildSketchupExportPackage({
       planning: planning(90),
-      existingGeometry: contextGeometry([
-        footprintSquare("estimated", 15, 0, 5, { groundFloors: 2 }),
-      ]),
+      existingGeometry,
     });
 
     expect(valid.validation.status).toBe("ready-with-warnings");
