@@ -1,0 +1,27 @@
+name: Stepped Maximum Debug
+
+on:
+  push:
+    branches:
+      - stage2/stepped-maximum-candidate
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable >/dev/null 2>&1
+          corepack prepare pnpm@9 --activate >/dev/null 2>&1
+      - name: Install quietly
+        run: pnpm install --frozen-lockfile --silent
+      - name: Run stepped tests only
+        run: pnpm exec vitest run src/tests/planning-stepped-maximum-candidate.test.ts --reporter=verbose
