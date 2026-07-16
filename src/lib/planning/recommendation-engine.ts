@@ -106,18 +106,17 @@ function ringCentroid(ring: LngLat[]): LngLat {
 }
 
 function ringToLocalMeters(ring: LngLat[], origin: LngLat): LocalPlanPoint[] {
-  const [originLng, originLat] = origin;
-  const longitudeScale = Math.cos((originLat * Math.PI) / 180);
+  const longitudeScale = Math.cos((origin[1] * Math.PI) / 180);
   return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - originLng) * 111_000 * longitudeScale,
-    z: -(lat - originLat) * 111_000,
+    x: (lng - origin[0]) * 111_000 * longitudeScale,
+    z: -(lat - origin[1]) * 111_000,
   }));
 }
 
 function maxCandidateFloors(parcel: RecommendationEngineParcel): number {
-  const maxFootprintPct = Math.max(1, parcel.maxBCRPct || 50);
-  const maxFarPct = Math.max(1, parcel.maxFARPct || 100);
-  const byFar = Math.max(1, Math.ceil(maxFarPct / Math.max(20, maxFootprintPct * 0.75)));
+  const bcr = Math.max(1, parcel.maxBCRPct || 50);
+  const far = Math.max(1, parcel.maxFARPct || 100);
+  const byFar = Math.max(1, Math.ceil(far / Math.max(20, bcr * 0.75)));
   const byHeight =
     parcel.heightLimitM > 0
       ? Math.max(1, 1 + Math.floor(Math.max(0, parcel.heightLimitM - 3.6) / 3))
@@ -131,36 +130,39 @@ function buildResidentialFloors(input: {
   maxFarAreaSqm: number;
   unitAreaSqm: number;
   piloti: boolean;
-}) {
-  const floorPrograms: PlanningScenario["floorPrograms"] = [];
+}): PlanningScenario["floorPrograms"] {
+  const programs: PlanningScenario["floorPrograms"] = [];
   let remainingFarArea = input.maxFarAreaSqm;
 
   for (let level = 1; level <= input.floors; level += 1) {
     if (input.piloti && level === 1) {
-      floorPrograms.push(
+      programs.push(
         createFloorProgram(1, [
           createFloorZone("piloti", input.footprintSqm, 0, "필로티 주차", "non-revenue"),
         ])
       );
       continue;
     }
-
     const areaSqm = Math.min(input.footprintSqm, Math.max(0, remainingFarArea));
     if (areaSqm < 18) break;
-    const units = Math.max(1, Math.floor(areaSqm / input.unitAreaSqm));
-    floorPrograms.push(
+    programs.push(
       createFloorProgram(level, [
-        createFloorZone("residential", areaSqm, units, "주거", "sale"),
+        createFloorZone(
+          "residential",
+          areaSqm,
+          Math.max(1, Math.floor(areaSqm / input.unitAreaSqm)),
+          "주거",
+          "sale"
+        ),
       ])
     );
     remainingFarArea -= areaSqm;
     if (remainingFarArea < 18) break;
   }
-
-  return floorPrograms;
+  return programs;
 }
 
-function candidateScenario(input: {
+function createCandidate(input: {
   projectId: string;
   parcel: RecommendationEngineParcel;
   footprintSqm: number;
@@ -179,10 +181,17 @@ function candidateScenario(input: {
     unitAreaSqm: input.unitAreaSqm,
     piloti,
   });
-  const residentialFloors = floorPrograms.filter((floor) =>
-    floor.zones.some((zone) => zone.useType === "residential" && zone.areaSqm > 0)
+  const residentialUnits = floorPrograms.reduce(
+    (sum, floor) =>
+      sum +
+      floor.zones.reduce(
+        (zoneSum, zone) =>
+          zoneSum + (zone.useType === "residential" ? zone.unitCount : 0),
+        0
+      ),
+    0
   );
-  if (residentialFloors.length === 0) return null;
+  if (residentialUnits <= 0) return null;
 
   const scenario = createBlankPlanningScenario({
     projectId: input.projectId,
@@ -192,14 +201,7 @@ function candidateScenario(input: {
   });
   scenario.createdAt = input.generatedAt;
   scenario.updatedAt = input.generatedAt;
-  scenario.primaryUse =
-    residentialFloors.reduce(
-      (sum, floor) =>
-        sum + floor.zones.reduce((zoneSum, zone) => zoneSum + zone.unitCount, 0),
-      0
-    ) <= 1
-      ? "single-house"
-      : "multi-family";
+  scenario.primaryUse = residentialUnits <= 1 ? "single-house" : "multi-family";
   scenario.floorPrograms = floorPrograms;
   scenario.parking = {
     strategy: input.strategy,
@@ -222,7 +224,7 @@ function candidateScenario(input: {
   return scenario;
 }
 
-function frontEdgeForParcel(
+function localParcelContext(
   boundary: LngLat[] | undefined,
   roads: RoadLine[] | undefined
 ): {
@@ -232,9 +234,8 @@ function frontEdgeForParcel(
   if (!boundary || boundary.length < 3) {
     return { parcelShape: [], frontEdge: null };
   }
-  const origin = ringCentroid(boundary);
-  const parcelShape = ringToLocalMeters(boundary, origin);
-  const frontage = roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const parcelShape = ringToLocalMeters(boundary, ringCentroid(boundary));
+  const frontage = roads?.length ? analyzeFrontage(boundary, roads) : null;
   const frontEdge =
     frontage && frontage.frontIndex >= 0 && parcelShape.length > frontage.frontIndex
       ? ([
@@ -245,22 +246,22 @@ function frontEdgeForParcel(
   return { parcelShape, frontEdge };
 }
 
-function calculateCandidate(
+function evaluateCandidate(
   scenario: PlanningScenario,
   input: PlanningRecommendationEngineInput,
-  calculationContext: PlanningCalculationContext,
+  context: PlanningCalculationContext,
   parcelShape: LocalPlanPoint[],
   frontEdge: [LocalPlanPoint, LocalPlanPoint] | null
 ): RecommendationCandidateEvaluation {
-  const firstCalculation = calculatePlanningScenario(scenario, calculationContext);
-  const firstSpatial = calculatePlanningSpatialValidation(
+  const initial = calculatePlanningScenario(scenario, context);
+  const initialSpatial = calculatePlanningSpatialValidation(
     input.parcel.boundary,
     input.parcel.zoning,
     scenario,
     input.parcel.roads,
     input.parcel.setback
   );
-  const firstMass = firstSpatial?.model.aboveGroundFloors.find(
+  const firstMass = initialSpatial?.model.aboveGroundFloors.find(
     (floor) => floor.level === 1
   );
   const pilotiEnabled = Boolean(
@@ -278,35 +279,25 @@ function calculateCandidate(
     buildingShape: firstMass?.shape ?? [],
     pilotiShape: firstMass?.shape ?? [],
     pilotiEnabled,
-    requiredCars: firstCalculation.parking.requiredCars,
+    requiredCars: initial.parking.requiredCars,
     frontEdge,
     parking: scenario.parking,
   });
-
-  const scenarioWithParking: PlanningScenario = {
+  const withParking: PlanningScenario = {
     ...scenario,
-    parking: {
-      ...scenario.parking,
-      providedCars: parkingLayout.capacityCars,
-    },
+    parking: { ...scenario.parking, providedCars: parkingLayout.capacityCars },
   };
-  const baseCalculation = calculatePlanningScenario(
-    scenarioWithParking,
-    calculationContext
-  );
+  const base = calculatePlanningScenario(withParking, context);
   const spatial = calculatePlanningSpatialValidation(
     input.parcel.boundary,
     input.parcel.zoning,
-    scenarioWithParking,
+    withParking,
     input.parcel.roads,
     input.parcel.setback
   );
-  const calculation = applySpatialValidationToCalculation(baseCalculation, spatial);
-  const appliedScenario = applyPlanningScenarioCalculation(
-    scenarioWithParking,
-    calculation
-  );
-  appliedScenario.status = "saved";
+  const calculation = applySpatialValidationToCalculation(base, spatial);
+  const applied = applyPlanningScenarioCalculation(withParking, calculation);
+  applied.status = "saved";
 
   const failCount = calculation.checks.filter((check) => check.status === "fail").length;
   const reviewCount = calculation.checks.filter(
@@ -325,9 +316,7 @@ function calculateCandidate(
     parkingLayout.shortfallCars
   );
   const eligible =
-    failCount === 0 &&
-    parkingLayout.supportedStrategy &&
-    parkingShortfall === 0;
+    failCount === 0 && parkingLayout.supportedStrategy && parkingShortfall === 0;
 
   let architectureScore = 100;
   architectureScore -= failCount * 40;
@@ -338,13 +327,12 @@ function calculateCandidate(
   architectureScore -= Math.max(0, bcrUtilizationPct - 82) * 0.45;
   architectureScore -= Math.max(0, calculation.metrics.aboveGroundFloors - 4) * 2.5;
   if (scenario.parking.strategy === "piloti") architectureScore -= 2;
-  architectureScore = round(clamp(architectureScore, 0, 100), 1);
 
   return {
-    scenario: appliedScenario,
+    scenario: applied,
     calculation,
     parkingLayout,
-    architectureScore,
+    architectureScore: round(clamp(architectureScore, 0, 100), 1),
     eligible,
     failCount,
     reviewCount,
@@ -353,7 +341,7 @@ function calculateCandidate(
   };
 }
 
-function recommendationMetadata(input: {
+function metadata(input: {
   objective: PlanningRecommendationMetadata["objective"];
   generatedAt: string;
   evaluatedCandidates: number;
@@ -375,22 +363,24 @@ function recommendationMetadata(input: {
   };
 }
 
-function selectedScenario(
+function recommendation(
   evaluation: RecommendationCandidateEvaluation,
   input: {
+    slot: "safe" | "profit" | "max";
     origin: PlanningScenario["origin"];
     name: string;
     description: string;
-    metadata: PlanningRecommendationMetadata;
+    recommendation: PlanningRecommendationMetadata;
   }
 ): PlanningScenario {
   return {
     ...evaluation.scenario,
+    id: `${evaluation.scenario.id}-${input.slot}`,
     name: input.name,
     description: input.description,
     origin: input.origin,
     status: "saved",
-    recommendation: input.metadata,
+    recommendation: input.recommendation,
   };
 }
 
@@ -398,7 +388,7 @@ export function generatePlanningRecommendations(
   input: PlanningRecommendationEngineInput
 ): PlanningRecommendationSet {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
-  const calculationContext: PlanningCalculationContext = {
+  const context: PlanningCalculationContext = {
     parcel: {
       lotAreaSqm: input.parcel.lotAreaSqm,
       maxFARPct: input.parcel.maxFARPct,
@@ -410,52 +400,45 @@ export function generatePlanningRecommendations(
     assumptions: input.assumptions,
     calculatedAt: generatedAt,
   };
-  const { parcelShape, frontEdge } = frontEdgeForParcel(
+  const { parcelShape, frontEdge } = localParcelContext(
     input.parcel.boundary,
     input.parcel.roads
   );
   const maxFootprintSqm =
     input.parcel.lotAreaSqm * (Math.max(1, input.parcel.maxBCRPct) / 100);
-  const floors = maxCandidateFloors(input.parcel);
   const evaluations: RecommendationCandidateEvaluation[] = [];
 
-  for (const footprintRatio of FOOTPRINT_RATIOS) {
-    const footprintSqm = Math.max(18, maxFootprintSqm * footprintRatio);
-    for (let floorCount = 1; floorCount <= floors; floorCount += 1) {
+  for (const ratio of FOOTPRINT_RATIOS) {
+    for (let floors = 1; floors <= maxCandidateFloors(input.parcel); floors += 1) {
       for (const unitAreaSqm of UNIT_AREA_OPTIONS) {
         for (const strategy of ["surface", "piloti"] as const) {
-          const scenario = candidateScenario({
+          const candidate = createCandidate({
             projectId: input.projectId,
             parcel: input.parcel,
-            footprintSqm,
-            floors: floorCount,
+            footprintSqm: Math.max(18, maxFootprintSqm * ratio),
+            floors,
             unitAreaSqm,
             strategy,
             generatedAt,
           });
-          if (!scenario) continue;
-          evaluations.push(
-            calculateCandidate(
-              scenario,
-              input,
-              calculationContext,
-              parcelShape,
-              frontEdge
-            )
-          );
+          if (candidate) {
+            evaluations.push(
+              evaluateCandidate(candidate, input, context, parcelShape, frontEdge)
+            );
+          }
         }
       }
     }
   }
 
   const eligible = evaluations.filter((candidate) => candidate.eligible);
-  const safeEvaluation = [...eligible].sort(
+  const safe = [...eligible].sort(
     (a, b) =>
       b.architectureScore - a.architectureScore ||
       b.calculation.economicsPreview.profitManwon -
         a.calculation.economicsPreview.profitManwon
   )[0];
-  const profitEvaluation = [...eligible].sort(
+  const profit = [...eligible].sort(
     (a, b) =>
       b.calculation.economicsPreview.profitManwon -
         a.calculation.economicsPreview.profitManwon ||
@@ -463,107 +446,103 @@ export function generatePlanningRecommendations(
         a.calculation.economicsPreview.profitMarginPct ||
       b.architectureScore - a.architectureScore
   )[0];
-  const maxEvaluation = [...evaluations].sort(
+  const maximum = [...evaluations].sort(
     (a, b) =>
       b.calculation.metrics.preliminaryFarPct -
         a.calculation.metrics.preliminaryFarPct ||
       b.calculation.metrics.preliminaryBcrPct -
         a.calculation.metrics.preliminaryBcrPct
   )[0];
-
   const evaluatedCandidates = evaluations.length;
   const eligibleCandidates = eligible.length;
   const warnings: string[] = [];
-  if (!input.parcel.boundary || input.parcel.boundary.length < 3) {
+  if (!input.parcel.boundary?.length) {
     warnings.push("대지 경계가 없어 배치·주차 후보를 검증하지 못했습니다.");
   }
-  if (!safeEvaluation || !profitEvaluation) {
+  if (!safe || !profit) {
     warnings.push(
-      "현재 법규 외곽선과 실제 주차 배치를 모두 통과하는 자동 후보를 찾지 못했습니다. 직접 설계안에서 면적·층수·주차 전략을 조정해야 합니다."
+      "법규 외곽선과 실제 주차 배치를 모두 통과하는 자동 후보를 찾지 못했습니다. 직접 설계안에서 면적·층수·주차 전략을 조정해야 합니다."
     );
   }
-
-  const architecturalFeasibility = safeEvaluation
-    ? selectedScenario(safeEvaluation, {
-        origin: "algorithm-safe",
-        name: "건축 타당성안",
-        description:
-          "법규 외곽선·배치·층간 연결·실제 주차 배치를 통과한 후보 중 건축 여유와 단순성이 가장 높은 안입니다.",
-        metadata: recommendationMetadata({
-          objective: "architectural-feasibility",
-          generatedAt,
-          evaluatedCandidates,
-          eligibleCandidates,
-          evaluation: safeEvaluation,
-          reasons: [
-            `건축 타당성 ${safeEvaluation.architectureScore.toFixed(1)}점`,
-            `법규·배치 필수 미충족 ${safeEvaluation.failCount}건`,
-            `주차 ${safeEvaluation.parkingLayout.capacityCars}/${safeEvaluation.calculation.parking.requiredCars}대`,
-            `법정 용적률의 ${safeEvaluation.farUtilizationPct.toFixed(1)}% 사용`,
-          ],
-        }),
-      })
-    : null;
-
-  const profitOptimal = profitEvaluation
-    ? selectedScenario(profitEvaluation, {
-        origin: "algorithm-profit",
-        name: "수익 최적안",
-        description:
-          "법규 외곽선과 실제 주차 배치를 통과한 후보만 대상으로 Stage 2 개략 이익이 가장 높은 안을 선택했습니다.",
-        metadata: recommendationMetadata({
-          objective: "profit",
-          generatedAt,
-          evaluatedCandidates,
-          eligibleCandidates,
-          evaluation: profitEvaluation,
-          reasons: [
-            `실행 가능 후보 ${eligibleCandidates}개 중 개략 이익 최대`,
-            `개략 이익 ${round(
-              profitEvaluation.calculation.economicsPreview.profitManwon,
-              0
-            ).toLocaleString()}만원`,
-            `이익률 ${profitEvaluation.calculation.economicsPreview.profitMarginPct.toFixed(1)}%`,
-            `건축 타당성 ${profitEvaluation.architectureScore.toFixed(1)}점`,
-          ],
-        }),
-      })
-    : null;
-
-  const legalCeilingReference = maxEvaluation
-    ? selectedScenario(maxEvaluation, {
-        origin: "algorithm-max",
-        name: "법적 상한 참고안",
-        description:
-          "산술상 용적률 사용량이 가장 높은 비교 기준입니다. 배치·일조·주차 미충족 항목이 있을 수 있어 자동 대표안이 아닙니다.",
-        metadata: recommendationMetadata({
-          objective: "legal-ceiling",
-          generatedAt,
-          evaluatedCandidates,
-          eligibleCandidates,
-          evaluation: maxEvaluation,
-          reasons: [
-            `예비 용적률 ${maxEvaluation.calculation.metrics.preliminaryFarPct.toFixed(1)}%`,
-            `예비 건폐율 ${maxEvaluation.calculation.metrics.preliminaryBcrPct.toFixed(1)}%`,
-            `법규·배치 미충족 ${maxEvaluation.failCount}건`,
-          ],
-          warnings: maxEvaluation.eligible
-            ? ["법적 상한 비교 기준이며 수익 또는 건축 타당성 추천안은 아닙니다."]
-            : [
-                "법적 상한 비교 기준으로만 사용하세요. 필수 미충족 항목이 있어 대표안 확정 전에 수정이 필요합니다.",
-              ],
-        }),
-      })
-    : null;
 
   return {
     engineVersion: PLANNING_RECOMMENDATION_ENGINE_VERSION,
     generatedAt,
     evaluatedCandidates,
     eligibleCandidates,
-    architecturalFeasibility,
-    profitOptimal,
-    legalCeilingReference,
+    architecturalFeasibility: safe
+      ? recommendation(safe, {
+          slot: "safe",
+          origin: "algorithm-safe",
+          name: "건축 타당성안",
+          description:
+            "법규 외곽선·배치·층간 연결·실제 주차 배치를 통과한 후보 중 건축 여유와 단순성이 가장 높은 안입니다.",
+          recommendation: metadata({
+            objective: "architectural-feasibility",
+            generatedAt,
+            evaluatedCandidates,
+            eligibleCandidates,
+            evaluation: safe,
+            reasons: [
+              `건축 타당성 ${safe.architectureScore.toFixed(1)}점`,
+              `법규·배치 필수 미충족 ${safe.failCount}건`,
+              `주차 ${safe.parkingLayout.capacityCars}/${safe.calculation.parking.requiredCars}대`,
+              `법정 용적률의 ${safe.farUtilizationPct.toFixed(1)}% 사용`,
+            ],
+          }),
+        })
+      : null,
+    profitOptimal: profit
+      ? recommendation(profit, {
+          slot: "profit",
+          origin: "algorithm-balanced",
+          name: "수익 최적안",
+          description:
+            "법규 외곽선과 실제 주차 배치를 통과한 후보만 대상으로 Stage 2 개략 이익이 가장 높은 안을 선택했습니다.",
+          recommendation: metadata({
+            objective: "profit",
+            generatedAt,
+            evaluatedCandidates,
+            eligibleCandidates,
+            evaluation: profit,
+            reasons: [
+              `실행 가능 후보 ${eligibleCandidates}개 중 개략 이익 최대`,
+              `개략 이익 ${round(
+                profit.calculation.economicsPreview.profitManwon,
+                0
+              ).toLocaleString()}만원`,
+              `이익률 ${profit.calculation.economicsPreview.profitMarginPct.toFixed(1)}%`,
+              `건축 타당성 ${profit.architectureScore.toFixed(1)}점`,
+            ],
+          }),
+        })
+      : null,
+    legalCeilingReference: maximum
+      ? recommendation(maximum, {
+          slot: "max",
+          origin: "algorithm-max",
+          name: "법적 상한 참고안",
+          description:
+            "산술상 용적률 사용량이 가장 높은 비교 기준입니다. 배치·일조·주차 미충족 항목이 있을 수 있어 자동 대표안이 아닙니다.",
+          recommendation: metadata({
+            objective: "legal-ceiling",
+            generatedAt,
+            evaluatedCandidates,
+            eligibleCandidates,
+            evaluation: maximum,
+            reasons: [
+              `예비 용적률 ${maximum.calculation.metrics.preliminaryFarPct.toFixed(1)}%`,
+              `예비 건폐율 ${maximum.calculation.metrics.preliminaryBcrPct.toFixed(1)}%`,
+              `법규·배치 미충족 ${maximum.failCount}건`,
+            ],
+            warnings: maximum.eligible
+              ? ["법적 상한 비교 기준이며 수익 또는 건축 타당성 추천안은 아닙니다."]
+              : [
+                  "법적 상한 비교 기준으로만 사용하세요. 필수 미충족 항목이 있어 대표안 확정 전에 수정이 필요합니다.",
+                ],
+          }),
+        })
+      : null,
     warnings,
     evaluations,
   };
