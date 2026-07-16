@@ -12,6 +12,7 @@ on:
       - stage2/upis-road-boundaries
       - stage2/upis-road-3d-export
       - stage2/planning-studio-delivery-hardening
+      - stage2/recommendation-engine
   push:
     branches:
       - integration/stage2-status-gis-footprint
@@ -23,6 +24,7 @@ on:
       - stage2/upis-road-3d-export
       - stage2/planning-studio-delivery-hardening
       - stage2/recommendation-engine
+      - stage2/stepped-maximum-candidate
 
 permissions:
   contents: read
@@ -69,6 +71,7 @@ jobs:
             src/tests/planning-scenario-finance-bridge.test.ts \
             src/tests/planning-recommendation-engine.test.ts \
             src/tests/planning-recommendation-analysis.test.ts \
+            src/tests/planning-stepped-maximum-candidate.test.ts \
             src/tests/planning-geometry.test.ts \
             src/tests/planning-sketchup-export-package.test.ts \
             src/tests/planning-sketchup-dae-export.test.ts \
