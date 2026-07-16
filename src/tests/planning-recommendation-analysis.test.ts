@@ -202,16 +202,15 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("uses the highest realized FAR only among geometry-valid candidates", () => {
-    const raw = generatePlanningRecommendations(input());
     const result = generatePlanningRecommendationsV2(input());
-    const valid = raw.evaluations.filter(isLegalGeometryCandidate);
+    const valid = result.evaluations.filter(isLegalGeometryCandidate);
     const expectedFar = Math.max(
       ...valid.map(
         (candidate) => candidate.calculation.metrics.preliminaryFarPct
       )
     );
 
-    const selected = raw.evaluations.find(
+    const selected = result.evaluations.find(
       (candidate) =>
         result.legalCeilingReference != null &&
         recommendationCandidateKey(candidate.scenario) ===
