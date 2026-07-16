@@ -110,7 +110,10 @@ function steppedCapacity(input: {
 }): { steps: SunStep[]; warnings: string[] } {
   const boundary = input.parcel.boundary;
   if (!boundary || boundary.length < 3) {
-    return { steps: [], warnings: ["대지 경계가 없어 층별 상한 후보를 만들 수 없습니다."] };
+    return {
+      steps: [],
+      warnings: ["대지 경계가 없어 층별 상한 후보를 만들 수 없습니다."],
+    };
   }
 
   const frontage = input.parcel.roads?.length
@@ -383,8 +386,10 @@ function evaluateCandidate(
 export function isSteppedMaximumEvaluation(
   evaluation: RecommendationCandidateEvaluation
 ): boolean {
-  return evaluation.scenario.description.includes(
-    "층별 법규 외곽선 자동 채움"
+  return (
+    evaluation.scenario.description?.includes(
+      "층별 법규 외곽선 자동 채움"
+    ) ?? false
   );
 }
 
