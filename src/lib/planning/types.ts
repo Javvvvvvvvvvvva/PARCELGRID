@@ -1,6 +1,5 @@
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
-  | "algorithm-profit"
   | "algorithm-balanced"
   | "algorithm-max"
   | "custom"
