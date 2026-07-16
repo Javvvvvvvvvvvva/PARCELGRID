@@ -1,5 +1,6 @@
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
+  | "algorithm-profit"
   | "algorithm-balanced"
   | "algorithm-max"
   | "custom"
@@ -99,6 +100,27 @@ export interface PlanningCheck {
   source?: string;
 }
 
+export type PlanningRecommendationObjective =
+  | "architectural-feasibility"
+  | "profit"
+  | "legal-ceiling";
+
+/**
+ * 추천안이 어떤 후보군과 기준으로 선정됐는지 보존한다.
+ * 추천점수와 수익은 결합하지 않고 별도 지표로 유지한다.
+ */
+export interface PlanningRecommendationMetadata {
+  engineVersion: string;
+  objective: PlanningRecommendationObjective;
+  generatedAt: string;
+  evaluatedCandidates: number;
+  eligibleCandidates: number;
+  architectureScore: number;
+  eligible: boolean;
+  reasons: string[];
+  warnings: string[];
+}
+
 /**
  * Stage 2 개략 사업성 계산에 사용하는 명시적 가정.
  * 모든 금액 단가는 원 단위이며 결과는 만원 단위로 반환한다.
@@ -164,6 +186,7 @@ export interface PlanningScenario {
   parking: PlanningParking;
   checks: PlanningCheck[];
   economicsPreview: PlanningEconomicsPreview;
+  recommendation?: PlanningRecommendationMetadata;
 }
 
 export interface PlanningScenarioSummary {
