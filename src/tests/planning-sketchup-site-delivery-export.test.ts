@@ -78,7 +78,7 @@ function planning() {
 }
 
 describe("SketchUp site delivery export", () => {
-  it("creates a preferred combined DAE while retaining split and CAD files", () => {
+  it("creates a clean design DAE, full-context DAE, and SketchUp tag setup", () => {
     const plan = planning();
     const roadBoundary = localRingToLngLat([
       [10, 15],
@@ -131,16 +131,33 @@ describe("SketchUp site delivery export", () => {
       sourceParcels,
     });
 
-    expect(result.combinedDaeFilename).toMatch(/-combined\.dae$/);
-    expect(result.preferredImportFilename).toBe(result.combinedDaeFilename);
+    expect(result.cleanDaeFilename).toMatch(/-design-base\.dae$/);
+    expect(result.combinedDaeFilename).toMatch(/-full-context\.dae$/);
+    expect(result.preferredImportFilename).toBe(result.cleanDaeFilename);
+
+    expect(result.cleanDaeText).toContain("PG_PROPOSED_MASS");
+    expect(result.cleanDaeText).toContain("PG_ROAD_BOUNDARY_UPIS");
+    expect(result.cleanDaeText).not.toContain('id="PG_ADJACENT_PARCELS-node"');
+    expect(result.cleanDaeText).not.toContain('id="PG_ROAD_CENTERLINE_REFERENCE-node"');
+    expect(result.cleanDaeText).not.toContain('id="PG_ROAD_WIDTH_SAMPLES-node"');
+
     expect(result.combinedDaeText).toContain("PG_PROPOSED_MASS");
     expect(result.combinedDaeText).toContain("PG_ROAD_BOUNDARY_UPIS");
-    expect(result.combinedDaeText).toContain("PG_ADJACENT_PARCELS");
+    expect(result.combinedDaeText).toContain('id="PG_ADJACENT_PARCELS-node"');
     expect(result.combinedDaeText.match(/<visual_scene\s/g)).toHaveLength(1);
+
+    expect(result.tagSetupFilename).toBe("PARCELGRID-SKETCHUP-TAGS.rb");
+    expect(result.tagSetupText).toContain("PG_ADJACENT_PARCELS");
+    expect(result.tagSetupText).toContain("tag.visible = !HIDDEN_BY_DEFAULT.include?(name)");
+    expect(result.tagSetupText).toContain("Window > Tags");
+
     expect(result.metadataText).toContain("deliveryAudit");
+    expect(result.metadataText).toContain(result.cleanDaeFilename);
     expect(result.metadataText).toContain(result.combinedDaeFilename);
-    expect(result.readmeText).toContain("권장 가져오기");
-    expect(result.readmeText).toContain(result.combinedDaeFilename);
+    expect(result.metadataText).toContain(result.tagSetupFilename);
+    expect(result.readmeText).toContain("권장 가져오기 — 설계 작업");
+    expect(result.readmeText).toContain(result.cleanDaeFilename);
+    expect(result.readmeText).toContain("45도로 보이는 이유");
     expect(result.zipBytes[0]).toBe(0x50);
     expect(result.zipBytes[1]).toBe(0x4b);
   });
