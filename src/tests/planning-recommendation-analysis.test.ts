@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   analyzePlanningRecommendations,
   generatePlanningRecommendationsV2,
+  isLegalGeometryCandidate,
+  legalGeometryFailureCodes,
   recommendationCandidateKey,
   summarizeRecommendationRejections,
 } from "@/lib/planning/recommendation-analysis";
@@ -99,10 +101,13 @@ describe("Stage 2 recommendation result analysis", () => {
     expect(raw.profitOptimal).not.toBeNull();
     if (!raw.profitOptimal) return;
 
-    const forcedShared = analyzePlanningRecommendations({
-      ...raw,
-      architecturalFeasibility: raw.profitOptimal,
-    });
+    const forcedShared = analyzePlanningRecommendations(
+      {
+        ...raw,
+        architecturalFeasibility: raw.profitOptimal,
+      },
+      input().parcel.maxFARPct
+    );
 
     expect(forcedShared.sharedPrimaryCandidate).toBe(true);
     expect(forcedShared.combinedPrimary?.name).toBe("통합 추천안");
@@ -137,7 +142,10 @@ describe("Stage 2 recommendation result analysis", () => {
     expect(summary.reasons.every((reason) => reason.count > 0)).toBe(true);
     expect(summary.multipleReasonsPossible).toBe(true);
 
-    const analyzed = analyzePlanningRecommendations(raw);
+    const analyzed = analyzePlanningRecommendations(
+      raw,
+      input().parcel.maxFARPct
+    );
     expect(
       analyzed.architecturalFeasibility?.recommendation?.rejectedCandidates
     ).toBe(summary.rejectedCandidates);
@@ -145,5 +153,78 @@ describe("Stage 2 recommendation result analysis", () => {
       analyzed.architecturalFeasibility?.recommendation?.rejectionReasons
         ?.length
     ).toBe(summary.reasons.length);
+  });
+
+  it("never exposes a floor-envelope failure as the 3D legal ceiling reference", () => {
+    const raw = generatePlanningRecommendations(input());
+    const result = analyzePlanningRecommendations(
+      raw,
+      input().parcel.maxFARPct
+    );
+    const legal = result.legalCeilingReference;
+
+    expect(legal).not.toBeNull();
+    expect(result.legalGeometryCandidateCount).toBeGreaterThan(0);
+    expect(result.arithmeticLegalFarCapPct).toBe(200);
+    expect(legal?.name).toBe("배치 가능 상한 참고안");
+    expect(legal?.recommendation?.engineVersion).toContain("legal-geometry-v2");
+    expect(legal?.recommendation?.reasons.join(" ")).toContain(
+      "배치 가능 실현 용적률"
+    );
+
+    const selectedEvaluation = raw.evaluations.find(
+      (candidate) =>
+        legal != null &&
+        recommendationCandidateKey(candidate.scenario) ===
+          recommendationCandidateKey(legal)
+    );
+    expect(selectedEvaluation).toBeDefined();
+    if (!selectedEvaluation) return;
+
+    expect(isLegalGeometryCandidate(selectedEvaluation)).toBe(true);
+    expect(legalGeometryFailureCodes(selectedEvaluation)).toEqual([]);
+    expect(
+      selectedEvaluation.calculation.checks.some(
+        (check) =>
+          check.status === "fail" &&
+          [
+            "bcr",
+            "far",
+            "height",
+            "floor-area-vs-lot",
+            "spatial-area-capacity",
+            "spatial-placement",
+            "spatial-floor-support",
+            "floor-levels",
+          ].includes(check.code)
+      )
+    ).toBe(false);
+  });
+
+  it("uses the highest realized FAR only among geometry-valid candidates", () => {
+    const raw = generatePlanningRecommendations(input());
+    const result = generatePlanningRecommendationsV2(input());
+    const valid = raw.evaluations.filter(isLegalGeometryCandidate);
+    const expectedFar = Math.max(
+      ...valid.map(
+        (candidate) => candidate.calculation.metrics.preliminaryFarPct
+      )
+    );
+
+    const selected = raw.evaluations.find(
+      (candidate) =>
+        result.legalCeilingReference != null &&
+        recommendationCandidateKey(candidate.scenario) ===
+          recommendationCandidateKey(result.legalCeilingReference)
+    );
+
+    expect(selected).toBeDefined();
+    expect(selected?.calculation.metrics.preliminaryFarPct).toBeCloseTo(
+      expectedFar,
+      6
+    );
+    expect(
+      result.legalCeilingReference?.recommendation?.warnings.join(" ")
+    ).toContain("산술 법정 상한 자체가 아니라");
   });
 });
