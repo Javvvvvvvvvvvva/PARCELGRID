@@ -23,5 +23,10 @@ jobs:
           corepack prepare pnpm@9 --activate >/dev/null 2>&1
       - name: Install quietly
         run: pnpm install --frozen-lockfile --silent
-      - name: Run stepped tests only
-        run: pnpm exec vitest run src/tests/planning-stepped-maximum-candidate.test.ts --reporter=verbose
+      - name: Run recommendation tests
+        run: |
+          pnpm exec vitest run \
+            src/tests/planning-recommendation-engine.test.ts \
+            src/tests/planning-recommendation-analysis.test.ts \
+            src/tests/planning-stepped-maximum-candidate.test.ts \
+            --reporter=verbose
