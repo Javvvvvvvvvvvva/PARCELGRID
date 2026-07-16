@@ -73,6 +73,7 @@ jobs:
             src/tests/planning-sketchup-site-export.test.ts \
             src/tests/planning-site-delivery-audit.test.ts \
             src/tests/planning-sketchup-site-delivery-export.test.ts \
+            src/tests/context-parcel-alignment.test.ts \
             --reporter=verbose
 
       - name: Typecheck
