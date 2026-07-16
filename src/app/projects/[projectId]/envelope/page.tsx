@@ -2,7 +2,7 @@
 
 import "@/lib/three/guard-empty-paths";
 import { use } from "react";
-import { PlanningRecommendationPanel } from "@/components/planning/PlanningRecommendationPanel";
+import { PlanningRecommendationPanelV2 } from "@/components/planning/PlanningRecommendationPanelV2";
 import { PlanningScenarioWorkspaceV4 } from "@/components/planning/PlanningScenarioWorkspaceV4";
 import { PlanningGeometryContractPanel } from "@/components/planning/PlanningGeometryContractPanel";
 import { PlanningSiteContextPanel } from "@/components/planning/PlanningSiteContextPanel";
@@ -20,7 +20,7 @@ export default function EnvelopePage({
   const { projectId } = use(params);
   return (
     <>
-      <PlanningRecommendationPanel projectId={projectId} />
+      <PlanningRecommendationPanelV2 projectId={projectId} />
       <PlanningScenarioWorkspaceV4 projectId={projectId} />
       <PlanningGeometryContractPanel projectId={projectId} />
       <PlanningSiteContextPanel projectId={projectId} />
