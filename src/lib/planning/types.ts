@@ -104,6 +104,17 @@ export type PlanningRecommendationObjective =
   | "profit"
   | "legal-ceiling";
 
+export type PlanningRecommendationProfitMode =
+  | "profit-maximization"
+  | "loss-minimization"
+  | "break-even";
+
+export interface PlanningRecommendationRejectionReason {
+  code: string;
+  label: string;
+  count: number;
+}
+
 /**
  * 추천안이 어떤 후보군과 기준으로 선정됐는지 보존한다.
  * 추천점수와 수익은 결합하지 않고 별도 지표로 유지한다.
@@ -118,6 +129,16 @@ export interface PlanningRecommendationMetadata {
   eligible: boolean;
   reasons: string[];
   warnings: string[];
+  /** 슬롯별 ID가 달라도 동일한 물리·프로그램 후보인지 확인하는 키. */
+  candidateKey?: string;
+  /** 동일 후보가 다른 선정 기준에서도 1위인 경우 보존한다. */
+  alsoSelectedFor?: PlanningRecommendationObjective[];
+  /** 수익 기준 1위가 실제 이익 최대인지, 적자 후보 중 손실 최소인지 구분한다. */
+  profitSelectionMode?: PlanningRecommendationProfitMode;
+  /** 전체 후보 중 실행 가능 조건을 통과하지 못한 후보 수. */
+  rejectedCandidates?: number;
+  /** 후보별 복수 원인이 포함될 수 있는 탈락 원인 집계. */
+  rejectionReasons?: PlanningRecommendationRejectionReason[];
 }
 
 /**
