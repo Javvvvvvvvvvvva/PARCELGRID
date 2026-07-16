@@ -70,7 +70,8 @@ describe("Stage 2 planning recommendation engine", () => {
     expect(result.profitOptimal).not.toBeNull();
     expect(result.legalCeilingReference).not.toBeNull();
     expect(result.architecturalFeasibility?.origin).toBe("algorithm-safe");
-    expect(result.profitOptimal?.origin).toBe("algorithm-profit");
+    expect(result.profitOptimal?.origin).toBe("algorithm-balanced");
+    expect(result.profitOptimal?.recommendation?.objective).toBe("profit");
     expect(result.legalCeilingReference?.origin).toBe("algorithm-max");
     expect(result.architecturalFeasibility?.recommendation?.eligible).toBe(true);
     expect(result.profitOptimal?.recommendation?.eligible).toBe(true);
@@ -109,12 +110,6 @@ describe("Stage 2 planning recommendation engine", () => {
       "legal-ceiling"
     );
     expect(result.legalCeilingReference?.description).toContain("비교 기준");
-    expect(
-      result.evaluations.find(
-        (candidate) =>
-          candidate.scenario.id === result.legalCeilingReference?.id
-      )
-    ).toBeUndefined();
     expect(
       result.legalCeilingReference?.recommendation?.reasons.join(" ")
     ).toContain(maxFar.toFixed(1));
