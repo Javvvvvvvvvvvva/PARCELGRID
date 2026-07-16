@@ -12,12 +12,25 @@ import {
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
 export const SKETCHUP_SITE_DELIVERY_EXPORT_VERSION =
-  "sketchup-site-delivery-export-v1" as const;
+  "sketchup-site-delivery-export-v2" as const;
+
+const CLEAN_HIDDEN_LAYER_NODE_IDS = [
+  "PG_ADJACENT_PARCELS-node",
+  "PG_ROAD_CENTERLINE_REFERENCE-node",
+  "PG_ROAD_WIDTH_SAMPLES-node",
+] as const;
 
 export interface SketchupSiteDeliveryExportResult
   extends SketchupSiteExportResult {
+  /** 모든 계획·GIS·지적 검토 레이어가 포함된 전체 컨텍스트 파일. */
   combinedDaeFilename: string;
   combinedDaeText: string;
+  /** 건축가의 기본 설계 작업용. 혼란을 주는 보조선은 scene에서 제외한다. */
+  cleanDaeFilename: string;
+  cleanDaeText: string;
+  /** full-context.dae의 PG_* 그룹을 SketchUp Tags로 자동 분류한다. */
+  tagSetupFilename: string;
+  tagSetupText: string;
   preferredImportFilename: string;
 }
 
@@ -65,6 +78,29 @@ function appendVisualSceneChildren(
   return `${modelDaeText.slice(0, position)}${children}${modelDaeText.slice(position)}`;
 }
 
+/**
+ * 중첩된 COLLADA node를 균형 있게 제거한다. geometry 라이브러리는 남겨도 scene에서
+ * 참조되지 않으므로 SketchUp에는 표시되지 않는다.
+ */
+function removeVisualNodeById(document: string, nodeId: string): string {
+  const marker = `<node id="${nodeId}"`;
+  const start = document.indexOf(marker);
+  if (start < 0) return document;
+
+  const tokenPattern = /<node\b[^>]*>|<\/node>/g;
+  tokenPattern.lastIndex = start;
+  let depth = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tokenPattern.exec(document))) {
+    if (match[0].startsWith("</node")) depth -= 1;
+    else depth += 1;
+    if (depth === 0) {
+      return `${document.slice(0, start)}${document.slice(tokenPattern.lastIndex)}`;
+    }
+  }
+  throw new Error(`${nodeId} COLLADA node의 닫힘 태그를 찾을 수 없습니다.`);
+}
+
 export function combineSketchupSiteDae(input: {
   modelDaeText: string;
   siteDaeText: string;
@@ -101,11 +137,103 @@ export function combineSketchupSiteDae(input: {
     );
 }
 
+export function buildCleanSketchupSiteDae(fullContextDaeText: string): string {
+  const clean = CLEAN_HIDDEN_LAYER_NODE_IDS.reduce(
+    (document, nodeId) => removeVisualNodeById(document, nodeId),
+    fullContextDaeText
+  );
+  return clean.replace(
+    /<comments>[^<]*<\/comments>/,
+    "<comments>PARCELGRID design-base | proposed mass, site, context buildings, road boundary and frontage; optional guides excluded</comments>"
+  );
+}
+
+export function buildSketchupTagSetupScript(): string {
+  return `# frozen_string_literal: true
+# PARCELGRID SketchUp Tag Setup
+# Import the *-full-context.dae file first, then run this file from Window > Ruby Console:
+# load 'C:/path/to/PARCELGRID-SKETCHUP-TAGS.rb'
+
+module ParcelGridTagSetup
+  TAG_PATTERN = /\\A(PG_[A-Z0-9_]+)/
+  HIDDEN_BY_DEFAULT = %w[
+    PG_ADJACENT_PARCELS
+    PG_ROAD_CENTERLINE_REFERENCE
+    PG_ROAD_WIDTH_SAMPLES
+    PG_METADATA
+    PG_SITE_METADATA
+  ].freeze
+
+  def self.container?(entity)
+    entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+  end
+
+  def self.child_entities(entity)
+    return entity.entities if entity.is_a?(Sketchup::Group)
+    return entity.definition.entities if entity.is_a?(Sketchup::ComponentInstance)
+
+    nil
+  end
+
+  def self.assign_tags(entities, model, found, visited_definitions)
+    entities.each do |entity|
+      next unless container?(entity)
+
+      tag_name = entity.name.to_s[TAG_PATTERN, 1]
+      if tag_name
+        tag = model.layers[tag_name] || model.layers.add(tag_name)
+        entity.layer = tag
+        found[tag_name] = tag
+        next
+      end
+
+      if entity.is_a?(Sketchup::ComponentInstance)
+        definition_key = entity.definition.persistent_id
+        next if visited_definitions[definition_key]
+
+        visited_definitions[definition_key] = true
+      end
+      nested = child_entities(entity)
+      assign_tags(nested, model, found, visited_definitions) if nested
+    end
+  end
+
+  def self.run
+    model = Sketchup.active_model
+    model.start_operation('PARCELGRID Tags', true)
+    found = {}
+    assign_tags(model.entities, model, found, {})
+
+    found.each do |name, tag|
+      tag.visible = !HIDDEN_BY_DEFAULT.include?(name)
+    end
+
+    model.commit_operation
+    hidden = found.keys.select { |name| HIDDEN_BY_DEFAULT.include?(name) }
+    UI.messagebox(
+      "PARCELGRID Tags 설정 완료\\n" \\
+      "생성/연결: #{found.length}개\\n" \\
+      "기본 숨김: #{hidden.join(', ')}\\n\\n" \\
+      "Window > Tags에서 각 레이어를 켜고 끌 수 있습니다."
+    )
+  rescue StandardError => error
+    model.abort_operation if model
+    UI.messagebox("PARCELGRID Tags 설정 실패: #{error.message}")
+    raise error
+  end
+end
+
+ParcelGridTagSetup.run
+`;
+}
+
 function deliveryReadme(input: {
+  cleanDaeFilename: string;
   combinedDaeFilename: string;
   modelDaeFilename: string;
   siteDaeFilename: string;
   dxfFilename: string;
+  tagSetupFilename: string;
   siteHash: string;
   audit: ReturnType<typeof buildSiteDeliveryAudit>;
   origin: [number, number];
@@ -115,15 +243,28 @@ function deliveryReadme(input: {
     "==========================================",
     `Site hash: ${input.siteHash}`,
     "",
-    "권장 가져오기",
-    `1. ${input.combinedDaeFilename} 파일 하나를 COLLADA 형식으로 가져옵니다.`,
-    "2. 모델 단위는 meter이며 가져온 직후 이동·회전하지 마세요.",
-    `3. 2D 지적선을 추가 확인할 때만 ${input.dxfFilename}를 가져옵니다.`,
+    "권장 가져오기 — 설계 작업",
+    `1. ${input.cleanDaeFilename} 파일 하나를 COLLADA 형식으로 가져옵니다.`,
+    "2. 이 파일은 계획 매스·대상 필지·주변 건물·도로 경계·접도선만 표시합니다.",
+    "3. 인접 필지선·도로 중심선·폭 샘플은 혼란을 줄이기 위해 제외했습니다.",
+    "4. 모델 단위는 meter이며 가져온 직후 이동·회전하지 마세요.",
+    "",
+    "전체 지적 검토 및 필터",
+    `1. 모든 검토선을 보려면 ${input.combinedDaeFilename}를 새 SketchUp 문서에 가져옵니다.`,
+    `2. Window > Ruby Console을 열고 load '파일경로/${input.tagSetupFilename}'를 실행합니다.`,
+    "3. Window > Tags에서 PG_ADJACENT_PARCELS, PG_ROAD_CENTERLINE_REFERENCE,",
+    "   PG_ROAD_WIDTH_SAMPLES 등을 필터처럼 켜고 끌 수 있습니다.",
+    "4. 인접 필지·중심선·폭 샘플은 Tag 설정 직후 기본 숨김 처리됩니다.",
     "",
     "분리 검증용 파일",
     `- ${input.modelDaeFilename}: 계획 매스·대상 필지·주변 건물·정북`,
     `- ${input.siteDaeFilename}: 인접 필지·도로 경계·중심선·접도·폭 샘플`,
-    "통합 파일에 문제가 있을 때만 위 두 파일을 같은 SketchUp 문서에 순서대로 가져오세요.",
+    `- ${input.dxfFilename}: 2D 지적선 및 도로 선형`,
+    "",
+    "45도로 보이는 이유",
+    "- 매스나 지적 데이터가 회전된 것이 아니라 SketchUp 조감 카메라의 시점 때문입니다.",
+    "- 동쪽 +X, 북쪽 -Z 좌표를 유지하며 지적선을 별도로 회전하면 안 됩니다.",
+    "- 지도와 비교할 때는 Camera > Standard Views > Top 후 Parallel Projection을 사용하세요.",
     "",
     "좌표 계약",
     "- 단위: meter",
@@ -172,21 +313,32 @@ export function buildSketchupSiteDeliveryExport(input: {
   }
 
   const base = legacy.filename.replace(/\.zip$/i, "");
-  const combinedDaeFilename = `${base}-combined.dae`;
-  const combinedDaeText = combineSketchupSiteDae({
+  const combinedDaeFilename = `${base}-full-context.dae`;
+  const cleanDaeFilename = `${base}-design-base.dae`;
+  const tagSetupFilename = "PARCELGRID-SKETCHUP-TAGS.rb";
+  const fullContextDaeText = combineSketchupSiteDae({
     modelDaeText: modelExport.daeText,
     siteDaeText: legacy.siteDaeText,
     siteHash: base.match(/SITE-[A-F0-9]+/)?.[0] ?? "SITE-COMBINED",
   });
+  const cleanDaeText = buildCleanSketchupSiteDae(fullContextDaeText);
+  const tagSetupText = buildSketchupTagSetupScript();
   const parsedMetadata = JSON.parse(legacy.metadataText) as Record<string, unknown>;
   const metadataText = `${JSON.stringify(
     {
       ...parsedMetadata,
       deliveryExportVersion: SKETCHUP_SITE_DELIVERY_EXPORT_VERSION,
-      preferredImportFile: combinedDaeFilename,
+      preferredImportFile: cleanDaeFilename,
+      fullContextImportFile: combinedDaeFilename,
+      tagSetupFile: tagSetupFilename,
+      defaultHiddenGuideLayers: CLEAN_HIDDEN_LAYER_NODE_IDS.map((id) =>
+        id.replace(/-node$/, "")
+      ),
       deliveryAudit: audit,
       files: {
-        combinedDae: combinedDaeFilename,
+        designBaseDae: cleanDaeFilename,
+        fullContextDae: combinedDaeFilename,
+        sketchupTagSetup: tagSetupFilename,
         splitModelDae: legacy.modelDaeFilename,
         splitSiteContextDae: legacy.siteDaeFilename,
         dxf: linework.dxfFilename,
@@ -197,17 +349,21 @@ export function buildSketchupSiteDeliveryExport(input: {
     2
   )}\n`;
   const readmeText = deliveryReadme({
+    cleanDaeFilename,
     combinedDaeFilename,
     modelDaeFilename: legacy.modelDaeFilename,
     siteDaeFilename: legacy.siteDaeFilename,
     dxfFilename: linework.dxfFilename,
+    tagSetupFilename,
     siteHash: base.match(/SITE-[A-F0-9]+/)?.[0] ?? "SITE-COMBINED",
     audit,
     origin: input.basePackage.planning.coordinateSystem.originLngLat,
   });
   const encoder = new TextEncoder();
   const zipBytes = createStoredZip([
-    { name: combinedDaeFilename, bytes: encoder.encode(combinedDaeText) },
+    { name: cleanDaeFilename, bytes: encoder.encode(cleanDaeText) },
+    { name: combinedDaeFilename, bytes: encoder.encode(fullContextDaeText) },
+    { name: tagSetupFilename, bytes: encoder.encode(tagSetupText) },
     { name: legacy.modelDaeFilename, bytes: encoder.encode(modelExport.daeText) },
     { name: legacy.siteDaeFilename, bytes: encoder.encode(legacy.siteDaeText) },
     { name: linework.dxfFilename, bytes: encoder.encode(linework.dxfText) },
@@ -219,8 +375,12 @@ export function buildSketchupSiteDeliveryExport(input: {
   return {
     ...legacy,
     combinedDaeFilename,
-    combinedDaeText,
-    preferredImportFilename: combinedDaeFilename,
+    combinedDaeText: fullContextDaeText,
+    cleanDaeFilename,
+    cleanDaeText,
+    tagSetupFilename,
+    tagSetupText,
+    preferredImportFilename: cleanDaeFilename,
     metadataText,
     readmeText,
     zipBytes,
