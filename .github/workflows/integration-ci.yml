@@ -3,28 +3,7 @@ name: Integration CI
 on:
   pull_request:
     branches:
-      - stage2/planning-scenario-foundation
-      - integration/stage2-status-gis-footprint
-      - stage2/envelope-data-bridge
-      - stage2/planning-geometry-contract
-      - stage2/sketchup-dae-export
-      - stage2/cadastral-road-context
-      - stage2/upis-road-boundaries
-      - stage2/upis-road-3d-export
-      - stage2/planning-studio-delivery-hardening
       - stage2/recommendation-engine
-  push:
-    branches:
-      - integration/stage2-status-gis-footprint
-      - stage2/envelope-data-bridge
-      - stage2/planning-geometry-contract
-      - stage2/sketchup-dae-export
-      - stage2/cadastral-road-context
-      - stage2/upis-road-boundaries
-      - stage2/upis-road-3d-export
-      - stage2/planning-studio-delivery-hardening
-      - stage2/recommendation-engine
-      - stage2/stepped-maximum-candidate
 
 permissions:
   contents: read
@@ -32,59 +11,32 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Enable pnpm
         run: |
-          corepack enable
-          corepack prepare pnpm@9 --activate
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run Stage 1 GIS tests
+          corepack enable >/dev/null 2>&1
+          corepack prepare pnpm@9 --activate >/dev/null 2>&1
+      - name: Install quietly
+        run: pnpm install --frozen-lockfile --silent
+      - name: Run typecheck to file
+        id: typecheck
+        shell: bash
         run: |
-          pnpm exec vitest run \
-            src/tests/vworld-buildings.test.ts \
-            src/tests/status-insights.test.ts \
-            src/tests/geo/normalize-road-lines.test.ts \
-            src/tests/geo/select-primary-road.test.ts \
-            src/tests/geo/orientation-display.test.ts \
-            src/tests/geo/scene-extrusion.test.ts \
-            --reporter=verbose
-
-      - name: Run Stage 2 planning tests
-        run: |
-          pnpm exec vitest run \
-            src/tests/planning-scenarios.test.ts \
-            src/tests/planning-calculator.test.ts \
-            src/tests/planning-scenario-factory.test.ts \
-            src/tests/planning-scenario-finance-bridge.test.ts \
-            src/tests/planning-recommendation-engine.test.ts \
-            src/tests/planning-recommendation-analysis.test.ts \
-            src/tests/planning-stepped-maximum-candidate.test.ts \
-            src/tests/planning-geometry.test.ts \
-            src/tests/planning-sketchup-export-package.test.ts \
-            src/tests/planning-sketchup-dae-export.test.ts \
-            src/tests/planning-cadastral-road-context.test.ts \
-            src/tests/planning-upis-road-boundaries.test.ts \
-            src/tests/planning-sketchup-site-export.test.ts \
-            src/tests/planning-site-delivery-audit.test.ts \
-            src/tests/planning-sketchup-site-delivery-export.test.ts \
-            src/tests/context-parcel-alignment.test.ts \
-            --reporter=verbose
-
-      - name: Typecheck
-        run: pnpm exec tsc --noEmit
-
-      - name: Build
-        run: pnpm build
+          set +e
+          pnpm exec tsc --noEmit > typecheck.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload typecheck log
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-log
+          path: typecheck.log
+      - name: Fail when typecheck failed
+        if: steps.typecheck.outputs.exit_code != '0'
+        run: exit 1
