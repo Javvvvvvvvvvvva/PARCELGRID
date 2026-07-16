@@ -5,7 +5,10 @@ import {
   recommendationCandidateKey,
 } from "@/lib/planning/recommendation-analysis";
 import { isSteppedMaximumEvaluation } from "@/lib/planning/stepped-maximum-candidate";
-import type { PlanningEconomicsAssumptions } from "@/lib/planning/types";
+import type {
+  FloorProgram,
+  PlanningEconomicsAssumptions,
+} from "@/lib/planning/types";
 
 const ORIGIN: [number, number] = [127.025749, 37.650511];
 
@@ -68,12 +71,11 @@ function input() {
   };
 }
 
-function floorArea(
-  floor: ReturnType<typeof generatePlanningRecommendationsV2>["legalCeilingReference"] extends infer _T
-    ? { zones: Array<{ areaSqm: number }> }
-    : never
-): number {
-  return floor.zones.reduce((sum, zone) => sum + Math.max(0, zone.areaSqm), 0);
+function floorArea(floor: FloorProgram): number {
+  return floor.zones.reduce(
+    (sum, zone) => sum + Math.max(0, zone.areaSqm),
+    0
+  );
 }
 
 describe("Stage 2 stepped maximum candidate", () => {
