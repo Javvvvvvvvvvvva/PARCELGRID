@@ -12,6 +12,11 @@ import {
   type CadastralParcelFeature,
   type LocalCadastralParcel,
 } from "@/lib/geo/cadastral-context";
+import {
+  buildContextParcelAlignment,
+  type ContextParcelAlignmentSnapshot,
+  type ContextParcelAlignmentStatus,
+} from "@/lib/planning/context-parcel-alignment";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import {
@@ -143,29 +148,59 @@ function ProposedMass({
   );
 }
 
-function ContextBuilding({ building }: { building: ContextGeometryBuilding }) {
+function alignmentEdgeColor(
+  status: ContextParcelAlignmentStatus | undefined,
+  verified: boolean
+): string {
+  if (status === "mismatch") return "#dc2626";
+  if (status === "review") return "#d97706";
+  return verified ? "#74808b" : "#9aa3ab";
+}
+
+function ContextBuilding({
+  building,
+  alignmentStatus,
+}: {
+  building: ContextGeometryBuilding;
+  alignmentStatus?: ContextParcelAlignmentStatus;
+}) {
   return (
     <group>
       {building.polygons.map((polygon, index) => {
         const geometry = prismGeometry(polygon.outer, 0, building.heightM);
         const verified = building.accuracy === "verified";
+        const edgeColor = alignmentEdgeColor(alignmentStatus, verified);
         return (
           <group key={`${building.id}-${index}`}>
-            <mesh geometry={geometry}>
+            {/*
+              주변 건물은 반투명하지만 먼저 depth만 기록해 바닥 지적선이 건물을
+              관통해 보이는 착시를 막는다. 실제 색상은 다음 mesh에서 그린다.
+            */}
+            <mesh geometry={geometry} renderOrder={0}>
+              <meshBasicMaterial
+                colorWrite={false}
+                depthWrite
+                depthTest
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+            <mesh geometry={geometry} renderOrder={1}>
               <meshStandardMaterial
                 color={verified ? "#8f99a3" : "#aeb6be"}
                 transparent
                 opacity={verified ? 0.18 : 0.1}
                 depthWrite={false}
+                depthTest
                 roughness={0.9}
                 side={THREE.DoubleSide}
               />
             </mesh>
-            <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
+            <lineSegments geometry={new THREE.EdgesGeometry(geometry)} renderOrder={2}>
               <lineBasicMaterial
-                color={verified ? "#74808b" : "#9aa3ab"}
+                color={edgeColor}
                 transparent
-                opacity={verified ? 0.32 : 0.2}
+                opacity={alignmentStatus === "mismatch" ? 0.9 : verified ? 0.32 : 0.2}
+                depthTest
               />
             </lineSegments>
           </group>
@@ -214,7 +249,9 @@ function PolygonLine({
 }) {
   const ring = openRing(points);
   if (ring.length < 2) return null;
-  const positions = [...ring, ring[0]].map((point) => [point.x, y, point.z] as [number, number, number]);
+  const positions = [...ring, ring[0]].map(
+    (point) => [point.x, y, point.z] as [number, number, number]
+  );
   return <Line points={positions} color={color} transparent opacity={opacity} lineWidth={1} />;
 }
 
@@ -222,6 +259,7 @@ function SiteScene({
   planning,
   context,
   cadastral,
+  alignment,
   showBuildings,
   showParcels,
   showRoads,
@@ -231,6 +269,7 @@ function SiteScene({
   planning: ReturnType<typeof buildPlanningGeometry>["snapshot"];
   context: ContextGeometrySnapshot;
   cadastral: CadastralContextSnapshot;
+  alignment: ContextParcelAlignmentSnapshot;
   showBuildings: boolean;
   showParcels: boolean;
   showRoads: boolean;
@@ -242,6 +281,9 @@ function SiteScene({
     (parcel) => frontageIds.has(parcel.pnu) || parcel.distanceM <= 55
   );
   const visibleParcels = cadastral.adjacentParcels.filter((parcel) => parcel.distanceM <= 45);
+  const alignmentByBuilding = new Map(
+    alignment.buildings.map((building) => [building.buildingId, building.status])
+  );
 
   return (
     <>
@@ -257,7 +299,7 @@ function SiteScene({
             key={parcel.pnu}
             points={parcel.polygon}
             color="#9a8f80"
-            opacity={0.32}
+            opacity={0.2}
             y={0.008}
           />
         ))}
@@ -269,11 +311,13 @@ function SiteScene({
         planning.roads.map((road, roadIndex) => (
           <Line
             key={`${road.name}-${roadIndex}`}
-            points={road.points.map((point) => [point.x, 0.025, point.z] as [number, number, number])}
+            points={road.points.map(
+              (point) => [point.x, 0.025, point.z] as [number, number, number]
+            )}
             color="#111827"
             transparent
-            opacity={0.82}
-            lineWidth={1.2}
+            opacity={0.38}
+            lineWidth={1}
           />
         ))}
 
@@ -281,7 +325,9 @@ function SiteScene({
         cadastral.frontages.map((frontage) => (
           <group key={`${frontage.roadParcelPnu}-${frontage.targetEdgeIndex}`}>
             <Line
-              points={frontage.frontage.map((point) => [point.x, 0.07, point.z] as [number, number, number])}
+              points={frontage.frontage.map(
+                (point) => [point.x, 0.07, point.z] as [number, number, number]
+              )}
               color="#2563eb"
               lineWidth={3}
             />
@@ -303,7 +349,11 @@ function SiteScene({
 
       {showBuildings &&
         context.buildings.map((building) => (
-          <ContextBuilding key={building.id} building={building} />
+          <ContextBuilding
+            key={building.id}
+            building={building}
+            alignmentStatus={alignmentByBuilding.get(building.id)}
+          />
         ))}
 
       {planning.building.floors.map((floor) => (
@@ -448,10 +498,15 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       targetPnu,
       parcels: sourceParcels,
     });
+    const alignment = buildContextParcelAlignment({
+      context: basePackage.context,
+      cadastral,
+    });
     return {
       planning,
       context: basePackage.context,
       cadastral,
+      alignment,
       extent: calculateExtent({
         planning,
         context: basePackage.context,
@@ -469,6 +524,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       : sourceSummary?.activeRoadBoundarySource === "upis-road-boundary"
         ? "VWorld 도시계획 도로 경계"
         : "도로 중심선 참고";
+  const alignmentSummary = snapshots.alignment.summary;
 
   return (
     <Panel
@@ -494,6 +550,15 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           <span className="ui-tag">
             주변 건물 {snapshots.context.summary.totalBuildings}동
           </span>
+          <span className="ui-tag">
+            필지 정합 {alignmentSummary.alignedBuildings}/{alignmentSummary.totalBuildings}동
+          </span>
+          {alignmentSummary.reviewBuildings > 0 && (
+            <span className="ui-tag">정합 확인 {alignmentSummary.reviewBuildings}동</span>
+          )}
+          {alignmentSummary.mismatchBuildings > 0 && (
+            <span className="ui-tag">정합 불일치 {alignmentSummary.mismatchBuildings}동</span>
+          )}
           {primary?.widthAvgM != null && (
             <span className="ui-tag">
               폭 {num(primary.widthMinM ?? 0, 2)} / {num(primary.widthAvgM, 2)} /{" "}
@@ -521,6 +586,19 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>VWorld 지적·UPIS 도로 경계를 불러오고 있습니다.</Notice>
       )}
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
+      {alignmentSummary.mismatchBuildings > 0 && (
+        <Notice tone="fail">
+          주변 건물 {alignmentSummary.mismatchBuildings}동이 대상·인접 필지 경계 안에 60%
+          미만만 포함됩니다. 빨간 외곽 건물은 VWorld 건물·지적 데이터의 위치 또는 갱신
+          차이를 확인해야 합니다.
+        </Notice>
+      )}
+      {alignmentSummary.mismatchBuildings === 0 && alignmentSummary.reviewBuildings > 0 && (
+        <Notice>
+          주황 외곽 주변 건물 {alignmentSummary.reviewBuildings}동은 필지 포함 비율이
+          60~85%라 원본 지적도 확인이 필요합니다.
+        </Notice>
+      )}
 
       <div
         style={{
@@ -548,6 +626,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               planning={snapshots.planning}
               context={snapshots.context}
               cadastral={snapshots.cadastral}
+              alignment={snapshots.alignment}
               showBuildings={showBuildings}
               showParcels={showParcels}
               showRoads={showRoads}
@@ -566,9 +645,11 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           color: "var(--fg-muted)",
         }}
       >
-        짙은 회색 면은 VWorld 도시계획 도로 또는 연속지적 도로 경계입니다. 파란색은
-        선택된 접도선, 주황색은 수직 폭 샘플입니다. 도로 경계는 개략설계용이며 현황
-        포장·차도·보도 경계나 측량 성과도를 대체하지 않습니다.
+        갈색선은 인접 지적 경계이며 별도로 회전하지 않습니다. 주변 건물과 지적선은 같은
+        로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치입니다.
+        짙은 회색 면은 VWorld 도시계획 도로 또는 연속지적 도로 경계이고, 파란색은 선택된
+        접도선, 주황색 가는 선은 수직 폭 샘플입니다. 모든 GIS 검사는 개략설계용이며 측량
+        성과도를 대체하지 않습니다.
       </p>
     </Panel>
   );
