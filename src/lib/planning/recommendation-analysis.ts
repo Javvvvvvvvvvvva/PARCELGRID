@@ -1,9 +1,15 @@
 import {
   generatePlanningRecommendations,
+  PLANNING_RECOMMENDATION_ENGINE_VERSION,
   type PlanningRecommendationEngineInput,
   type PlanningRecommendationSet,
   type RecommendationCandidateEvaluation,
 } from "@/lib/planning/recommendation-engine";
+import {
+  generateSteppedMaximumEvaluations,
+  isSteppedMaximumEvaluation,
+  STEPPED_MAXIMUM_ENGINE_VERSION,
+} from "@/lib/planning/stepped-maximum-candidate";
 import type {
   PlanningRecommendationMetadata,
   PlanningRecommendationObjective,
@@ -32,11 +38,10 @@ export interface PlanningRecommendationAnalysis extends PlanningRecommendationSe
   profitMode: RecommendationProfitMode | null;
   combinedPrimary: PlanningScenario | null;
   rejectionSummary: RecommendationRejectionSummary;
-  /** 층별 외곽선·배치·층간 연결을 통과해 3D 상한 비교가 가능한 후보 수. */
-  legalGeometryCandidateCount: number;
-  /** 입력된 산술 법정 용적률 상한. 3D 실현 용적률과 구분한다. */
-  arithmeticLegalFarCapPct: number | null;
 }
+
+const ENGINE_VERSION = `${PLANNING_RECOMMENDATION_ENGINE_VERSION}+${STEPPED_MAXIMUM_ENGINE_VERSION}`;
+const GEOMETRY_REFERENCE_ALLOWED_FAIL_CODES = new Set(["parking"]);
 
 const FAIL_REASON_LABELS: Record<string, string> = {
   bcr: "건폐율 초과",
@@ -50,27 +55,14 @@ const FAIL_REASON_LABELS: Record<string, string> = {
   "floor-levels": "층 레벨 중복",
 };
 
-/**
- * 법적 상한 3D 후보를 차단하는 물리·법규 항목.
- * 주차는 별도 실현 제약이므로 상한 비교안 생성 자체는 허용하되 경고한다.
- */
-const LEGAL_GEOMETRY_BLOCKING_CODES = new Set([
-  "bcr",
-  "far",
-  "height",
-  "floor-area-vs-lot",
-  "spatial-area-capacity",
-  "spatial-placement",
-  "spatial-floor-support",
-  "floor-levels",
-]);
-
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
 }
 
-function stableZone(zone: PlanningScenario["floorPrograms"][number]["zones"][number]) {
+function stableZone(
+  zone: PlanningScenario["floorPrograms"][number]["zones"][number]
+) {
   return {
     useType: zone.useType,
     label: zone.label ?? "",
@@ -87,7 +79,9 @@ function stableZone(zone: PlanningScenario["floorPrograms"][number]["zones"][num
 /**
  * 추천 슬롯별로 새 ID가 붙어도 물리·프로그램 계획이 같은 후보인지 판정한다.
  */
-export function recommendationCandidateKey(scenario: PlanningScenario): string {
+export function recommendationCandidateKey(
+  scenario: PlanningScenario
+): string {
   return JSON.stringify({
     primaryUse: scenario.primaryUse,
     floors: [...scenario.floorPrograms]
@@ -176,17 +170,65 @@ function profitMode(profitManwon: number): RecommendationProfitMode {
   return "break-even";
 }
 
+function rawMetadata(input: {
+  objective: PlanningRecommendationObjective;
+  generatedAt: string;
+  evaluatedCandidates: number;
+  eligibleCandidates: number;
+  evaluation: RecommendationCandidateEvaluation;
+  reasons: string[];
+  warnings?: string[];
+}): PlanningRecommendationMetadata {
+  return {
+    engineVersion: ENGINE_VERSION,
+    objective: input.objective,
+    generatedAt: input.generatedAt,
+    evaluatedCandidates: input.evaluatedCandidates,
+    eligibleCandidates: input.eligibleCandidates,
+    architectureScore: input.evaluation.architectureScore,
+    eligible: input.evaluation.eligible,
+    reasons: input.reasons,
+    warnings: input.warnings ?? [],
+  };
+}
+
+function recommendationFromEvaluation(
+  evaluation: RecommendationCandidateEvaluation,
+  input: {
+    slot: "safe" | "profit" | "max";
+    origin: PlanningScenario["origin"];
+    name: string;
+    description: string;
+    recommendation: PlanningRecommendationMetadata;
+  }
+): PlanningScenario {
+  return {
+    ...evaluation.scenario,
+    id: `${evaluation.scenario.id}-${input.slot}`,
+    name: input.name,
+    description: input.description,
+    origin: input.origin,
+    status: "saved",
+    recommendation: input.recommendation,
+  };
+}
+
 function enhanceMetadata(
   metadata: PlanningRecommendationMetadata,
   input: {
     scenario: PlanningScenario;
     rejectionSummary: RecommendationRejectionSummary;
+    evaluatedCandidates: number;
+    eligibleCandidates: number;
     profitSelectionMode?: RecommendationProfitMode;
     alsoSelectedFor?: PlanningRecommendationObjective[];
   }
 ): PlanningRecommendationMetadata {
   return {
     ...metadata,
+    engineVersion: ENGINE_VERSION,
+    evaluatedCandidates: input.evaluatedCandidates,
+    eligibleCandidates: input.eligibleCandidates,
     candidateKey: recommendationCandidateKey(input.scenario),
     profitSelectionMode: input.profitSelectionMode,
     alsoSelectedFor: input.alsoSelectedFor,
@@ -199,6 +241,8 @@ function enhancedScenario(
   scenario: PlanningScenario | null,
   input: {
     rejectionSummary: RecommendationRejectionSummary;
+    evaluatedCandidates: number;
+    eligibleCandidates: number;
     profitSelectionMode?: RecommendationProfitMode;
   }
 ): PlanningScenario | null {
@@ -208,148 +252,108 @@ function enhancedScenario(
     recommendation: enhanceMetadata(scenario.recommendation, {
       scenario,
       rejectionSummary: input.rejectionSummary,
+      evaluatedCandidates: input.evaluatedCandidates,
+      eligibleCandidates: input.eligibleCandidates,
       profitSelectionMode: input.profitSelectionMode,
     }),
   };
 }
 
-export function legalGeometryFailureCodes(
-  candidate: RecommendationCandidateEvaluation
-): string[] {
-  return candidate.calculation.checks
-    .filter(
-      (check) =>
-        check.status === "fail" && LEGAL_GEOMETRY_BLOCKING_CODES.has(check.code)
-    )
-    .map((check) => check.code);
-}
-
-/**
- * 산술 FAR이 높다는 이유만으로 3D 상한안이 되지 않게 한다.
- * 각 층 프로그램이 법규 외곽선 안에 있고, 이동·회전 배치와 층간 연결까지
- * 통과한 후보만 3D로 열 수 있는 법적 상한 비교안 후보가 된다.
- */
-export function isLegalGeometryCandidate(
+export function isGeometryValidMaximumCandidate(
   candidate: RecommendationCandidateEvaluation
 ): boolean {
+  return candidate.calculation.checks
+    .filter((check) => check.status === "fail")
+    .every((check) => GEOMETRY_REFERENCE_ALLOWED_FAIL_CODES.has(check.code));
+}
+
+export function selectMaximumReferenceEvaluation(
+  evaluations: RecommendationCandidateEvaluation[]
+): RecommendationCandidateEvaluation | null {
   return (
-    candidate.calculation.metrics.aboveGroundFloors > 0 &&
-    legalGeometryFailureCodes(candidate).length === 0
+    [...evaluations]
+      .filter(isGeometryValidMaximumCandidate)
+      .sort(
+        (a, b) =>
+          b.calculation.metrics.preliminaryFarPct -
+            a.calculation.metrics.preliminaryFarPct ||
+          b.calculation.metrics.preliminaryBcrPct -
+            a.calculation.metrics.preliminaryBcrPct ||
+          Number(isSteppedMaximumEvaluation(b)) -
+            Number(isSteppedMaximumEvaluation(a)) ||
+          b.architectureScore - a.architectureScore
+      )[0] ?? null
   );
 }
 
-function inferLegalFarCapPct(
-  candidate: RecommendationCandidateEvaluation,
-  explicitCapPct?: number
-): number | null {
-  if (explicitCapPct != null && Number.isFinite(explicitCapPct) && explicitCapPct > 0) {
-    return explicitCapPct;
-  }
-  if (candidate.farUtilizationPct <= 0) return null;
-  return (
-    candidate.calculation.metrics.preliminaryFarPct /
-    (candidate.farUtilizationPct / 100)
-  );
-}
-
-function buildableLegalReference(
-  result: PlanningRecommendationSet,
-  rejectionSummary: RecommendationRejectionSummary,
-  legalFarCapPct?: number
-): {
-  scenario: PlanningScenario | null;
-  candidateCount: number;
-} {
-  const candidates = result.evaluations
-    .filter(isLegalGeometryCandidate)
-    .sort(
-      (a, b) =>
-        b.calculation.metrics.preliminaryFarPct -
-          a.calculation.metrics.preliminaryFarPct ||
-        b.calculation.metrics.preliminaryBcrPct -
-          a.calculation.metrics.preliminaryBcrPct ||
-        b.architectureScore - a.architectureScore
-    );
-  const selected = candidates[0];
-  if (!selected) return { scenario: null, candidateCount: 0 };
-
-  const realizedFarPct = selected.calculation.metrics.preliminaryFarPct;
-  const realizedBcrPct = selected.calculation.metrics.preliminaryBcrPct;
-  const capPct = inferLegalFarCapPct(selected, legalFarCapPct);
+function maximumReferenceScenario(input: {
+  evaluation: RecommendationCandidateEvaluation;
+  generatedAt: string;
+  evaluatedCandidates: number;
+  eligibleCandidates: number;
+}): PlanningScenario {
+  const evaluation = input.evaluation;
+  const floorAreas = evaluation.scenario.floorPrograms
+    .filter((floor) => floor.level > 0)
+    .sort((a, b) => a.level - b.level)
+    .map((floor) => ({
+      level: floor.level,
+      areaSqm: floor.zones.reduce(
+        (sum, zone) => sum + Math.max(0, zone.areaSqm),
+        0
+      ),
+    }));
   const parkingShortfall = Math.max(
-    selected.calculation.parking.shortfallCars,
-    selected.parkingLayout.shortfallCars
+    evaluation.calculation.parking.shortfallCars,
+    evaluation.parkingLayout.shortfallCars
   );
-  const reviewCount = selected.calculation.checks.filter(
-    (check) => check.status === "review" || check.status === "unknown"
-  ).length;
-  const warnings = [
-    "산술 법정 상한 자체가 아니라 층별 법규 외곽선·배치·층간 연결을 통과한 후보 중 실현 용적률이 가장 높은 비교안입니다.",
-  ];
-  if (parkingShortfall > 0) {
-    warnings.push(
-      `법정·실제 배치 기준 주차가 ${parkingShortfall}대 부족합니다. 주차 해결 전에는 대표안으로 확정할 수 없습니다.`
-    );
-  }
-  if (!selected.parkingLayout.supportedStrategy) {
-    warnings.push("선택된 주차 전략의 실제 주차면·통로 배치를 생성하지 못했습니다.");
-  }
-  if (reviewCount > 0) {
-    warnings.push(`확인 필요 또는 미확인 항목이 ${reviewCount}건 있습니다.`);
-  }
+  const stepped = isSteppedMaximumEvaluation(evaluation);
 
-  const reasons = [
-    `배치 가능 실현 용적률 ${realizedFarPct.toFixed(1)}%`,
-    ...(capPct != null
-      ? [
-          `산술 법정 용적률 ${capPct.toFixed(1)}% 대비 ${(
-            (realizedFarPct / capPct) *
-            100
-          ).toFixed(1)}% 실현`,
-        ]
-      : []),
-    `실현 건폐율 ${realizedBcrPct.toFixed(1)}%`,
-    "층별 법규 외곽선·이동·회전·층간 연결 통과",
-    `주차 ${selected.calculation.parking.providedCars}/${selected.calculation.parking.requiredCars}대`,
-  ];
-
-  const scenario: PlanningScenario = {
-    ...selected.scenario,
-    id: `${selected.scenario.id}-legal-buildable`,
+  return recommendationFromEvaluation(evaluation, {
+    slot: "max",
+    origin: "algorithm-max",
     name: "배치 가능 상한 참고안",
     description:
-      "법규 외곽선과 실제 배치·층간 연결을 통과한 후보 중 실현 용적률이 가장 높은 3D 비교안입니다. 산술 법정 용적률 상한과는 구분하며 주차는 별도 제약으로 남을 수 있습니다.",
-    origin: "algorithm-max",
-    status: "saved",
-    recommendation: enhanceMetadata(
-      {
-        engineVersion: `${result.engineVersion}-legal-geometry-v2`,
-        objective: "legal-ceiling",
-        generatedAt: result.generatedAt,
-        evaluatedCandidates: result.evaluatedCandidates,
-        eligibleCandidates: result.eligibleCandidates,
-        architectureScore: selected.architectureScore,
-        eligible: selected.eligible,
-        reasons,
-        warnings,
-      },
-      {
-        scenario: selected.scenario,
-        rejectionSummary,
-      }
-    ),
-  };
-
-  return { scenario, candidateCount: candidates.length };
+      "산술 법정 용적률 자체가 아니라 층별 법규 외곽선·실제 배치·층간 연결을 통과한 후보 중 실현 용적률이 가장 높은 비교안입니다.",
+    recommendation: rawMetadata({
+      objective: "legal-ceiling",
+      generatedAt: input.generatedAt,
+      evaluatedCandidates: input.evaluatedCandidates,
+      eligibleCandidates: input.eligibleCandidates,
+      evaluation,
+      reasons: [
+        `실현 용적률 ${evaluation.calculation.metrics.preliminaryFarPct.toFixed(1)}%`,
+        `법정 용적률의 ${evaluation.farUtilizationPct.toFixed(1)}% 사용`,
+        stepped
+          ? "층별 법규 외곽선 면적을 직접 반영한 stepped 후보"
+          : "기존 후보 중 층별 외곽선·배치·층간 연결 통과",
+        `층별 프로그램 ${floorAreas
+          .map((floor) => `${floor.level}층 ${floor.areaSqm.toFixed(1)}㎡`)
+          .join(" · ")}`,
+        parkingShortfall > 0
+          ? `주차 ${parkingShortfall}대 부족 · 대표안 확정 전 해결 필요`
+          : `주차 ${evaluation.parkingLayout.capacityCars}/${evaluation.calculation.parking.requiredCars}대`,
+      ],
+      warnings: [
+        "배치 가능한 상한 비교 기준이며 수익 또는 건축 타당성 추천안은 아닙니다.",
+        ...(parkingShortfall > 0
+          ? [
+              "건축 매스는 배치 가능하지만 법정 주차가 부족합니다. 주차 전략을 해결하기 전에는 대표안으로 확정할 수 없습니다.",
+            ]
+          : []),
+      ],
+    }),
+  });
 }
 
 export function analyzePlanningRecommendations(
-  result: PlanningRecommendationSet,
-  legalFarCapPct?: number
+  result: PlanningRecommendationSet
 ): PlanningRecommendationAnalysis {
   const rejectionSummary = summarizeRecommendationRejections(result.evaluations);
   const safe = enhancedScenario(result.architecturalFeasibility, {
     rejectionSummary,
+    evaluatedCandidates: result.evaluatedCandidates,
+    eligibleCandidates: result.eligibleCandidates,
   });
   const rawProfit = result.profitOptimal;
   const selectedProfitMode = rawProfit
@@ -357,13 +361,15 @@ export function analyzePlanningRecommendations(
     : null;
   const profit = enhancedScenario(rawProfit, {
     rejectionSummary,
+    evaluatedCandidates: result.evaluatedCandidates,
+    eligibleCandidates: result.eligibleCandidates,
     profitSelectionMode: selectedProfitMode ?? undefined,
   });
-  const legalReference = buildableLegalReference(
-    result,
+  const maximum = enhancedScenario(result.legalCeilingReference, {
     rejectionSummary,
-    legalFarCapPct
-  );
+    evaluatedCandidates: result.evaluatedCandidates,
+    eligibleCandidates: result.eligibleCandidates,
+  });
   const sharedPrimaryCandidate = Boolean(
     safe &&
       profit &&
@@ -395,6 +401,8 @@ export function analyzePlanningRecommendations(
         {
           scenario: safe,
           rejectionSummary,
+          evaluatedCandidates: result.evaluatedCandidates,
+          eligibleCandidates: result.eligibleCandidates,
           profitSelectionMode: selectedProfitMode ?? undefined,
           alsoSelectedFor: ["profit"],
         }
@@ -402,36 +410,121 @@ export function analyzePlanningRecommendations(
     };
   }
 
-  const warnings = [...result.warnings];
-  if (!legalReference.scenario) {
-    warnings.push(
-      "층별 법규 외곽선·배치·층간 연결을 통과하는 상한 비교 후보가 없어 3D 법적 상한안을 생성하지 않았습니다. 산술 법정 상한은 필지 지표에서만 확인하세요."
-    );
-  }
-
   return {
     ...result,
-    warnings,
+    engineVersion: ENGINE_VERSION,
     architecturalFeasibility: safe,
     profitOptimal: profit,
-    legalCeilingReference: legalReference.scenario,
+    legalCeilingReference: maximum,
     sharedPrimaryCandidate,
     profitMode: selectedProfitMode,
     combinedPrimary,
     rejectionSummary,
-    legalGeometryCandidateCount: legalReference.candidateCount,
-    arithmeticLegalFarCapPct:
-      legalFarCapPct != null && Number.isFinite(legalFarCapPct)
-        ? legalFarCapPct
-        : null,
   };
 }
 
 export function generatePlanningRecommendationsV2(
   input: PlanningRecommendationEngineInput
 ): PlanningRecommendationAnalysis {
-  return analyzePlanningRecommendations(
-    generatePlanningRecommendations(input),
-    input.parcel.maxFARPct
-  );
+  const raw = generatePlanningRecommendations(input);
+  const steppedEvaluations = generateSteppedMaximumEvaluations(input);
+  const evaluations = [...raw.evaluations, ...steppedEvaluations];
+  const eligible = evaluations.filter((candidate) => candidate.eligible);
+  const safeEvaluation = [...eligible].sort(
+    (a, b) =>
+      b.architectureScore - a.architectureScore ||
+      b.calculation.economicsPreview.profitManwon -
+        a.calculation.economicsPreview.profitManwon
+  )[0];
+  const profitEvaluation = [...eligible].sort(
+    (a, b) =>
+      b.calculation.economicsPreview.profitManwon -
+        a.calculation.economicsPreview.profitManwon ||
+      b.calculation.economicsPreview.profitMarginPct -
+        a.calculation.economicsPreview.profitMarginPct ||
+      b.architectureScore - a.architectureScore
+  )[0];
+  const maximumEvaluation = selectMaximumReferenceEvaluation(evaluations);
+  const evaluatedCandidates = evaluations.length;
+  const eligibleCandidates = eligible.length;
+  const generatedAt = raw.generatedAt;
+
+  const architecturalFeasibility = safeEvaluation
+    ? recommendationFromEvaluation(safeEvaluation, {
+        slot: "safe",
+        origin: "algorithm-safe",
+        name: "건축 타당성안",
+        description:
+          "법규 외곽선·배치·층간 연결·실제 주차 배치를 통과한 후보 중 건축 여유와 단순성이 가장 높은 안입니다.",
+        recommendation: rawMetadata({
+          objective: "architectural-feasibility",
+          generatedAt,
+          evaluatedCandidates,
+          eligibleCandidates,
+          evaluation: safeEvaluation,
+          reasons: [
+            `건축 타당성 ${safeEvaluation.architectureScore.toFixed(1)}점`,
+            `법규·배치 필수 미충족 ${safeEvaluation.failCount}건`,
+            `주차 ${safeEvaluation.parkingLayout.capacityCars}/${safeEvaluation.calculation.parking.requiredCars}대`,
+            `법정 용적률의 ${safeEvaluation.farUtilizationPct.toFixed(1)}% 사용`,
+          ],
+        }),
+      })
+    : null;
+  const profitOptimal = profitEvaluation
+    ? recommendationFromEvaluation(profitEvaluation, {
+        slot: "profit",
+        origin: "algorithm-balanced",
+        name: "수익 최적안",
+        description:
+          "법규 외곽선과 실제 주차 배치를 통과한 후보만 대상으로 Stage 2 개략 이익이 가장 높은 안을 선택했습니다.",
+        recommendation: rawMetadata({
+          objective: "profit",
+          generatedAt,
+          evaluatedCandidates,
+          eligibleCandidates,
+          evaluation: profitEvaluation,
+          reasons: [
+            `실행 가능 후보 ${eligibleCandidates}개 중 개략 이익 최대`,
+            `개략 이익 ${round(
+              profitEvaluation.calculation.economicsPreview.profitManwon,
+              0
+            ).toLocaleString()}만원`,
+            `이익률 ${profitEvaluation.calculation.economicsPreview.profitMarginPct.toFixed(1)}%`,
+            `건축 타당성 ${profitEvaluation.architectureScore.toFixed(1)}점`,
+          ],
+        }),
+      })
+    : null;
+  const legalCeilingReference = maximumEvaluation
+    ? maximumReferenceScenario({
+        evaluation: maximumEvaluation,
+        generatedAt,
+        evaluatedCandidates,
+        eligibleCandidates,
+      })
+    : null;
+  const warnings = [...raw.warnings];
+  if (steppedEvaluations.length === 0) {
+    warnings.push(
+      "층별 법규 외곽선 기반 상한 후보를 생성하지 못했습니다. 대지 경계·도로·이격 데이터를 확인하세요."
+    );
+  }
+  if (!maximumEvaluation) {
+    warnings.push(
+      "층별 법규 외곽선·배치·층간 연결을 통과하는 상한 참고 후보가 없습니다. 산술 법정 상한만 지표로 확인하세요."
+    );
+  }
+
+  return analyzePlanningRecommendations({
+    ...raw,
+    engineVersion: ENGINE_VERSION,
+    evaluatedCandidates,
+    eligibleCandidates,
+    architecturalFeasibility,
+    profitOptimal,
+    legalCeilingReference,
+    warnings,
+    evaluations,
+  });
 }
