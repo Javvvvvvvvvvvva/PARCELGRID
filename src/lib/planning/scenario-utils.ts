@@ -152,6 +152,7 @@ export function clonePlanningScenario(
           : "stale",
       calculatedAt: undefined,
     },
+    recommendation: undefined,
   };
 }
 
