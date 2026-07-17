@@ -38,7 +38,7 @@ export interface LocalCadastralParcel {
   polygon: LocalPlanPoint[];
   /** 하위 호환용 데이터셋 표기. 실제 경계 역할은 boundarySource가 기준이다. */
   source: "VWorld LP_PA_CBND_BUBUN";
-  boundarySource: RoadBoundarySource;
+  boundarySource?: RoadBoundarySource;
 }
 
 export interface CadastralRoadWidthSample {
