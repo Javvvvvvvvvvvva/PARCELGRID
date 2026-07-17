@@ -9,7 +9,10 @@ import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
-import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import {
+  analyzeFrontage,
+  legalEdgeSetbacksFromFrontage,
+} from "@/lib/geo/road-frontage";
 import {
   buildPlanningMassModel,
   polygonAreaSqm,
@@ -377,13 +380,8 @@ function createPlanningMassData(
         ) / groundFloors.length
       : 3;
   const frontage =
-    roads && roads.length > 0 && setback
-      ? analyzeFrontage(boundary, roads)
-      : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
-  );
+    roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
 
   const buildable = calcBuildableArea(
     boundary,

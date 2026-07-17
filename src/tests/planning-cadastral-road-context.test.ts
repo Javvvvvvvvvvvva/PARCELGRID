@@ -134,6 +134,9 @@ describe("Cadastral road context", () => {
     expect(snapshot.summary.primaryWidthMaxM).toBeCloseTo(6, 2);
     expect(snapshot.frontages[0].boundaryGapM).toBeCloseTo(0, 2);
     expect(snapshot.frontages[0].widthSamples.length).toBe(5);
+    expect(snapshot.summary.primaryPlannedWidthAvgM).toBeNull();
+    expect(snapshot.summary.roadIntrusionCount).toBe(0);
+    expect(snapshot.summary.primaryMassRoadClearanceM).toBeGreaterThan(0);
     expect(snapshot.validation.status).toBe("pass");
   });
 

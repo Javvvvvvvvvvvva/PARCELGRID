@@ -1,5 +1,8 @@
 import { calcBuildableArea, type LngLat } from "@/lib/finance/buildable-area";
-import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import {
+  analyzeFrontage,
+  legalEdgeSetbacksFromFrontage,
+} from "@/lib/geo/road-frontage";
 import {
   buildPlanningMassModel,
   polygonAreaSqm,
@@ -10,7 +13,7 @@ import {
 } from "@/lib/planning/planning-massing";
 import type { PlanningScenario } from "@/lib/planning/types";
 
-export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v1" as const;
+export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v2" as const;
 export const GEOMETRY_AREA_PASS_TOLERANCE_PCT = 0.1;
 export const GEOMETRY_AREA_REVIEW_TOLERANCE_PCT = 0.5;
 
@@ -376,13 +379,12 @@ export function buildPlanningGeometry(
         ) / groundFloors.length
       : 3;
   const frontage =
-    input.roads && input.roads.length > 0 && input.setback
+    input.roads && input.roads.length > 0
       ? analyzeFrontage(boundary, input.roads)
       : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    input.setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
-  );
+  // 법적 최대 외곽선과 사용자의 설계 여유거리를 분리한다. parcel.setback은
+  // 배치 대안용 값이며 법규 외곽선을 임의로 3/1.5/3m 축소하지 않는다.
+  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
 
   const buildable = calcBuildableArea(
     boundary,
@@ -544,7 +546,8 @@ export function buildPlanningGeometry(
     validation,
     sourceNotes: [
       "대지 경계와 도로 중심선은 VWorld WGS84 좌표를 로컬 미터 좌표로 변환합니다.",
-      "계획 매스 외곽선은 층별 프로그램 면적, 법규 외곽선, 배치·회전·후퇴값으로 생성합니다.",
+      "정북일조는 원본 북측 필지 경계를 진남으로 평행 이동한 절대 기준선으로 계산해 측·후면 이격과 중복 적용하지 않습니다.",
+      "법적 최대 외곽선은 도로측 추가 0m, 인접대지측 0.5m 검토 기본값을 사용하며 사용자 설계 여유거리와 분리합니다.",
       "대표안과 SketchUp export는 프로그램 면적과 실제 매스 면적이 허용오차 안에 있을 때만 가능합니다.",
     ],
   };

@@ -196,7 +196,8 @@ export default function NewParcelPage() {
       heightLimit: parcel.heightLimit,
       landPrice: parcel.landPrice,
       landPriceYear: parcel.landPriceYear,
-      setback: { road: 3, side: 1.5, rear: 3 }, // 기본 이격거리 (시행 실무 기준)
+      // 법적 최대 외곽선과 분리된 사용자 설계 여유거리. 새 프로젝트는 추가 여유 0m.
+      setback: { road: 0, side: 0, rear: 0 },
       estMarketPrice: estimate
         ? Math.round((estimate.estimatedPriceManwon * 10_000) / parcel.lotArea)
         : parcel.landPrice * 2,

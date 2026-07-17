@@ -11,6 +11,7 @@ import {
   type CadastralContextSnapshot,
   type CadastralParcelFeature,
   type LocalCadastralParcel,
+  type RoadClearanceAssessment,
 } from "@/lib/geo/cadastral-context";
 import {
   buildContextParcelAlignment,
@@ -41,6 +42,13 @@ interface ApiResponse {
       | "centerline-reference-only";
     upisDataCode: string;
   };
+  upisRoadSummaries?: Array<{
+    presentSn: string;
+    label: string;
+    grade: string;
+    roadType: string;
+    roadNo: string;
+  }>;
   error?: string;
 }
 
@@ -258,6 +266,48 @@ function PolygonLine({
   return <Line points={positions} color={color} transparent opacity={opacity} lineWidth={1} />;
 }
 
+function RoadClearanceMarker({
+  assessment,
+}: {
+  assessment: RoadClearanceAssessment;
+}) {
+  const from = assessment.buildingPoint;
+  const to = assessment.roadPoint;
+  if (!from || !to) return null;
+  const color = assessment.intrudes ? "#dc2626" : "#16a34a";
+  const midpoint: [number, number, number] = [
+    (from.x + to.x) / 2,
+    0.22,
+    (from.z + to.z) / 2,
+  ];
+  return (
+    <group>
+      {!assessment.intrudes && assessment.minimumClearanceM > 0.01 && (
+        <Line
+          points={[
+            [from.x, 0.18, from.z],
+            [to.x, 0.18, to.z],
+          ]}
+          color={color}
+          lineWidth={2.4}
+        />
+      )}
+      <Text
+        position={midpoint}
+        rotation={[-Math.PI / 2, 0, 0]}
+        fontSize={0.7}
+        color={color}
+        anchorX="center"
+        anchorY="bottom"
+      >
+        {assessment.intrudes
+          ? `도로 저촉 ${assessment.intrusionAreaSqm.toFixed(2)}㎡`
+          : `도로 경계 ${assessment.minimumClearanceM.toFixed(2)}m`}
+      </Text>
+    </group>
+  );
+}
+
 function SiteScene({
   planning,
   context,
@@ -267,6 +317,7 @@ function SiteScene({
   showParcels,
   showRoads,
   showSamples,
+  roadClearance,
   extent,
 }: {
   planning: ReturnType<typeof buildPlanningGeometry>["snapshot"];
@@ -277,6 +328,7 @@ function SiteScene({
   showParcels: boolean;
   showRoads: boolean;
   showSamples: boolean;
+  roadClearance: RoadClearanceAssessment | null;
   extent: number;
 }) {
   const frontageIds = new Set(cadastral.frontages.map((frontage) => frontage.roadParcelPnu));
@@ -365,6 +417,10 @@ function SiteScene({
         <ProposedMass key={floor.id} floor={floor} />
       ))}
 
+      {showRoads && roadClearance && (
+        <RoadClearanceMarker assessment={roadClearance} />
+      )}
+
       <Text
         position={[0, 0.1, -extent * 0.9]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -420,6 +476,9 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   );
   const [sourceParcels, setSourceParcels] = useState<CadastralParcelFeature[]>([]);
   const [sourceSummary, setSourceSummary] = useState<ApiResponse["sourceSummary"]>(undefined);
+  const [upisRoadSummaries, setUpisRoadSummaries] = useState<
+    NonNullable<ApiResponse["upisRoadSummaries"]>
+  >([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showBuildings, setShowBuildings] = useState(true);
@@ -442,6 +501,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!parcel || !targetPnu || !Number.isFinite(parcel.lat) || !Number.isFinite(parcel.lng)) {
       setSourceParcels([]);
+      setSourceSummary(undefined);
+      setUpisRoadSummaries([]);
       setLoadState("idle");
       return;
     }
@@ -469,12 +530,14 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       .then((payload) => {
         setSourceParcels(payload.parcels ?? []);
         setSourceSummary(payload.sourceSummary);
+        setUpisRoadSummaries(payload.upisRoadSummaries ?? []);
         setLoadState("ready");
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
         setSourceParcels([]);
         setSourceSummary(undefined);
+        setUpisRoadSummaries([]);
         setLoadState("error");
         setLoadError(error instanceof Error ? error.message : "도로 경계 조회 실패");
       });
@@ -532,6 +595,17 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const alignmentSummary = snapshots.alignment.summary;
   const plannedRoadReference =
     sourceSummary?.activeRoadBoundarySource === "upis-road-boundary";
+  const primaryRoadClearance =
+    (primary
+      ? snapshots.cadastral.roadClearances.find(
+          (clearance) => clearance.roadParcelPnu === primary.roadParcelPnu
+        )
+      : null) ?? snapshots.cadastral.roadClearances[0] ?? null;
+  const primaryUpisSummary = primary
+    ? upisRoadSummaries.find((summary) =>
+        primary.roadParcelPnu.includes(summary.presentSn)
+      ) ?? upisRoadSummaries[0] ?? null
+    : upisRoadSummaries[0] ?? null;
 
   return (
     <Panel
@@ -604,6 +678,20 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           샘플을 확정하지 않습니다.
         </Notice>
       )}
+      <RoadBuildingLineCard
+        plannedRoadReference={plannedRoadReference}
+        roadLabel={primaryUpisSummary?.label || primary?.roadParcelJibun || null}
+        roadNo={primaryUpisSummary?.roadNo || null}
+        frontageLengthM={primary?.frontageLengthM ?? null}
+        boundaryGapM={primary?.boundaryGapM ?? null}
+        verifiedWidthMinM={primary?.widthMinM ?? null}
+        verifiedWidthAvgM={primary?.widthAvgM ?? null}
+        verifiedWidthMaxM={primary?.widthMaxM ?? null}
+        plannedWidthMinM={primary?.plannedWidthMinM ?? null}
+        plannedWidthAvgM={primary?.plannedWidthAvgM ?? null}
+        plannedWidthMaxM={primary?.plannedWidthMaxM ?? null}
+        clearance={primaryRoadClearance}
+      />
       {alignmentSummary.mismatchBuildings > 0 && (
         <Notice tone="fail">
           주변 건물 {alignmentSummary.mismatchBuildings}동이 대상·인접 필지 경계 안에 60%
@@ -649,6 +737,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               showParcels={showParcels}
               showRoads={showRoads}
               showSamples={showSamples}
+              roadClearance={primaryRoadClearance}
               extent={snapshots.extent}
             />
           </Suspense>
@@ -671,6 +760,131 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         성과도를 대체하지 않습니다.
       </p>
     </Panel>
+  );
+}
+
+function plannedRoadRange(label: string | null): string | null {
+  if (!label) return null;
+  const ranges: Record<string, string> = {
+    소로1류: "10m 이상 12m 미만",
+    소로2류: "8m 이상 10m 미만",
+    소로3류: "8m 미만",
+    중로1류: "20m 이상 25m 미만",
+    중로2류: "15m 이상 20m 미만",
+    중로3류: "12m 이상 15m 미만",
+  };
+  return ranges[label] ?? null;
+}
+
+function RoadBuildingLineCard({
+  plannedRoadReference,
+  roadLabel,
+  roadNo,
+  frontageLengthM,
+  boundaryGapM,
+  verifiedWidthMinM,
+  verifiedWidthAvgM,
+  verifiedWidthMaxM,
+  plannedWidthMinM,
+  plannedWidthAvgM,
+  plannedWidthMaxM,
+  clearance,
+}: {
+  plannedRoadReference: boolean;
+  roadLabel: string | null;
+  roadNo: string | null;
+  frontageLengthM: number | null;
+  boundaryGapM: number | null;
+  verifiedWidthMinM: number | null;
+  verifiedWidthAvgM: number | null;
+  verifiedWidthMaxM: number | null;
+  plannedWidthMinM: number | null;
+  plannedWidthAvgM: number | null;
+  plannedWidthMaxM: number | null;
+  clearance: RoadClearanceAssessment | null;
+}) {
+  const range = plannedRoadRange(roadLabel);
+  const cells = [
+    {
+      label: "도로 출처",
+      value: plannedRoadReference ? "UPIS 계획도로" : "연속지적 도로",
+      detail: roadLabel
+        ? `${roadLabel}${range ? ` · ${range}` : ""}${roadNo ? ` · ${roadNo}호` : ""}`
+        : "등급 확인 필요",
+    },
+    {
+      label: plannedRoadReference ? "계획폭 추정" : "지적 도로폭",
+      value:
+        (plannedRoadReference ? plannedWidthAvgM : verifiedWidthAvgM) != null
+          ? `${num(
+              (plannedRoadReference ? plannedWidthAvgM : verifiedWidthAvgM) as number,
+              2
+            )}m`
+          : "산정 불가",
+      detail:
+        (plannedRoadReference ? plannedWidthMinM : verifiedWidthMinM) != null &&
+        (plannedRoadReference ? plannedWidthMaxM : verifiedWidthMaxM) != null
+          ? `${num(
+              (plannedRoadReference ? plannedWidthMinM : verifiedWidthMinM) as number,
+              2
+            )}~${num(
+              (plannedRoadReference ? plannedWidthMaxM : verifiedWidthMaxM) as number,
+              2
+            )}m · ${plannedRoadReference ? "법정 현황폭 아님" : "지적 경계 단면"}`
+          : "도로대장 확인 필요",
+    },
+    {
+      label: "필지–도로 경계",
+      value: boundaryGapM != null ? `${num(boundaryGapM, 2)}m` : "미확인",
+      detail:
+        frontageLengthM != null
+          ? `접도 후보 길이 ${num(frontageLengthM, 2)}m`
+          : "접도 후보 없음",
+    },
+    {
+      label: "매스–도로 경계",
+      value: clearance
+        ? clearance.intrudes
+          ? `${num(clearance.intrusionAreaSqm, 2)}㎡ 저촉`
+          : `${num(clearance.minimumClearanceM, 2)}m`
+        : "미확인",
+      detail: clearance?.intrudes
+        ? "배치 수정 및 건축선 확인 필요"
+        : "도형상 침범 없음 · 법적 건축선은 미확정",
+      tone: clearance?.intrudes ? "fail" : "pass",
+    },
+  ];
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        gap: 8,
+        marginBottom: 10,
+      }}
+    >
+      {cells.map((cell) => (
+        <div
+          key={cell.label}
+          style={{
+            border: `1px solid ${
+              cell.tone === "fail" ? "var(--neg-fg)" : "var(--border)"
+            }`,
+            borderRadius: 9,
+            padding: "9px 10px",
+            background:
+              cell.tone === "fail" ? "var(--neg-soft)" : "var(--bg-elev)",
+          }}
+        >
+          <div style={{ fontSize: 9.5, color: "var(--fg-muted)" }}>{cell.label}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>{cell.value}</div>
+          <div style={{ fontSize: 9.5, color: "var(--fg-subtle)", marginTop: 3 }}>
+            {cell.detail}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

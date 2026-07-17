@@ -102,11 +102,80 @@ function countNorthEdges(ringM: LngLat[]): number {
   return count;
 }
 
-/**
- * 정북일조 반평면 clip — 북단에서 이격거리만큼 남쪽 한계선 아래만 남김.
- * 진북 = +y. 한계선 y = maxY − setback. Sutherland-Hodgman.
- * 어떤 형상(직사각·L자·마름모)이든 정확.
- */
+interface NorthBoundaryEdge {
+  a: LngLat;
+  b: LngLat;
+  /** 원본 경계에서 대지 안쪽을 향하는 단위 법선 */
+  inwardNormal: LngLat;
+}
+
+function ringCenter(ringM: LngLat[]): LngLat {
+  return [
+    ringM.reduce((sum, point) => sum + point[0], 0) / ringM.length,
+    ringM.reduce((sum, point) => sum + point[1], 0) / ringM.length,
+  ];
+}
+
+/** 원본 필지에서 바깥쪽 법선이 진북(+Y)을 향하는 경계만 선택한다. */
+function northBoundaryEdges(ringM: LngLat[]): NorthBoundaryEdge[] {
+  if (ringM.length < 3) return [];
+  const [cx, cy] = ringCenter(ringM);
+  const edges: NorthBoundaryEdge[] = [];
+  for (let index = 0; index < ringM.length; index += 1) {
+    const a = ringM[index];
+    const b = ringM[(index + 1) % ringM.length];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-9) continue;
+
+    let inwardX = -dy / length;
+    let inwardY = dx / length;
+    if ((cx - a[0]) * inwardX + (cy - a[1]) * inwardY < 0) {
+      inwardX = -inwardX;
+      inwardY = -inwardY;
+    }
+    const outwardNorthComponent = -inwardY;
+    if (outwardNorthComponent > 0.001) {
+      edges.push({ a, b, inwardNormal: [inwardX, inwardY] });
+    }
+  }
+  return edges;
+}
+
+function clipToHalfPlane(
+  ringM: LngLat[],
+  linePoint: LngLat,
+  inwardNormal: LngLat
+): LngLat[] {
+  if (ringM.length < 3) return [];
+  const signedDistance = (point: LngLat) =>
+    (point[0] - linePoint[0]) * inwardNormal[0] +
+    (point[1] - linePoint[1]) * inwardNormal[1];
+  const out: LngLat[] = [];
+  for (let index = 0; index < ringM.length; index += 1) {
+    const current = ringM[index];
+    const previous = ringM[(index - 1 + ringM.length) % ringM.length];
+    const currentDistance = signedDistance(current);
+    const previousDistance = signedDistance(previous);
+    const currentInside = currentDistance >= -1e-9;
+    const previousInside = previousDistance >= -1e-9;
+
+    if (currentInside !== previousInside) {
+      const denominator = previousDistance - currentDistance;
+      if (Math.abs(denominator) > 1e-12) {
+        const t = previousDistance / denominator;
+        out.push([
+          previous[0] + (current[0] - previous[0]) * t,
+          previous[1] + (current[1] - previous[1]) * t,
+        ]);
+      }
+    }
+    if (currentInside) out.push(current);
+  }
+  return out;
+}
+
 /**
  * 임의 변의 내부 half-plane 클립 — 변 (a→b)에서 내부로 setbackM만큼 후퇴.
  * 변별 차등 이격용 (전면/측면/후면). 내부 방향은 링 중심으로 자동 판별 (CW/CCW 무관).
@@ -155,24 +224,26 @@ function clipEdgeSetback(
   return out;
 }
 
-function clipNorthSunlight(ringM: LngLat[], setbackM: number): LngLat[] {
-  if (setbackM <= 0) return ringM;
-  const maxY = Math.max(...ringM.map((p) => p[1]));
-  const limitY = maxY - setbackM;
-  const out: LngLat[] = [];
-  const n = ringM.length;
-  for (let i = 0; i < n; i++) {
-    const cur = ringM[i];
-    const next = ringM[(i + 1) % n];
-    const curIn = cur[1] <= limitY;
-    const nextIn = next[1] <= limitY;
-    if (curIn) out.push(cur);
-    if (curIn !== nextIn) {
-      const t = (limitY - cur[1]) / (next[1] - cur[1]);
-      out.push([cur[0] + t * (next[0] - cur[0]), limitY]);
-    }
+/**
+ * 정북일조 반평면 clip.
+ * 원본 필지의 북측 경계들을 진남(-Y)으로 평행 이동하고, 이미 측·후면 이격된
+ * subject를 그 절대 기준선으로 자른다. 사선 각도를 보존하고 이격 중복을 막는다.
+ */
+function clipNorthSunlight(
+  subjectRingM: LngLat[],
+  originalParcelRingM: LngLat[],
+  setbackM: number
+): LngLat[] {
+  if (setbackM <= 0) return subjectRingM;
+  let clipped = subjectRingM;
+  for (const edge of northBoundaryEdges(originalParcelRingM)) {
+    // 정북 이격은 원본 북측 경계를 진남(-Y)으로 평행 이동한 절대 기준선이다.
+    // 이미 적용된 측·후면 이격선에서 다시 더하지 않으므로 중복 이격이 없다.
+    const shiftedLinePoint: LngLat = [edge.a[0], edge.a[1] - setbackM];
+    clipped = clipToHalfPlane(clipped, shiftedLinePoint, edge.inwardNormal);
+    if (clipped.length < 3) return [];
   }
-  return out;
+  return clipped;
 }
 
 /**
@@ -222,6 +293,7 @@ export function calcBuildableArea(
   const parcelPoly = turf.polygon([ring]);
   const lotAreaSqm = turf.area(parcelPoly);
   const origin = ring[0];
+  const parcelRingM = toMeters(ring.slice(0, -1), origin);
 
   // 1) 이격 — 변별 차등(edgeSetbacksM) 우선, 없으면 균일 buffer (하위 호환)
   let sideRing: LngLat[];
@@ -285,12 +357,16 @@ export function calcBuildableArea(
   }
 
   const sideRingM = toMeters(sideRing, origin);
-  const northEdgeCount = countNorthEdges(sideRingM);
+  const northEdgeCount = countNorthEdges(parcelRingM);
 
   // 2) 정북일조 방향성 clip (2D 보수적 — 최고높이 기준)
   let buildableRingM = sideRingM;
   if (sunApplies && requiredSetbackMaxHeight > 0) {
-    buildableRingM = clipNorthSunlight(sideRingM, requiredSetbackMaxHeight);
+    buildableRingM = clipNorthSunlight(
+      sideRingM,
+      parcelRingM,
+      requiredSetbackMaxHeight
+    );
     if (buildableRingM.length < 3) {
       warnings.push(
         `정북일조 ${requiredSetbackMaxHeight.toFixed(1)}m 이격 시 건축가능영역 소멸`
@@ -313,7 +389,9 @@ export function calcBuildableArea(
     const h = f * floorHeightM + 1.4;
     const setback = sunApplies ? sunSetbackM(h) : 0;
     const plateRingM =
-      setback > 0 ? clipNorthSunlight(sideRingM, setback) : sideRingM;
+      setback > 0
+        ? clipNorthSunlight(sideRingM, parcelRingM, setback)
+        : sideRingM;
     stepped3D.push({
       floor: f,
       heightM: Number(h.toFixed(1)),
