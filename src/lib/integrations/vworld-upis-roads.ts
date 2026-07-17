@@ -170,6 +170,7 @@ export function parseUpisRoadFeatures(input: {
         lotAreaSqm: Math.round(measuredArea * 100) / 100,
         boundary: ring,
         distanceM: Math.round(distance * 10) / 10,
+        boundarySource: "upis-planned-road",
       });
       acceptedParts += 1;
     });
