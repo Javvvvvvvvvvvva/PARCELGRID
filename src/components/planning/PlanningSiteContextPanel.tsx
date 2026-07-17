@@ -525,6 +525,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         ? "VWorld 도시계획 도로 경계"
         : "도로 중심선 참고";
   const alignmentSummary = snapshots.alignment.summary;
+  const plannedRoadReference =
+    sourceSummary?.activeRoadBoundarySource === "upis-road-boundary";
 
   return (
     <Panel
@@ -576,9 +578,13 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           <Toggle active={showRoads} onClick={() => setShowRoads((value) => !value)}>
             도로 경계
           </Toggle>
-          <Toggle active={showSamples} onClick={() => setShowSamples((value) => !value)}>
-            폭 샘플
-          </Toggle>
+          {!plannedRoadReference ? (
+            <Toggle active={showSamples} onClick={() => setShowSamples((value) => !value)}>
+              폭 샘플
+            </Toggle>
+          ) : (
+            <span className="ui-tag">폭 샘플 미사용</span>
+          )}
         </div>
       </div>
 
@@ -586,6 +592,13 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>VWorld 지적·UPIS 도로 경계를 불러오고 있습니다.</Notice>
       )}
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
+      {plannedRoadReference && (
+        <Notice>
+          현재 회색 도로는 연속지적도 도로 필지가 아니라 UPIS 도시계획시설 도로 참고
+          경계입니다. 인접 필지와 각도·위치가 다를 수 있어 지적상 도로 폭과 접도 폭
+          샘플을 확정하지 않습니다.
+        </Notice>
+      )}
       {alignmentSummary.mismatchBuildings > 0 && (
         <Notice tone="fail">
           주변 건물 {alignmentSummary.mismatchBuildings}동이 대상·인접 필지 경계 안에 60%
@@ -647,8 +660,9 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       >
         갈색선은 인접 지적 경계이며 별도로 회전하지 않습니다. 주변 건물과 지적선은 같은
         로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치입니다.
-        짙은 회색 면은 VWorld 도시계획 도로 또는 연속지적 도로 경계이고, 파란색은 선택된
-        접도선, 주황색 가는 선은 수직 폭 샘플입니다. 모든 GIS 검사는 개략설계용이며 측량
+        짙은 회색 면은 연속지적 도로 필지 또는 별도 표기된 UPIS 계획도로 참고
+        경계입니다. 파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
+        경계와 충분히 평행할 때만 표시합니다. 모든 GIS 검사는 개략설계용이며 측량
         성과도를 대체하지 않습니다.
       </p>
     </Panel>
