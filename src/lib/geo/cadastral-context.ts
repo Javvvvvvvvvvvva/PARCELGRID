@@ -470,6 +470,15 @@ export function buildCadastralContext(input: {
       severity: "review",
       message: "조회 범위에서 지목이 도로인 필지를 찾지 못했습니다. 도로 중심선만 참고 레이어로 사용합니다.",
     });
+  } else if (
+    roadParcels.every((parcel) => parcel.source === "upis-planned-road")
+  ) {
+    issues.push({
+      code: "upis-planned-road-reference-only",
+      severity: "review",
+      message:
+        "연속지적도에서 도로 필지를 찾지 못해 UPIS 도시계획 도로를 참고로 표시합니다. 현재 지적상 도로 폭으로 확정하지 않으며 폭 샘플을 생성하지 않습니다.",
+    });
   } else if (!frontages.some((frontage) => frontage.status === "verified-cadastral-width")) {
     issues.push({
       code: "cadastral-road-width-review",
@@ -534,8 +543,9 @@ export function buildCadastralContext(input: {
       issues,
     },
     sourceNotes: [
-      "대상·인접·도로 필지 경계는 VWorld 연속지적도 LP_PA_CBND_BUBUN을 동일한 로컬 미터 좌표로 변환합니다.",
-      "지적상 도로 폭은 대상 필지 접도 경계에서 지목이 도로인 필지의 반대편 경계까지 수직 샘플로 계산합니다.",
+      "대상·인접 필지와 지적상 도로는 VWorld 연속지적도 LP_PA_CBND_BUBUN을 동일한 로컬 미터 좌표로 변환합니다.",
+      "UPIS LT_C_UPISUQ151은 도시계획시설 도로 참고 경계로만 분리 표시하며 지적상 도로 폭 산정에는 사용하지 않습니다.",
+      "지적상 도로 폭은 연속지적도 도로 필지와 대상 필지 접도 경계가 10도 이내로 평행할 때만 수직 샘플로 계산합니다.",
       "지적상 도로 폭은 현황 포장·차도·보도 폭과 다를 수 있으며 경계측량을 대체하지 않습니다.",
       "VWorld 도로 중심선은 도로명과 방향 확인용 참고 레이어이며 실제 도로 경계로 사용하지 않습니다.",
     ],
