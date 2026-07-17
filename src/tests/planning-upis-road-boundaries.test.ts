@@ -109,10 +109,17 @@ describe("VWorld UPIS road boundaries", () => {
       parcels: parsed.parcels,
     });
     expect(snapshot.summary.roadParcelCount).toBe(1);
-    expect(snapshot.summary.verifiedWidthFrontageCount).toBe(1);
-    expect(snapshot.summary.primaryWidthMinM).toBeCloseTo(6, 1);
-    expect(snapshot.summary.primaryWidthAvgM).toBeCloseTo(6, 1);
-    expect(snapshot.summary.primaryWidthMaxM).toBeCloseTo(6, 1);
+    expect(snapshot.summary.verifiedWidthFrontageCount).toBe(0);
+    expect(snapshot.summary.primaryWidthMinM).toBeNull();
+    expect(snapshot.summary.primaryWidthAvgM).toBeNull();
+    expect(snapshot.summary.primaryWidthMaxM).toBeNull();
+    expect(snapshot.frontages[0]?.status).toBe("planned-road-reference");
+    expect(snapshot.frontages[0]?.widthSamples).toHaveLength(0);
+    expect(snapshot.validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "upis-planned-road-reference-only" }),
+      ])
+    );
   });
 
   it("supports uppercase SHP-style property names and MultiPolygon parts", () => {
