@@ -1,57 +1,76 @@
 /**
- * 대지 방위 분석 — 폴리곤 좌표로 정북 방향과 각 변의 방위를 계산.
+ * 대지·도로·카메라 방위 분석.
  *
- * 건축사 설계 전 정보: 어느 변이 북측인가(일조 사선제한 적용 대상),
- * 각 변이 어느 방위를 향하는가. 추가 데이터 없이 좌표만으로 100% 계산.
- *
- * 정북 = 위도 증가 방향(+y). 일조권 정북 사선제한은 북측 인접대지
- * 경계선 기준이므로, 북측 변 식별이 핵심.
+ * 지리 좌표 투영에서는 +Y가 북쪽이며, Three.js 현황 매스에서는
+ * +X가 동쪽, -Z가 북쪽이다. 이 파일에서 두 좌표 표현을 같은
+ * 방위각 체계(정북 0°, 동 90°, 시계방향)로 통일한다.
  */
 
 import { projectPolygon } from "./project-polygon";
+import type { LocalPoint } from "./select-primary-road";
 
 export type Direction = "북" | "북동" | "동" | "남동" | "남" | "남서" | "서" | "북서";
 
 export interface EdgeInfo {
-  /** 변 인덱스 (0부터) */
   index: number;
-  /** 변 길이 (m) */
   lengthM: number;
-  /** 바깥쪽이 향하는 방위각 (북=0, 동=90, 시계방향) */
   bearingDeg: number;
-  /** 방위 이름 */
   direction: Direction;
-  /** 북측 변 여부 (일조 사선제한 적용 대상) */
   isNorth: boolean;
 }
 
 export interface OrientationInfo {
   edges: EdgeInfo[];
-  /** 가장 북쪽 변의 인덱스 */
   northEdgeIndex: number;
-  /** 대지가 도로에 접한 것으로 추정되는 가장 긴 변 (참고용) */
   longestEdgeIndex: number;
 }
 
 const DIR_NAMES: Direction[] = ["북", "북동", "동", "남동", "남", "남서", "서", "북서"];
+const CARDINAL_16 = [
+  "북",
+  "북북동",
+  "북동",
+  "동북동",
+  "동",
+  "동남동",
+  "남동",
+  "남남동",
+  "남",
+  "남남서",
+  "남서",
+  "서남서",
+  "서",
+  "서북서",
+  "북서",
+  "북북서",
+] as const;
+const CARDINAL_8_SIDE = [
+  "북측",
+  "북동측",
+  "동측",
+  "남동측",
+  "남측",
+  "남서측",
+  "서측",
+  "북서측",
+] as const;
+
+export function normalizeBearing(degrees: number): number {
+  return ((degrees % 360) + 360) % 360;
+}
 
 function bearing(dx: number, dy: number): number {
-  // +y가 북. 방위각 = atan2(동, 북)
-  const deg = (Math.atan2(dx, dy) * 180) / Math.PI;
-  return (deg + 360) % 360;
+  return normalizeBearing((Math.atan2(dx, dy) * 180) / Math.PI);
 }
 
 function directionName(deg: number): Direction {
-  return DIR_NAMES[Math.round(deg / 45) % 8];
+  return DIR_NAMES[Math.round(normalizeBearing(deg) / 45) % 8];
 }
 
 /**
  * 폴리곤 경계 [lng,lat][] → 방위 분석.
- * @returns null이면 분석 불가 (좌표 부족)
  */
-export function analyzeOrientation(
-  boundary: [number, number][]
-): OrientationInfo | null {
+export function analyzeOrientation(boundary: [number, number][]): OrientationInfo | null {
   if (!boundary || boundary.length < 4) return null;
 
   const projected = projectPolygon(boundary);
@@ -64,13 +83,12 @@ export function analyzeOrientation(
   let longestEdgeIndex = 0;
   let maxLen = 0;
 
-  for (let i = 0; i < pts.length - 1; i++) {
+  for (let i = 0; i < pts.length - 1; i += 1) {
     const [x1, y1] = pts[i];
     const [x2, y2] = pts[i + 1];
     const lengthM = Math.hypot(x2 - x1, y2 - y1);
     const midX = (x1 + x2) / 2;
     const midY = (y1 + y2) / 2;
-    // 변의 바깥쪽 방위 = 대지중심(원점)에서 변 중점으로의 방향
     const bearingDeg = bearing(midX, midY);
 
     edges.push({
@@ -92,6 +110,44 @@ export function analyzeOrientation(
   }
 
   if (edges[northEdgeIndex]) edges[northEdgeIndex].isNorth = true;
-
   return { edges, northEdgeIndex, longestEdgeIndex };
+}
+
+/**
+ * Three.js 현황 매스 좌표계: +X=동, -Z=북.
+ * 정북 기준 시계방향 방위각을 반환한다.
+ */
+export function bearingFromSceneVector(dx: number, dz: number): number {
+  if (Math.hypot(dx, dz) <= 1e-9) return 0;
+  return normalizeBearing((Math.atan2(dx, -dz) * 180) / Math.PI);
+}
+
+export function sceneSegmentBearing(a: LocalPoint, b: LocalPoint): number {
+  return bearingFromSceneVector(b.x - a.x, b.z - a.z);
+}
+
+export function cardinal16Label(bearingDeg: number): string {
+  const index = Math.round(normalizeBearing(bearingDeg) / 22.5) % 16;
+  return CARDINAL_16[index];
+}
+
+/** 도로는 양방향 축이므로 두 반대 방위를 함께 표시한다. */
+export function roadAxisLabel(a: LocalPoint, b: LocalPoint): string {
+  const first = sceneSegmentBearing(a, b);
+  const opposite = normalizeBearing(first + 180);
+  return `${cardinal16Label(first)}–${cardinal16Label(opposite)}`;
+}
+
+/** 필지 중심이 로컬 원점이므로 접도 경계 중점으로 접도면을 판정한다. */
+export function frontageSideLabel(a: LocalPoint, b: LocalPoint): string {
+  const midpointX = (a.x + b.x) / 2;
+  const midpointZ = (a.z + b.z) / 2;
+  const bearingDeg = bearingFromSceneVector(midpointX, midpointZ);
+  const index = Math.round(normalizeBearing(bearingDeg) / 45) % 8;
+  return CARDINAL_8_SIDE[index];
+}
+
+export function angularDifference(a: number, b: number): number {
+  const difference = Math.abs(normalizeBearing(a) - normalizeBearing(b));
+  return Math.min(difference, 360 - difference);
 }

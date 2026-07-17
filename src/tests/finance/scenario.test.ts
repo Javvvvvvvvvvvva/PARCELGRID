@@ -45,7 +45,13 @@ function makeScenario(overrides: Partial<Scenario["assumptions"]> = {}): Scenari
     name: "오피스텔 + 근생",
     shortName: "S1",
     program: defaultProgram("officetel", parcel.maxFAR, parcel.maxBCR),
-    assumptions: { ...defaultAssumptions(), ...overrides },
+    assumptions: {
+      ...defaultAssumptions(),
+      // 강남 역삼동 오피스텔 fixture. 제품 기본값은 서울 외곽 소형주거
+      // 통매각 기준이므로 테스트에서 보수적인 강남 단가를 명시한다.
+      salePricePerSqM: 12_000_000,
+      ...overrides,
+    },
   };
 }
 

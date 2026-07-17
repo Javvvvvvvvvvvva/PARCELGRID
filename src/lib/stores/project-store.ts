@@ -1,20 +1,9 @@
 /**
  * Active project store.
  *
- * Holds the current project's computed data and any pending assumption
- * overrides. The assumption editor screen mutates `pendingOverrides`;
- * the rest of the app subscribes and re-renders.
- *
- * Why Zustand and not React Query alone:
- *   - The "what-if" feel of the assumption editor needs optimistic local
- *     state that doesn't round-trip to the server on every keystroke.
- *   - Multiple screens share the in-flight override state simultaneously
- *     (editor on the right, KPI tiles on the left).
- *
- * Why not just useState lifted to App level:
- *   - Survives client-side route changes without re-fetching.
- *   - Cleanly separates "applied state" (the saved project) from
- *     "draft state" (pending overrides).
+ * Stage 1 stores the computed parcel and existing-condition data.
+ * Stage 2 stores multiple planning scenarios and the currently selected plan.
+ * Stage 3 consumes a saved representative planning scenario for detailed feasibility analysis.
  */
 
 "use client";
@@ -23,7 +12,18 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import type { AssumptionSet } from "@/lib/finance/types";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+import type { PlanningScenario } from "@/lib/planning/types";
+import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
+import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import {
+  clonePlanningScenario,
+  touchPlanningScenario,
+} from "@/lib/planning/scenario-utils";
 
+/**
+ * Legacy aggregate plan used by older Stage 2 and downstream screens.
+ * It remains temporarily while the UI is migrated to PlanningScenario[].
+ */
 export interface EnvelopePlan {
   farPct: number;
   scenarioType: "single-house" | "multi-family" | "retail" | null;
@@ -46,19 +46,14 @@ export interface PendingOverride {
 }
 
 interface ProjectStore {
-  // Server state, refreshed via React Query
   data: ProjectComputed | null;
   setData: (data: ProjectComputed) => void;
 
-  // Draft overrides not yet saved
   pendingOverrides: PendingOverride[];
-
   setOverride: (override: PendingOverride) => void;
   clearOverride: (scenarioId: string, field: keyof AssumptionSet) => void;
   clearAllOverrides: () => void;
 
-  // 가정 편집 draft (시나리오별) — 대시보드 사이드바 ↔ 가정 편집 페이지 공유.
-  // 화면을 넘나들어도(그리고 새로고침해도) 편집값이 유지된다.
   draftAssumptions: Record<string, Partial<AssumptionSet>>;
   setDraftAssumption: (
     scenarioId: string,
@@ -67,79 +62,328 @@ interface ProjectStore {
   ) => void;
   resetDraftAssumptions: (scenarioId: string) => void;
 
-  // envelope 건축 기획 (단일 진실 소스)
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
   clearEnvelopePlan: () => void;
 
-  // Which scenario is "focused" across screens
+  planningScenarios: PlanningScenario[];
+  selectedPlanningScenarioId: string | null;
+  /** Stage 3로 넘길 대표 계획안. 저장 계획안과 별도로 명시적으로 확정한다. */
+  representativePlanningScenarioId: string | null;
+  /** 대표안 확정 시 잠긴 실제 계획 매스. 3D·계산·SketchUp export의 기준이다. */
+  representativeGeometrySnapshot: PlanningGeometrySnapshot | null;
+  /** 대표안 확정이 거부된 최근 기하 검증 사유. */
+  geometryValidationError: string | null;
+  setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
+  addPlanningScenario: (scenario: PlanningScenario) => string;
+  /** 편집 중 즉시 재계산용. 버전은 올리지 않고 draft 상태로만 갱신한다. */
+  editPlanningScenarioDraft: (
+    id: string,
+    patch: Partial<Omit<PlanningScenario, "id" | "createdAt" | "version">>
+  ) => void;
+  /** 명시적 저장용. 버전과 updatedAt을 한 번 올린다. */
+  updatePlanningScenario: (
+    id: string,
+    patch: Partial<Omit<PlanningScenario, "id" | "createdAt">>
+  ) => void;
+  removePlanningScenario: (id: string) => void;
+  duplicatePlanningScenario: (id: string, name?: string) => string | null;
+  selectPlanningScenario: (id: string | null) => void;
+  /** 기하 검증 통과 시에만 대표안과 geometry snapshot을 함께 확정한다. */
+  setRepresentativePlanningScenarioId: (id: string | null) => boolean;
+  clearPlanningScenarios: () => void;
+
   activeScenarioId: string | null;
   setActiveScenarioId: (id: string | null) => void;
+}
+
+function representativeInvalidation(message: string) {
+  return {
+    representativePlanningScenarioId: null,
+    representativeGeometrySnapshot: null,
+    geometryValidationError: message,
+  };
 }
 
 export const useProjectStore = create<ProjectStore>()(
   devtools(
     persist(
-      (set) => ({
-    data: null,
-    setData: (data) => set({ data }),
+      (set, get) => ({
+        data: null,
+        setData: (data) =>
+          set((state) => {
+            const snapshot = state.representativeGeometrySnapshot;
+            if (snapshot && snapshot.projectId !== data.parcel.id) {
+              return {
+                data,
+                ...representativeInvalidation(
+                  "부지가 변경되어 대표 계획안 Geometry Snapshot을 다시 확정해야 합니다."
+                ),
+              };
+            }
+            return { data };
+          }),
 
-    pendingOverrides: [],
+        pendingOverrides: [],
+        setOverride: (override) =>
+          set((state) => {
+            const without = state.pendingOverrides.filter(
+              (item) =>
+                !(
+                  item.scenarioId === override.scenarioId &&
+                  item.field === override.field
+                )
+            );
+            if (override.overrideValue === override.baseValue) {
+              return { pendingOverrides: without };
+            }
+            return { pendingOverrides: [...without, override] };
+          }),
+        clearOverride: (scenarioId, field) =>
+          set((state) => ({
+            pendingOverrides: state.pendingOverrides.filter(
+              (item) =>
+                !(item.scenarioId === scenarioId && item.field === field)
+            ),
+          })),
+        clearAllOverrides: () => set({ pendingOverrides: [] }),
 
-    setOverride: (override) =>
-      set((s) => {
-        const without = s.pendingOverrides.filter(
-          (o) =>
-            !(
-              o.scenarioId === override.scenarioId &&
-              o.field === override.field
-            )
-        );
-        // Only keep the override if it actually differs from base
-        if (override.overrideValue === override.baseValue) {
-          return { pendingOverrides: without };
-        }
-        return { pendingOverrides: [...without, override] };
-      }),
+        draftAssumptions: {},
+        setDraftAssumption: (scenarioId, field, value) =>
+          set((state) => ({
+            draftAssumptions: {
+              ...state.draftAssumptions,
+              [scenarioId]: {
+                ...(state.draftAssumptions[scenarioId] ?? {}),
+                [field]: value,
+              },
+            },
+          })),
+        resetDraftAssumptions: (scenarioId) =>
+          set((state) => {
+            const next = { ...state.draftAssumptions };
+            delete next[scenarioId];
+            return { draftAssumptions: next };
+          }),
 
-    clearOverride: (scenarioId, field) =>
-      set((s) => ({
-        pendingOverrides: s.pendingOverrides.filter(
-          (o) => !(o.scenarioId === scenarioId && o.field === field)
-        ),
-      })),
+        envelopePlan: null,
+        setEnvelopePlan: (envelopePlan) => set({ envelopePlan }),
+        clearEnvelopePlan: () => set({ envelopePlan: null }),
 
-    clearAllOverrides: () => set({ pendingOverrides: [] }),
-
-    draftAssumptions: {},
-    setDraftAssumption: (scenarioId, field, value) =>
-      set((s) => ({
-        draftAssumptions: {
-          ...s.draftAssumptions,
-          [scenarioId]: {
-            ...(s.draftAssumptions[scenarioId] ?? {}),
-            [field]: value,
-          },
+        planningScenarios: [],
+        selectedPlanningScenarioId: null,
+        representativePlanningScenarioId: null,
+        representativeGeometrySnapshot: null,
+        geometryValidationError: null,
+        setPlanningScenarios: (planningScenarios) =>
+          set((state) => {
+            const representativeStillExists = planningScenarios.some(
+              (scenario) =>
+                scenario.id === state.representativePlanningScenarioId
+            );
+            return {
+              planningScenarios,
+              selectedPlanningScenarioId: planningScenarios.some(
+                (scenario) => scenario.id === state.selectedPlanningScenarioId
+              )
+                ? state.selectedPlanningScenarioId
+                : planningScenarios[0]?.id ?? null,
+              representativePlanningScenarioId: representativeStillExists
+                ? state.representativePlanningScenarioId
+                : null,
+              representativeGeometrySnapshot: representativeStillExists
+                ? state.representativeGeometrySnapshot
+                : null,
+              geometryValidationError: representativeStillExists
+                ? state.geometryValidationError
+                : null,
+            };
+          }),
+        addPlanningScenario: (scenario) => {
+          set((state) => ({
+            planningScenarios: [...state.planningScenarios, scenario],
+            selectedPlanningScenarioId: scenario.id,
+          }));
+          return scenario.id;
         },
-      })),
-    resetDraftAssumptions: (scenarioId) =>
-      set((s) => {
-        const next = { ...s.draftAssumptions };
-        delete next[scenarioId];
-        return { draftAssumptions: next };
-      }),
+        editPlanningScenarioDraft: (id, patch) =>
+          set((state) => {
+            const invalidatesRepresentative =
+              state.representativePlanningScenarioId === id;
+            return {
+              planningScenarios: state.planningScenarios.map((scenario) => {
+                if (scenario.id !== id) return scenario;
+                const patchedEconomics: PlanningScenario["economicsPreview"] =
+                  patch.economicsPreview ?? {
+                    ...scenario.economicsPreview,
+                    status:
+                      scenario.economicsPreview.status === "not-calculated"
+                        ? "not-calculated"
+                        : "stale",
+                  };
+                return {
+                  ...scenario,
+                  ...patch,
+                  id: scenario.id,
+                  createdAt: scenario.createdAt,
+                  version: scenario.version,
+                  status: "draft",
+                  updatedAt: new Date().toISOString(),
+                  economicsPreview: patchedEconomics,
+                };
+              }),
+              ...(invalidatesRepresentative
+                ? representativeInvalidation(
+                    "대표 계획안이 수정되어 Geometry Snapshot 재확정이 필요합니다."
+                  )
+                : {}),
+              activeScenarioId:
+                state.activeScenarioId === id ? null : state.activeScenarioId,
+            };
+          }),
+        updatePlanningScenario: (id, patch) =>
+          set((state) => {
+            const invalidatesRepresentative =
+              state.representativePlanningScenarioId === id;
+            return {
+              planningScenarios: state.planningScenarios.map((scenario) =>
+                scenario.id === id
+                  ? touchPlanningScenario(scenario, patch)
+                  : scenario
+              ),
+              ...(invalidatesRepresentative
+                ? representativeInvalidation(
+                    "대표 계획안 버전이 변경되어 Geometry Snapshot 재확정이 필요합니다."
+                  )
+                : {}),
+            };
+          }),
+        removePlanningScenario: (id) =>
+          set((state) => {
+            const planningScenarios = state.planningScenarios.filter(
+              (scenario) => scenario.id !== id
+            );
+            const removedRepresentative =
+              state.representativePlanningScenarioId === id;
+            return {
+              planningScenarios,
+              selectedPlanningScenarioId:
+                state.selectedPlanningScenarioId === id
+                  ? planningScenarios[0]?.id ?? null
+                  : state.selectedPlanningScenarioId,
+              representativePlanningScenarioId: removedRepresentative
+                ? null
+                : state.representativePlanningScenarioId,
+              representativeGeometrySnapshot: removedRepresentative
+                ? null
+                : state.representativeGeometrySnapshot,
+              geometryValidationError: removedRepresentative
+                ? null
+                : state.geometryValidationError,
+              activeScenarioId:
+                state.activeScenarioId === id ? null : state.activeScenarioId,
+            };
+          }),
+        duplicatePlanningScenario: (id, name) => {
+          const source = get().planningScenarios.find(
+            (scenario) => scenario.id === id
+          );
+          if (!source) return null;
+          const copy = clonePlanningScenario(source, name);
+          set((state) => ({
+            planningScenarios: [...state.planningScenarios, copy],
+            selectedPlanningScenarioId: copy.id,
+          }));
+          return copy.id;
+        },
+        selectPlanningScenario: (selectedPlanningScenarioId) =>
+          set({ selectedPlanningScenarioId }),
+        setRepresentativePlanningScenarioId: (id) => {
+          if (id == null) {
+            set({
+              representativePlanningScenarioId: null,
+              representativeGeometrySnapshot: null,
+              geometryValidationError: null,
+            });
+            return true;
+          }
 
-    activeScenarioId: null,
-    envelopePlan: null,
-    setEnvelopePlan: (envelopePlan) => set({ envelopePlan }),
-    clearEnvelopePlan: () => set({ envelopePlan: null }),
+          const state = get();
+          const scenario = state.planningScenarios.find(
+            (candidate) => candidate.id === id
+          );
+          const parcel = state.data?.parcel;
+          if (!scenario || !parcel) {
+            set(
+              representativeInvalidation(
+                "계획안 또는 부지 데이터가 없어 대표안을 확정할 수 없습니다."
+              )
+            );
+            return false;
+          }
+          if (!parcel.boundary || parcel.boundary.length < 3) {
+            set(
+              representativeInvalidation(
+                "대지 경계 GIS 데이터가 없어 Geometry Snapshot을 만들 수 없습니다."
+              )
+            );
+            return false;
+          }
 
-    setActiveScenarioId: (id) => set({ activeScenarioId: id }),
+          const geometry = buildPlanningGeometry({
+            projectId: scenario.projectId ?? parcel.id,
+            scenario,
+            boundary: parcel.boundary,
+            lotAreaSqm: parcel.lotArea,
+            zoning: parcel.zoning ?? "",
+            roads: parcel.roads,
+            setback: parcel.setback,
+          }).snapshot;
+          if (!geometry.validation.representativeEligible) {
+            const firstFailure = geometry.validation.issues.find(
+              (issue) => issue.severity === "fail"
+            );
+            set(
+              representativeInvalidation(
+                firstFailure?.message ??
+                  "계획 매스 기하 검증을 통과하지 못해 대표안을 확정할 수 없습니다."
+              )
+            );
+            return false;
+          }
+
+          set({
+            representativePlanningScenarioId: id,
+            representativeGeometrySnapshot: geometry,
+            geometryValidationError: null,
+          });
+          return true;
+        },
+        clearPlanningScenarios: () =>
+          set({
+            planningScenarios: [],
+            selectedPlanningScenarioId: null,
+            representativePlanningScenarioId: null,
+            representativeGeometrySnapshot: null,
+            geometryValidationError: null,
+            activeScenarioId: null,
+          }),
+
+        activeScenarioId: null,
+        setActiveScenarioId: (activeScenarioId) =>
+          set({ activeScenarioId }),
       }),
       {
         name: "parcelgrid-envelope",
         partialize: (state) => ({
           envelopePlan: state.envelopePlan,
+          planningScenarios: state.planningScenarios,
+          selectedPlanningScenarioId: state.selectedPlanningScenarioId,
+          representativePlanningScenarioId:
+            state.representativePlanningScenarioId,
+          representativeGeometrySnapshot:
+            state.representativeGeometrySnapshot,
+          activeScenarioId: state.activeScenarioId,
           draftAssumptions: state.draftAssumptions,
         }),
       }
@@ -147,13 +391,13 @@ export const useProjectStore = create<ProjectStore>()(
   )
 );
 
-/** Get the override for a specific (scenario, field), if any. */
 export function findOverride(
   overrides: PendingOverride[],
   scenarioId: string,
   field: keyof AssumptionSet
 ): PendingOverride | undefined {
   return overrides.find(
-    (o) => o.scenarioId === scenarioId && o.field === field
+    (override) =>
+      override.scenarioId === scenarioId && override.field === field
   );
 }

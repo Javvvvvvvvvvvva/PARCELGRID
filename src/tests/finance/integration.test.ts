@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { calculateScenario, defaultProgram, defaultAssumptions } from "../../lib/finance/scenario";
 import { generatePFSchedule } from "../../lib/finance/cashflow";
-import { calculateTaxes } from "../../lib/finance/tax";
+import { calculateTaxes, TAX_RATES } from "../../lib/finance/tax";
 import { analyzeComps } from "../../lib/finance/comps";
 import { checkCompliance, complianceScore } from "../../lib/finance/compliance";
 import type { Parcel, Scenario } from "../../lib/finance/types";
@@ -19,7 +19,11 @@ const parcel: Parcel = {
 const scenario: Scenario = {
   id: "S1", name: "오피스텔+근생", shortName: "S1",
   program: defaultProgram("officetel", 250, 60),
-  assumptions: defaultAssumptions(),
+  assumptions: {
+    ...defaultAssumptions(),
+    // 강남 오피스텔 fixture — 외곽 다가구 통매각 기본값과 분리
+    salePricePerSqM: 12_000_000,
+  },
 };
 
 describe("generatePFSchedule", () => {
@@ -77,9 +81,26 @@ describe("calculateTaxes", () => {
     expect(acqLand!.amount).toBeCloseTo(parcel.acquiredPrice * 0.046, -1);
   });
 
-  it("corporate tax scales with profit", () => {
+  it("corporate tax applies progressive brackets to positive profit", () => {
     const corp = taxes.lines.find((l) => l.tax === "법인세")!;
-    expect(corp.amount).toBeCloseTo(result.profit * 0.20, -1);
+    const profitWon = Math.max(result.profit, 0) * 10_000;
+    const bracket = TAX_RATES.corporateBracket;
+    const expectedWon =
+      profitWon <= bracket
+        ? profitWon * TAX_RATES.corporateTaxLow
+        : bracket * TAX_RATES.corporateTaxLow +
+          (profitWon - bracket) * TAX_RATES.corporateTaxHigh;
+    expect(corp.amount).toBeCloseTo(expectedWon / 10_000, 0);
+  });
+
+  it("does not create negative corporate tax for a loss", () => {
+    const lossTaxes = calculateTaxes({
+      parcel,
+      result: { ...result, profit: -10_000 },
+      residentialSaleShare: scenario.program.mix.residentialSale,
+    });
+    const corp = lossTaxes.lines.find((l) => l.tax === "법인세")!;
+    expect(corp.amount).toBe(0);
   });
 
   it("total is the sum of lines", () => {

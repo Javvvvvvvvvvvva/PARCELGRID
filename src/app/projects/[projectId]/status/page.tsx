@@ -3,8 +3,8 @@
 /**
  * Stage 1 — 현황 분석 (Existing Property Analysis)
  *
- * 읽기 전용. 현재 토지·건물·실거래·3D 현황을 보여준다.
- * 신축 설계(세대 배치·필로티)는 Stage 2 계획 스튜디오에서 다룬다.
+ * 주소 검색 직후 현재 토지·기존 건물·입지 상태를 읽기 전용으로 보여준다.
+ * 신축 가능 규모와 미래 계획은 Stage 2 계획 스튜디오에서 별도로 계산한다.
  */
 
 import { use, useEffect, useMemo, useState } from "react";
@@ -15,6 +15,12 @@ import { KakaoMap, type CompMarker, type StationMarker } from "@/components/ui/K
 import { Panel, SectionTitle, DataRow, Button } from "@/components/ui/primitives";
 import { Dot } from "@/components/ui/Tag";
 import {
+  DataReadinessPanel,
+  ExistingReviewPanel,
+  MarketSnapshotPanel,
+  RoadOrientationPanel,
+} from "@/components/ui/StatusInsightPanels";
+import {
   buildStatusSummary,
   formatExistingUnits,
   type SummaryTone,
@@ -24,20 +30,30 @@ import {
   formatRatioVsLimit,
   headroomPct,
 } from "@/lib/analysis/existing-building-metrics";
-import { num, pyeong } from "@/lib/utils/format";
+import {
+  buildDataReadinessInsight,
+  buildExistingReviewOptions,
+  buildMarketInsight,
+  buildRoadOrientationInsight,
+} from "@/lib/analysis/status-insights";
+import { num, pyeong, won } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 
 const ExistingBuildingMass = dynamic(
   () =>
     import("@/components/ui/ExistingBuildingMass").then((m) => m.ExistingBuildingMass),
-  { ssr: false, loading: () => <div style={{ height: 360, background: "var(--bg-sunken)" }} /> }
+  {
+    ssr: false,
+    loading: () => <div style={{ height: 360, background: "var(--bg-sunken)" }} />,
+  }
 );
 
 const SQM_PER_PYEONG = 3.305785;
 const NEW_BUILD_CUTOFF_YEAR = new Date().getFullYear() - 5;
 
 type MapLayer = "subject" | "comps" | "stations" | "newBuilds";
+type BadgeTone = "neutral" | "positive" | "warning" | "negative";
 
 const TONE_COLOR: Record<SummaryTone, string> = {
   neutral: "var(--fg)",
@@ -67,6 +83,8 @@ export default function StatusPage({
     () => (parcel ? buildStatusSummary(parcel) : []),
     [parcel]
   );
+  const observations = summary.filter((item) => item.kind === "observation");
+  const checks = summary.filter((item) => item.kind === "check");
 
   const main = useMemo(() => {
     if (!currentBuilding?.hasBuilding) return null;
@@ -162,15 +180,95 @@ export default function StatusPage({
     [allComps]
   );
 
+  const roadInsight = useMemo(
+    () => (parcel ? buildRoadOrientationInsight(parcel) : null),
+    [parcel]
+  );
+  const marketInsight = useMemo(
+    () =>
+      parcel
+        ? buildMarketInsight(
+            allComps,
+            stations,
+            subjectPPP,
+            compMarkers.length,
+            NEW_BUILD_CUTOFF_YEAR
+          )
+        : null,
+    [parcel, allComps, stations, subjectPPP, compMarkers.length]
+  );
+  const dataReadiness = useMemo(
+    () => (parcel ? buildDataReadinessInsight(parcel, allComps, stations) : null),
+    [parcel, allComps, stations]
+  );
+  const reviewOptions = useMemo(
+    () => (parcel ? buildExistingReviewOptions(parcel) : []),
+    [parcel]
+  );
+
   if (!parcel) {
     return (
       <div style={{ padding: 40, color: "var(--fg-muted)" }}>부지 데이터 로딩 중…</div>
     );
   }
 
+  const ageYears = currentBuilding?.maxAgeYears ?? main?.ageYears ?? null;
+  const bcrHeadroom = ratios ? headroomPct(ratios.bcrPct, parcel.maxBCR) : null;
+  const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
+  const farUtilization =
+    ratios && parcel.maxFAR > 0 ? (ratios.farPct / parcel.maxFAR) * 100 : null;
+  const purpose = main
+    ? main.detailPurpose && main.detailPurpose !== main.mainPurpose
+      ? `${main.mainPurpose} · ${main.detailPurpose}`
+      : main.mainPurpose
+    : "등록 건물 없음";
+
+  const headline = main
+    ? `${ageYears ?? "—"}년 경과한 ${purpose}`
+    : "건축물대장에 등록된 현재 건물이 없습니다";
+
+  const overviewText = ratios
+    ? `현재 건폐율은 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 법정 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 반영해 계산합니다.`
+    : "현재 건물 비율을 계산할 수 없습니다. 대지·건축물대장 데이터를 확인한 뒤 Stage 2에서 가능 규모를 검토합니다.";
+
+  const badges: { label: string; tone: BadgeTone }[] = [
+    {
+      label: main ? "기존 건물 있음" : "등록 건물 없음",
+      tone: main ? "neutral" : "warning",
+    },
+    ...(ageYears != null && ageYears >= 30
+      ? [{ label: `노후 ${ageYears}년`, tone: "warning" as const }]
+      : []),
+    ...(bcrHeadroom != null
+      ? [
+          {
+            label: bcrHeadroom < 10 ? "건폐율 여유 적음" : "건폐율 여유 있음",
+            tone: bcrHeadroom < 10 ? ("warning" as const) : ("positive" as const),
+          },
+        ]
+      : []),
+    ...(farHeadroom != null
+      ? [
+          {
+            label: farHeadroom >= parcel.maxFAR * 0.3 ? "용적률 여유 큼" : "용적률 여유 적음",
+            tone:
+              farHeadroom >= parcel.maxFAR * 0.3
+                ? ("positive" as const)
+                : ("warning" as const),
+          },
+        ]
+      : []),
+    ...(parcel.demolitionCost && parcel.demolitionCost > 0
+      ? [{ label: "철거비 발생", tone: "neutral" as const }]
+      : []),
+    {
+      label: parcel.roads && parcel.roads.length > 0 ? "도로 데이터 있음" : "도로 확인 필요",
+      tone: parcel.roads && parcel.roads.length > 0 ? "positive" : "warning",
+    },
+  ];
+
   return (
     <div style={{ padding: "var(--s6)", maxWidth: 1200, margin: "0 auto" }}>
-      {/* Stage indicator */}
       <div
         style={{
           display: "flex",
@@ -195,22 +293,121 @@ export default function StatusPage({
       <SectionTitle
         size="lg"
         title="현황 분석"
-        desc="Existing Property Analysis — 현재 토지·건물 상태를 읽기 전용으로 확인합니다."
-        style={{ marginBottom: "var(--s6)" }}
+        desc="현재 토지와 기존 건물의 물리적·법적·시장 상태를 확인합니다."
+        style={{ marginBottom: "var(--s5)" }}
       />
+
+      <section
+        style={{
+          marginBottom: "var(--s5)",
+          padding: "22px 24px",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--r-lg)",
+          background: "var(--bg-elev)",
+          boxShadow: "0 10px 30px rgba(15,23,42,0.035)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 24,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 280, flex: 1 }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                color: "var(--fg-subtle)",
+                marginBottom: 8,
+              }}
+            >
+              CURRENT CONDITION
+            </div>
+            <h2 style={{ margin: 0, fontSize: 24, lineHeight: 1.3, letterSpacing: "-0.02em" }}>
+              {headline}
+            </h2>
+            <p
+              style={{
+                margin: "10px 0 0",
+                maxWidth: 760,
+                color: "var(--fg-muted)",
+                fontSize: 13.5,
+                lineHeight: 1.65,
+              }}
+            >
+              {overviewText}
+            </p>
+          </div>
+          <div style={{ textAlign: "right", minWidth: 190 }}>
+            <div style={{ fontSize: 11, color: "var(--fg-faint)", marginBottom: 5 }}>
+              대상지
+            </div>
+            <div style={{ fontWeight: 650, fontSize: 13 }}>{parcel.address}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 18 }}>
+          {badges.map((badge) => (
+            <StatusBadge key={badge.label} label={badge.label} tone={badge.tone} />
+          ))}
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: 1,
+            marginTop: 20,
+            border: "1px solid var(--border)",
+            borderRadius: 9,
+            overflow: "hidden",
+            background: "var(--border)",
+          }}
+        >
+          <OverviewMetric label="대지" value={pyeong(parcel.lotArea)} sub={`${num(parcel.lotArea, 2)}㎡`} />
+          <OverviewMetric
+            label="기존 건물"
+            value={main ? `지상 ${main.groundFloors}층` : "없음"}
+            sub={main && main.undergroundFloors > 0 ? `지하 ${main.undergroundFloors}층` : purpose}
+          />
+          <OverviewMetric
+            label="건폐율"
+            value={ratios ? `${ratios.bcrPct.toFixed(1)}%` : "—"}
+            sub={`법정 상한 ${parcel.maxBCR}%`}
+          />
+          <OverviewMetric
+            label="용적률"
+            value={ratios ? `${ratios.farPct.toFixed(1)}%` : "—"}
+            sub={`법정 상한 ${parcel.maxFAR}%`}
+          />
+          <OverviewMetric
+            label="데이터 상태"
+            value={currentBuilding ? "대장 연동" : "확인 필요"}
+            sub={parcel.boundary ? "필지 경계 확보" : "필지 경계 없음"}
+          />
+        </div>
+      </section>
 
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
+          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
           gap: "var(--s5)",
           alignItems: "start",
         }}
       >
-        {/* ① 기본 정보 */}
-        <Panel title="① 기본 정보" source="V월드 · 공시지가 · 건축물대장">
+        <Panel title="① 토지 기본 정보" source="V월드 · 공시지가 · 건축물대장">
           <DataRow label="주소" value={parcel.address} />
-          <DataRow label="대지면적" value={`${num(parcel.lotArea, 2)} m² (${pyeong(parcel.lotArea)})`} />
+          {parcel.addressRoad && <DataRow label="도로명 주소" value={parcel.addressRoad} />}
+          <DataRow
+            label="대지면적"
+            value={`${num(parcel.lotArea, 2)} m² (${pyeong(parcel.lotArea)})`}
+          />
           <DataRow label="용도지역" value={parcel.zoning} />
           {ratios ? (
             <>
@@ -226,14 +423,14 @@ export default function StatusPage({
               />
               <DataRow
                 label="법규 여유"
-                value={`건폐 ${headroomPct(ratios.bcrPct, parcel.maxBCR).toFixed(1)}%p · 용적 ${headroomPct(ratios.farPct, parcel.maxFAR).toFixed(1)}%p`}
-                sub="상한 대비 잔여"
+                value={`건폐 ${bcrHeadroom?.toFixed(1)}%p · 용적 ${farHeadroom?.toFixed(1)}%p`}
+                sub="법정 상한 대비 잔여 · 실제 신축 가능량 아님"
               />
             </>
           ) : (
             <>
-              <DataRow label="건폐율 상한" value={`${parcel.maxBCR}%`} sub="건물 없음 — 법규 상한만" />
-              <DataRow label="용적률 상한" value={`${parcel.maxFAR}%`} sub="건물 없음 — 법규 상한만" />
+              <DataRow label="건폐율 상한" value={`${parcel.maxBCR}%`} sub="기존 건물 비율 미확인" />
+              <DataRow label="용적률 상한" value={`${parcel.maxFAR}%`} sub="기존 건물 비율 미확인" />
             </>
           )}
           <DataRow
@@ -241,25 +438,34 @@ export default function StatusPage({
             value={`${num(parcel.landPrice / 10_000)}만/m²`}
             sub="V월드 개별공시지가"
           />
+          <DataRow
+            label="도로 데이터"
+            value={parcel.roads && parcel.roads.length > 0 ? `${parcel.roads.length}개 중심선` : "추가 확인 필요"}
+            sub="도로 폭은 현재 데이터에 포함되지 않음"
+          />
         </Panel>
 
-        {/* ② 기존 건축물 */}
         <Panel title="② 기존 건축물" source="MOLIT 건축물대장">
           {main ? (
             <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 8,
+                  paddingBottom: 14,
+                  marginBottom: 4,
+                  borderBottom: "1px solid var(--border)",
+                }}
+              >
+                <strong style={{ fontSize: 28, letterSpacing: "-0.03em" }}>
+                  {ageYears ?? "—"}년
+                </strong>
+                <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>현재 건물 연령</span>
+              </div>
               {main.name && <DataRow label="건물명" value={main.name} />}
-              <DataRow
-                label="준공연도"
-                value={`${main.approvalDate.slice(0, 4)}년 ${main.approvalDate.slice(5, 7)}월 (${main.ageYears ?? "—"}년 경과)`}
-              />
-              <DataRow
-                label="용도"
-                value={
-                  main.detailPurpose && main.detailPurpose !== main.mainPurpose
-                    ? `${main.mainPurpose} · ${main.detailPurpose}`
-                    : main.mainPurpose
-                }
-              />
+              <DataRow label="사용승인" value={formatApprovalDate(main.approvalDate, ageYears)} />
+              <DataRow label="용도" value={purpose} />
               <DataRow
                 label="층수"
                 value={`지상 ${main.groundFloors}층${
@@ -268,18 +474,28 @@ export default function StatusPage({
               />
               <DataRow label="건축면적" value={`${num(main.buildingArea, 2)} m²`} />
               <DataRow label="연면적" value={`${num(main.totalArea, 2)} m²`} />
-              {main.height > 0 && (
-                <DataRow label="높이" value={`${num(main.height, 2)} m`} />
-              )}
+              {main.height > 0 && <DataRow label="높이" value={`${num(main.height, 2)} m`} />}
               {ratios && (
                 <DataRow
                   label="미건축 대지"
                   value={`${num(ratios.unbuiltLotSqm, 2)} m² (${ratios.unbuiltLotPct.toFixed(1)}%)`}
-                  sub="대지 − 건축면적"
+                  sub="대지면적 − 기존 건축면적"
                 />
               )}
-              <DataRow label="세대수" value={formatExistingUnits(currentBuilding)} />
-              {main.structure && <DataRow label="구조" value={main.structure} />}
+              <DataRow label="세대·가구" value={formatExistingUnits(currentBuilding)} />
+              <DataRow label="구조" value={main.structure || "건축물대장 미제공"} />
+              <DataRow
+                label="예상 철거비"
+                value={
+                  parcel.demolitionCost && parcel.demolitionCost > 0
+                    ? won(parcel.demolitionCost, { full: true })
+                    : "개략값 없음"
+                }
+                sub="건축물대장 연면적 × 구조별 단가 · 견적 아님"
+              />
+              <DataRow label="기존 주차대수" value="추가 조회 필요" sub="표제부 외 추가 API 필요" />
+              <DataRow label="승강기·지붕" value="추가 조회 필요" sub="층별개요·설비 데이터 미연동" />
+              <DataRow label="위반건축물 여부" value="추가 확인 필요" sub="현재 API 응답에 포함되지 않음" />
               {(currentBuilding?.buildings.length ?? 0) > 1 && (
                 <DataRow
                   label="부속 동"
@@ -290,18 +506,97 @@ export default function StatusPage({
             </>
           ) : (
             <p style={{ margin: 0, fontSize: 13, color: "var(--fg-muted)" }}>
-              등록된 건축물이 없습니다 (빈 토지).
+              건축물대장에 등록된 건축물이 없습니다. 실제 빈 토지 여부는 현장 확인이 필요합니다.
             </p>
           )}
         </Panel>
       </div>
 
-      {/* ③ 지도 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1.25fr) minmax(300px, 0.75fr)",
+          gap: "var(--s5)",
+          marginTop: "var(--s5)",
+          alignItems: "start",
+        }}
+      >
+        <Panel title="③ 기존 건물 개략 매스" source="건축물대장 면적·층수 기반 · 실제 배치도 아님">
+          <ExistingBuildingMass
+            boundary={parcel.boundary}
+            currentBuilding={currentBuilding}
+            lotArea={parcel.lotArea}
+            height={390}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 10,
+              fontSize: 11.5,
+              color: "var(--fg-faint)",
+            }}
+          >
+            <span>드래그로 회전 · 휠로 확대</span>
+            <span>형상 정확도: 개략 · 면적·층수: 건축물대장</span>
+          </div>
+        </Panel>
+
+        <Panel title="④ 현재 상태 해석" source="규칙 기반 · 사실과 검토 항목 분리">
+          <DiagnosticGroup title="현황 해석" items={observations} />
+          <DiagnosticGroup title="다음 단계 확인" items={checks} style={{ marginTop: 18 }} />
+
+          {currentBuilding?.signalLabel && (
+            <div
+              style={{
+                marginTop: 18,
+                padding: "12px 13px",
+                background: "var(--bg-sunken)",
+                borderRadius: 8,
+                fontSize: 12.5,
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 7, fontWeight: 650 }}>
+                <Dot kind={signalDot(currentBuilding)} />
+                {signalTitle(currentBuilding)}
+              </div>
+              <div style={{ marginTop: 6, color: "var(--fg-muted)", lineHeight: 1.55 }}>
+                {signalDescription(currentBuilding)}
+              </div>
+            </div>
+          )}
+
+          <div
+            style={{
+              marginTop: 18,
+              paddingTop: 14,
+              borderTop: "1px solid var(--border)",
+              fontSize: 11.5,
+              lineHeight: 1.6,
+              color: "var(--fg-faint)",
+            }}
+          >
+            Stage 1은 현재 상태를 설명합니다. 신축 가능 층수·세대수·주차 배치는 Stage 2에서 계산합니다.
+          </div>
+        </Panel>
+      </div>
+
+      {roadInsight && (
+        <div style={{ marginTop: "var(--s5)" }}>
+          <RoadOrientationPanel insight={roadInsight} />
+        </div>
+      )}
+
       <Panel
-        title="③ 지도"
+        title="⑥ 지도와 주변 시장"
         source="Kakao Map · MOLIT 실거래"
         style={{ marginTop: "var(--s5)" }}
       >
+        {marketInsight && <MarketSnapshotPanel insight={marketInsight} />}
+
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
           <LayerChip
             label="대상지"
@@ -309,9 +604,10 @@ export default function StatusPage({
             onClick={() => setLayers((l) => ({ ...l, subject: !l.subject }))}
           />
           <LayerChip
-            label={`실거래 (${allComps.length})`}
+            label={`수집 실거래 (${allComps.length})`}
             active={layers.comps}
             onClick={() => setLayers((l) => ({ ...l, comps: !l.comps }))}
+            hint={`지도 실제 표시 ${compMarkers.length}건`}
           />
           <LayerChip
             label={`역세권 (${stations.length})`}
@@ -322,11 +618,7 @@ export default function StatusPage({
             label={`주변 신축 (${newBuildCount})`}
             active={layers.newBuilds}
             onClick={() =>
-              setLayers((l) => ({
-                ...l,
-                newBuilds: !l.newBuilds,
-                comps: true,
-              }))
+              setLayers((l) => ({ ...l, newBuilds: !l.newBuilds, comps: true }))
             }
             hint={`${NEW_BUILD_CUTOFF_YEAR}년 이후 준공`}
           />
@@ -336,7 +628,9 @@ export default function StatusPage({
           <KakaoMap
             centerLat={parcel.lat}
             centerLng={parcel.lng}
-            showRoads={false}
+            showRoads
+            roads={parcel.roads}
+            boundary={parcel.boundary}
             focusSubject
             zoomLevel={3}
             maxZoomOutLevel={4}
@@ -345,80 +639,28 @@ export default function StatusPage({
             subjectPPP={subjectPPP}
             comps={layers.comps ? compMarkers : []}
             stations={layers.stations ? stations : []}
-            height={400}
+            height={380}
           />
         ) : (
-          <p style={{ fontSize: 13, color: "var(--fg-muted)" }}>좌표 정보가 없어 지도를 표시할 수 없습니다.</p>
-        )}
-          <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-            우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표입니다.
+          <p style={{ fontSize: 13, color: "var(--fg-muted)" }}>
+            좌표 정보가 없어 지도를 표시할 수 없습니다.
           </p>
+        )}
+        <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
+          우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표 · 중앙값은 단순 시장 참고값이며 최종 비교사례 선정값이 아닙니다.
+        </p>
       </Panel>
 
-      {/* ④ 기존 건물 3D + ⑤ 알고리즘 요약 */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.2fr 0.8fr",
-          gap: "var(--s5)",
-          marginTop: "var(--s5)",
-          alignItems: "start",
-        }}
-      >
-        <Panel title="④ 기존 건물 3D" source="건축물대장 기반 단순 매스 · 신축 아님">
-          <ExistingBuildingMass
-            boundary={parcel.boundary}
-            currentBuilding={currentBuilding}
-            lotArea={parcel.lotArea}
-            height={400}
-          />
-          <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-            건축물대장 기반 현재 건물 매스 · 드래그로 회전
-          </p>
-        </Panel>
+      {dataReadiness && (
+        <div style={{ marginTop: "var(--s5)" }}>
+          <DataReadinessPanel insight={dataReadiness} />
+        </div>
+      )}
 
-        <Panel title="⑤ 알고리즘 요약" source="규칙 기반 · 출처 연동">
-          <div style={{ fontSize: 12, color: "var(--fg-muted)", marginBottom: 10 }}>
-            분석 결과
-          </div>
-          <ul style={{ margin: 0, padding: "0 0 0 18px", listStyle: "disc" }}>
-            {summary.map((b, i) => (
-              <li
-                key={i}
-                style={{
-                  fontSize: 13.5,
-                  lineHeight: 1.55,
-                  marginBottom: 8,
-                  color: TONE_COLOR[b.tone],
-                }}
-              >
-                {b.text}
-              </li>
-            ))}
-          </ul>
-          {currentBuilding?.signalLabel && (
-            <div
-              style={{
-                marginTop: 14,
-                padding: "10px 12px",
-                background: "var(--bg-sunken)",
-                borderRadius: 6,
-                fontSize: 12.5,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
-                <Dot kind={signalDot(currentBuilding)} />
-                {currentBuilding.signalLabel}
-              </div>
-              <div style={{ marginTop: 4, color: "var(--fg-muted)", lineHeight: 1.5 }}>
-                {currentBuilding.signalReasoning}
-              </div>
-            </div>
-          )}
-        </Panel>
+      <div style={{ marginTop: "var(--s5)" }}>
+        <ExistingReviewPanel options={reviewOptions} />
       </div>
 
-      {/* CTA → Stage 2 */}
       <div
         style={{
           display: "flex",
@@ -434,9 +676,125 @@ export default function StatusPage({
         </Link>
         <Link href={`/projects/${projectId}/envelope`} style={{ textDecoration: "none" }}>
           <Button variant="primary" size="lg">
-            계획 스튜디오로 →
+            계획 스튜디오에서 가능 규모 검토 →
           </Button>
         </Link>
+      </div>
+    </div>
+  );
+}
+
+function StatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: BadgeTone;
+}) {
+  const styles: Record<BadgeTone, { background: string; color: string; border: string }> = {
+    neutral: {
+      background: "var(--bg-sunken)",
+      color: "var(--fg-muted)",
+      border: "var(--border)",
+    },
+    positive: {
+      background: "var(--pos-soft)",
+      color: "var(--pos-fg)",
+      border: "var(--pos)",
+    },
+    warning: {
+      background: "var(--warn-soft)",
+      color: "var(--warn-fg)",
+      border: "var(--warn)",
+    },
+    negative: {
+      background: "var(--neg-soft)",
+      color: "var(--neg-fg)",
+      border: "var(--neg)",
+    },
+  };
+  const s = styles[tone];
+  return (
+    <span
+      style={{
+        padding: "5px 9px",
+        borderRadius: 999,
+        background: s.background,
+        color: s.color,
+        border: `1px solid ${s.border}`,
+        fontSize: 11.5,
+        fontWeight: 600,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function OverviewMetric({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div style={{ padding: "13px 14px", background: "var(--bg-elev)", minHeight: 76 }}>
+      <div style={{ fontSize: 10.5, color: "var(--fg-subtle)", marginBottom: 5 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function DiagnosticGroup({
+  title,
+  items,
+  style,
+}: {
+  title: string;
+  items: ReturnType<typeof buildStatusSummary>;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div style={style}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.04em",
+          color: "var(--fg-subtle)",
+          marginBottom: 9,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ display: "grid", gap: 9 }}>
+        {items.map((item, i) => (
+          <div key={`${item.text}-${i}`} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: TONE_COLOR[item.tone],
+                marginTop: 7,
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: item.tone === "neutral" ? "var(--fg-muted)" : TONE_COLOR[item.tone],
+              }}
+            >
+              {item.text}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -472,6 +830,33 @@ function LayerChip({
       {label}
     </button>
   );
+}
+
+function formatApprovalDate(date: string, ageYears: number | null): string {
+  if (!date) return ageYears != null ? `${ageYears}년 경과 · 승인일 미제공` : "건축물대장 미제공";
+  const year = date.slice(0, 4);
+  const month = date.slice(5, 7);
+  return `${year}년${month ? ` ${month}월` : ""}${ageYears != null ? ` (${ageYears}년 경과)` : ""}`;
+}
+
+function signalTitle(info: BuildingLookupResult): string {
+  if (info.redevelopmentSignal === "rebuild") return "노후도 기준 재건축 검토";
+  if (info.redevelopmentSignal === "renovate") return "유지·리모델링·신축 비교";
+  if (info.redevelopmentSignal === "vacant") return "등록 건물 없음";
+  return "기존 건물 유지 검토";
+}
+
+function signalDescription(info: BuildingLookupResult): string {
+  if (info.redevelopmentSignal === "rebuild") {
+    return "노후도 신호는 철거 후 신축을 검토할 근거 중 하나입니다. 최종 판단은 구조 상태·철거비·신축 가능 규모·사업성을 함께 비교해야 합니다.";
+  }
+  if (info.redevelopmentSignal === "renovate") {
+    return "노후도만으로 한 방향을 확정하지 않습니다. 유지보수 비용과 신축 시 확보 가능한 규모를 비교해야 합니다.";
+  }
+  if (info.redevelopmentSignal === "vacant") {
+    return "건축물대장상 등록 건물이 없습니다. 실제 현황과 멸실 신고 여부를 추가로 확인해야 합니다.";
+  }
+  return "비교적 최근 건물로 분류됩니다. 철거보다 기존 가치와 유지 비용을 먼저 검토하는 구간입니다.";
 }
 
 function signalDot(info: BuildingLookupResult): "pos" | "warn" | "neg" {
