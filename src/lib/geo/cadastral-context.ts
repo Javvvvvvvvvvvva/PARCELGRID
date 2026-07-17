@@ -8,6 +8,12 @@ import { polygonAreaSqm, type LocalPlanPoint } from "@/lib/planning/planning-mas
 export const CADASTRAL_CONTEXT_VERSION = "cadastral-context-v1" as const;
 export const CADASTRAL_ROAD_CONTACT_TOLERANCE_M = 0.75;
 export const CADASTRAL_ROAD_NEAR_TOLERANCE_M = 2;
+/** 접도 경계는 도로 경계와 10도 이내로 평행해야 한다. */
+export const CADASTRAL_ROAD_MIN_ALIGNMENT = Math.cos((10 * Math.PI) / 180);
+
+export type RoadBoundarySource =
+  | "continuous-cadastral"
+  | "upis-planned-road";
 
 export interface CadastralParcelFeature {
   pnu: string;
@@ -17,6 +23,8 @@ export interface CadastralParcelFeature {
   lotAreaSqm: number;
   boundary: [number, number][];
   distanceM: number;
+  /** 생략된 과거·테스트 데이터는 연속지적도로 취급한다. */
+  boundarySource?: RoadBoundarySource;
 }
 
 export interface LocalCadastralParcel {
@@ -28,7 +36,7 @@ export interface LocalCadastralParcel {
   measuredAreaSqm: number;
   distanceM: number;
   polygon: LocalPlanPoint[];
-  source: "VWorld LP_PA_CBND_BUBUN";
+  source: RoadBoundarySource;
 }
 
 export interface CadastralRoadWidthSample {
@@ -51,8 +59,14 @@ export interface CadastralRoadFrontage {
   widthMinM: number | null;
   widthAvgM: number | null;
   widthMaxM: number | null;
-  status: "verified-cadastral-width" | "frontage-only" | "nearby-road-parcel";
-  source: "VWorld continuous cadastral road parcel";
+  status:
+    | "verified-cadastral-width"
+    | "frontage-only"
+    | "nearby-road-parcel"
+    | "planned-road-reference";
+  source:
+    | "VWorld continuous cadastral road parcel"
+    | "VWorld UPIS planned road boundary";
 }
 
 export interface CadastralContextIssue {
@@ -284,7 +298,7 @@ function findFrontageCandidate(
       const roadUnit = normalize(roadVector);
       if (!roadUnit) continue;
       const alignment = Math.abs(dot(targetUnit, roadUnit));
-      if (alignment < 0.65) continue;
+      if (alignment < CADASTRAL_ROAD_MIN_ALIGNMENT) continue;
 
       const projectionA = dot(subtract(roadStart, targetStart), targetUnit);
       const projectionB = dot(subtract(roadEnd, targetStart), targetUnit);
@@ -334,7 +348,9 @@ function buildRoadFrontage(
 
   const ratios = [0.15, 0.3, 0.5, 0.7, 0.85];
   const widthSamples: CadastralRoadWidthSample[] = [];
-  for (const positionRatio of ratios) {
+  // UPIS는 도시계획시설 결정 경계다. 현재 지적상 도로 폭으로 확정하지 않는다.
+  const mayVerifyWidth = roadParcel.source === "continuous-cadastral";
+  for (const positionRatio of mayVerifyWidth ? ratios : []) {
     const sampleOrigin = add(candidate.targetStart, multiply(edgeVector, positionRatio));
     const interval = roadIntervalAlongRay(sampleOrigin, normal, roadParcel.polygon);
     if (!interval) continue;
@@ -371,12 +387,17 @@ function buildRoadFrontage(
     widthAvgM: widthAvgM == null ? null : round(widthAvgM, 3),
     widthMaxM: widthMaxM == null ? null : round(widthMaxM, 3),
     status:
-      widths.length >= 2 && avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
-        ? "verified-cadastral-width"
-        : avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
-          ? "frontage-only"
-          : "nearby-road-parcel",
-    source: "VWorld continuous cadastral road parcel",
+      roadParcel.source === "upis-planned-road"
+        ? "planned-road-reference"
+        : widths.length >= 2 && avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
+          ? "verified-cadastral-width"
+          : avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
+            ? "frontage-only"
+            : "nearby-road-parcel",
+    source:
+      roadParcel.source === "upis-planned-road"
+        ? "VWorld UPIS planned road boundary"
+        : "VWorld continuous cadastral road parcel",
   };
 }
 
@@ -397,7 +418,7 @@ function toLocalParcel(
     measuredAreaSqm,
     distanceM: feature.distanceM,
     polygon,
-    source: "VWorld LP_PA_CBND_BUBUN",
+    source: feature.boundarySource ?? "continuous-cadastral",
   };
 }
 
