@@ -36,7 +36,9 @@ export interface LocalCadastralParcel {
   measuredAreaSqm: number;
   distanceM: number;
   polygon: LocalPlanPoint[];
-  source: RoadBoundarySource;
+  /** 하위 호환용 데이터셋 표기. 실제 경계 역할은 boundarySource가 기준이다. */
+  source: "VWorld LP_PA_CBND_BUBUN";
+  boundarySource: RoadBoundarySource;
 }
 
 export interface CadastralRoadWidthSample {
@@ -349,7 +351,7 @@ function buildRoadFrontage(
   const ratios = [0.15, 0.3, 0.5, 0.7, 0.85];
   const widthSamples: CadastralRoadWidthSample[] = [];
   // UPIS는 도시계획시설 결정 경계다. 현재 지적상 도로 폭으로 확정하지 않는다.
-  const mayVerifyWidth = roadParcel.source === "continuous-cadastral";
+  const mayVerifyWidth = roadParcel.boundarySource === "continuous-cadastral";
   for (const positionRatio of mayVerifyWidth ? ratios : []) {
     const sampleOrigin = add(candidate.targetStart, multiply(edgeVector, positionRatio));
     const interval = roadIntervalAlongRay(sampleOrigin, normal, roadParcel.polygon);
@@ -387,7 +389,7 @@ function buildRoadFrontage(
     widthAvgM: widthAvgM == null ? null : round(widthAvgM, 3),
     widthMaxM: widthMaxM == null ? null : round(widthMaxM, 3),
     status:
-      roadParcel.source === "upis-planned-road"
+      roadParcel.boundarySource === "upis-planned-road"
         ? "planned-road-reference"
         : widths.length >= 2 && avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
           ? "verified-cadastral-width"
@@ -395,7 +397,7 @@ function buildRoadFrontage(
             ? "frontage-only"
             : "nearby-road-parcel",
     source:
-      roadParcel.source === "upis-planned-road"
+      roadParcel.boundarySource === "upis-planned-road"
         ? "VWorld UPIS planned road boundary"
         : "VWorld continuous cadastral road parcel",
   };
@@ -418,7 +420,8 @@ function toLocalParcel(
     measuredAreaSqm,
     distanceM: feature.distanceM,
     polygon,
-    source: feature.boundarySource ?? "continuous-cadastral",
+    source: "VWorld LP_PA_CBND_BUBUN",
+    boundarySource: feature.boundarySource ?? "continuous-cadastral",
   };
 }
 
@@ -471,7 +474,7 @@ export function buildCadastralContext(input: {
       message: "조회 범위에서 지목이 도로인 필지를 찾지 못했습니다. 도로 중심선만 참고 레이어로 사용합니다.",
     });
   } else if (
-    roadParcels.every((parcel) => parcel.source === "upis-planned-road")
+    roadParcels.every((parcel) => parcel.boundarySource === "upis-planned-road")
   ) {
     issues.push({
       code: "upis-planned-road-reference-only",
