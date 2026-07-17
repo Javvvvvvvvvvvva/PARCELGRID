@@ -12,6 +12,7 @@ on:
       - stage2/upis-road-boundaries
       - stage2/upis-road-3d-export
       - stage2/planning-studio-delivery-hardening
+      - stage2/recommendation-engine
   push:
     branches:
       - integration/stage2-status-gis-footprint
@@ -23,6 +24,7 @@ on:
       - stage2/upis-road-3d-export
       - stage2/planning-studio-delivery-hardening
       - stage2/recommendation-engine
+      - stage2/stepped-envelope-candidates
 
 permissions:
   contents: read
