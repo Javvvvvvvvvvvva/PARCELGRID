@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { generatePlanningRecommendations } from "@/lib/planning/recommendation-engine";
+import {
+  buildSteppedEnvelopeProfile,
+  generatePlanningRecommendations,
+} from "@/lib/planning/recommendation-engine";
 import type { PlanningEconomicsAssumptions } from "@/lib/planning/types";
 
 const ORIGIN: [number, number] = [127.025749, 37.650511];
 
 function localRingToLngLat(points: Array<[number, number]>): [number, number][] {
   const lngScale = 111_000 * Math.cos((ORIGIN[1] * Math.PI) / 180);
-  return points.map(([x, z]) => [ORIGIN[0] + x / lngScale, ORIGIN[1] - z / 111_000]);
+  return points.map(([x, z]) => [
+    ORIGIN[0] + x / lngScale,
+    ORIGIN[1] - z / 111_000,
+  ]);
 }
 
 const assumptions: PlanningEconomicsAssumptions = {
-  version: "recommendation-test-v1",
+  version: "recommendation-test-v2",
   constructionCostPerSqmWon: 2_000_000,
   basementCostMultiplier: 1.25,
   softCostRatePct: 10,
@@ -60,6 +66,17 @@ function input() {
   };
 }
 
+const GEOMETRY_CODES = new Set([
+  "bcr",
+  "far",
+  "height",
+  "floor-area-vs-lot",
+  "spatial-area-capacity",
+  "spatial-placement",
+  "spatial-floor-support",
+  "floor-levels",
+]);
+
 describe("Stage 2 planning recommendation engine", () => {
   it("selects architecture and profit recommendations only from eligible candidates", () => {
     const result = generatePlanningRecommendations(input());
@@ -98,20 +115,64 @@ describe("Stage 2 planning recommendation engine", () => {
     );
   });
 
-  it("marks the legal ceiling as a reference rather than an automatic recommendation", () => {
+  it("builds non-increasing floor capacities from the stepped legal envelope", () => {
+    const profile = buildSteppedEnvelopeProfile(input().parcel, 5);
+
+    expect(profile.source).toBe("legal-envelope");
+    expect(profile.capacitiesSqm).toHaveLength(5);
+    expect(profile.capacitiesSqm.every((area) => area > 0)).toBe(true);
+    for (let index = 1; index < profile.capacitiesSqm.length; index += 1) {
+      expect(profile.capacitiesSqm[index]).toBeLessThanOrEqual(
+        profile.capacitiesSqm[index - 1]
+      );
+    }
+  });
+
+  it("selects the legal ceiling only from geometry-feasible stepped candidates", () => {
     const result = generatePlanningRecommendations(input());
+    const geometryEligible = result.evaluations.filter(
+      (candidate) => candidate.geometryEligible
+    );
     const maxFar = Math.max(
-      ...result.evaluations.map(
+      ...geometryEligible.map(
         (candidate) => candidate.calculation.metrics.preliminaryFarPct
       )
     );
+    const reference = result.legalCeilingReference;
 
-    expect(result.legalCeilingReference?.recommendation?.objective).toBe(
-      "legal-ceiling"
+    expect(reference?.recommendation?.objective).toBe("legal-ceiling");
+    expect(reference?.name).toBe("배치 가능 상한 참고안");
+    expect(reference?.description).toContain("층별 정북일조");
+    expect(reference?.recommendation?.reasons.join(" ")).toContain(
+      maxFar.toFixed(1)
     );
-    expect(result.legalCeilingReference?.description).toContain("비교 기준");
+
+    const selected = geometryEligible.find(
+      (candidate) =>
+        candidate.scenario.floorPrograms.length === reference?.floorPrograms.length &&
+        Math.abs(
+          candidate.calculation.metrics.preliminaryFarPct -
+            (reference?.economicsPreview.status
+              ? maxFar
+              : Number.NaN)
+        ) < 0.01
+    );
+    expect(selected).toBeDefined();
     expect(
-      result.legalCeilingReference?.recommendation?.reasons.join(" ")
-    ).toContain(maxFar.toFixed(1));
+      selected?.calculation.checks.filter(
+        (check) => check.status === "fail" && GEOMETRY_CODES.has(check.code)
+      )
+    ).toHaveLength(0);
+
+    const floorAreas = reference?.floorPrograms
+      .filter((floor) => floor.level > 0)
+      .sort((a, b) => a.level - b.level)
+      .map((floor) =>
+        floor.zones.reduce((sum, zone) => sum + Math.max(0, zone.areaSqm), 0)
+      );
+    expect(floorAreas?.length).toBeGreaterThan(0);
+    for (let index = 1; index < (floorAreas?.length ?? 0); index += 1) {
+      expect(floorAreas?.[index]).toBeLessThanOrEqual(floorAreas?.[index - 1] ?? 0);
+    }
   });
 });
