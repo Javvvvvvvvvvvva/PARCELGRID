@@ -19,6 +19,7 @@ import {
 } from "@/lib/planning/context-parcel-alignment";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import {
   buildSketchupExportPackage,
   type ContextGeometryBuilding,
@@ -64,8 +65,9 @@ function flatGeometry(points: LocalPlanPoint[]): THREE.BufferGeometry {
   if (!hasShape(ring)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   ring.forEach((point, index) => {
-    if (index === 0) shape.moveTo(point.x, point.z);
-    else shape.lineTo(point.x, point.z);
+    const shapePoint = planningPointToThreeShape(point);
+    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+    else shape.lineTo(shapePoint.x, shapePoint.y);
   });
   shape.closePath();
   const geometry = new THREE.ShapeGeometry(shape);
@@ -82,8 +84,9 @@ function prismGeometry(
   if (!hasShape(ring)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   ring.forEach((point, index) => {
-    if (index === 0) shape.moveTo(point.x, point.z);
-    else shape.lineTo(point.x, point.z);
+    const shapePoint = planningPointToThreeShape(point);
+    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+    else shape.lineTo(shapePoint.x, shapePoint.y);
   });
   shape.closePath();
   const geometry = new THREE.ExtrudeGeometry(shape, {
