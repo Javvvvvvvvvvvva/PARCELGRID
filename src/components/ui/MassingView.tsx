@@ -14,6 +14,7 @@ import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { calcBuildableArea, type LngLat, type SunStep } from "@/lib/finance/buildable-area";
 import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import {
   layoutParkingFromBoundary,
   assessPilotiOverlap,
@@ -111,8 +112,9 @@ function FloorBox({
   const geometry = useMemo(() => {
     const shape = new THREE.Shape();
     mass.shape.forEach((p, i) => {
-      if (i === 0) shape.moveTo(p.x, p.z);
-      else shape.lineTo(p.x, p.z);
+      const shapePoint = planningPointToThreeShape(p);
+      if (i === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+      else shape.lineTo(shapePoint.x, shapePoint.y);
     });
     shape.closePath();
     const h = mass.topHeight - mass.baseHeight;
@@ -179,8 +181,9 @@ function ParkingStalls({ shapes }: { shapes: { x: number; z: number }[][] }) {
       {shapes.map((s, i) => {
         const shape = new THREE.Shape();
         s.forEach((p, j) => {
-          if (j === 0) shape.moveTo(p.x, p.z);
-          else shape.lineTo(p.x, p.z);
+          const shapePoint = planningPointToThreeShape(p);
+          if (j === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+          else shape.lineTo(shapePoint.x, shapePoint.y);
         });
         shape.closePath();
         const geo = new THREE.ShapeGeometry(shape);
@@ -210,8 +213,9 @@ function GroundPlate({ shape }: { shape: { x: number; z: number }[] }) {
   const geometry = useMemo(() => {
     const s = new THREE.Shape();
     shape.forEach((p, i) => {
-      if (i === 0) s.moveTo(p.x, p.z);
-      else s.lineTo(p.x, p.z);
+      const shapePoint = planningPointToThreeShape(p);
+      if (i === 0) s.moveTo(shapePoint.x, shapePoint.y);
+      else s.lineTo(shapePoint.x, shapePoint.y);
     });
     s.closePath();
     const geo = new THREE.ShapeGeometry(s);
