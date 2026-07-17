@@ -70,6 +70,33 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+export interface AcquisitionCapacity {
+  /** Stage 2 가정에서 손익 0이 되는 최대 토지 매입가(만원). */
+  breakEvenAcquisitionCostManwon: number;
+  /** 양수면 추가 매입 여력, 음수면 현재 매입가 초과분(만원). */
+  acquisitionHeadroomManwon: number;
+}
+
+/**
+ * 토지비만 변동한다고 가정한 Stage 2 손익분기 매입가.
+ * 금융·세금·공정까지 반영한 최종 매입 한도는 Stage 3에서 다시 계산한다.
+ */
+export function calculateAcquisitionCapacity(
+  preview: PlanningScenario["economicsPreview"]
+): AcquisitionCapacity {
+  const breakEvenAcquisitionCostManwon = Math.max(
+    0,
+    preview.expectedRevenueManwon -
+      (preview.totalCostManwon - preview.acquisitionCostManwon)
+  );
+  return {
+    breakEvenAcquisitionCostManwon: round(breakEvenAcquisitionCostManwon),
+    acquisitionHeadroomManwon: round(
+      breakEvenAcquisitionCostManwon - preview.acquisitionCostManwon
+    ),
+  };
+}
+
 function stableZone(zone: PlanningScenario["floorPrograms"][number]["zones"][number]) {
   return {
     useType: zone.useType,
