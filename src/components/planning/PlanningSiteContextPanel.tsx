@@ -325,7 +325,9 @@ function SiteScene({
         ))}
 
       {showSamples &&
-        cadastral.frontages.map((frontage) => (
+        cadastral.frontages
+          .filter((frontage) => frontage.status !== "planned-road-reference")
+          .map((frontage) => (
           <group key={`${frontage.roadParcelPnu}-${frontage.targetEdgeIndex}`}>
             <Line
               points={frontage.frontage.map(
