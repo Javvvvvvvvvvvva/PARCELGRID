@@ -462,7 +462,7 @@ function createPlanningMassData(
 
 function areaDifferenceLabel(mass: PlanningFloorMass): string {
   if (mass.level > 1 && !mass.supportedByLowerFloor) {
-    return `하부 지지 중첩 ${num(mass.supportOverlapRatio * 100, 0)}% · 구조 연결 검토`;
+    return `실제 하부 지지 ${num(mass.supportOverlapRatio * 100, 1)}% · 자동 확정 불가`;
   }
   if (!mass.fitsEnvelope) {
     return `법규 외곽선보다 ${num(mass.capacityShortfallSqm, 1)}㎡ 초과`;
@@ -488,13 +488,13 @@ function CapacityNotice({ model }: { model: PlanningMassModel }) {
   const title = !areaOk
     ? "층별 프로그램 면적 초과"
     : !supportOk
-      ? "상층 하부 지지면 부족"
-      : "배치 면적·층간 연결 가능";
+      ? "상층 완전 지지 미충족"
+      : "기하 검증 통과 · 구조 계산 별도";
   const message = !areaOk
     ? `${capacity.overCapacityFloorCount}개 층이 법규 외곽선보다 총 ${num(capacity.totalShortfallSqm, 1)}㎡ 큽니다. 3D는 현재 가능한 면적까지만 표시합니다.`
     : !supportOk
-      ? `${unsupported.map((floor) => floor.label).join(", ")}이 아래층과 충분히 겹치지 않습니다. 빨간 와이어프레임은 확정 매스가 아닌 검토 후보입니다.`
-      : "각 층 프로그램 면적이 법규 외곽선 안에 있고 상층이 바로 아래층과 최소 지지 중첩을 확보합니다.";
+      ? `${unsupported.map((floor) => `${floor.label} ${num(floor.supportOverlapRatio * 100, 1)}%`).join(", ")}만 바로 아래층과 실제로 겹칩니다. 일부 캔틸레버도 자동 승인하지 않으며 대표안 확정·내보내기 전 구조 검토가 필요합니다.`
+      : "각 층은 법규 외곽선 안에 있고, 상층 실제 다각형이 바로 아래층 내부에 완전히 포함됩니다. 이는 보수적 기하 판정이며 구조 안전은 구조기술자 계산 전까지 미확정입니다.";
 
   return (
     <div
@@ -688,7 +688,7 @@ export function PlanningMassingView({
                     : selectedMass.level > 1 &&
                         !selectedMass.supportedByLowerFloor
                       ? "하부 지지 부족"
-                      : "배치 가능"}
+                      : "기하 배치 통과"}
                 </span>
               </div>
               <p
