@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlanningMassModel,
+  calculateSupportOverlapRatio,
   polygonAreaSqm,
   polygonCentroid,
   transformPlanningFootprint,
@@ -36,6 +37,21 @@ const envelopeSteps: PlanningEnvelopeStep[] = [1, 2, -1].map((level) => ({
 }));
 
 describe("Stage 2 planning massing", () => {
+  it("measures support from the real polygons instead of their bounding boxes", () => {
+    const upper = [
+      { x: 0, z: 0 },
+      { x: 10, z: 0 },
+      { x: 0, z: 10 },
+    ];
+    const lower = [
+      { x: 10, z: 10 },
+      { x: 10, z: 0 },
+      { x: 0, z: 10 },
+    ];
+
+    expect(calculateSupportOverlapRatio(upper, lower)).toBeCloseTo(0, 8);
+  });
+
   it("applies footprint scale, placement and north setback", () => {
     const transformed = transformPlanningFootprint(square, 80, 2, placement);
 
@@ -232,7 +248,7 @@ describe("Stage 2 planning massing", () => {
     expect(upperMass.fitsEnvelope).toBe(true);
   });
 
-  it("moves a small upper footprint toward the lower floor while staying in its legal envelope", () => {
+  it("does not approve a cantilever when the legal envelope prevents full lower-floor support", () => {
     const lower = createFloorProgram(
       1,
       [createFloorZone("residential", 80, 1)],
@@ -273,8 +289,9 @@ describe("Stage 2 planning massing", () => {
 
     expect(upperMass.shape).toHaveLength(4);
     expect(upperMass.visualAreaSqm).toBeCloseTo(4, 4);
-    expect(upperMass.supportedByLowerFloor).toBe(true);
-    expect(upperMass.supportOverlapRatio).toBeGreaterThanOrEqual(0.12);
+    expect(upperMass.supportedByLowerFloor).toBe(false);
+    expect(upperMass.supportOverlapRatio).toBeGreaterThan(0);
+    expect(upperMass.supportOverlapRatio).toBeLessThan(1);
     expect(
       polygonInsidePolygon(upperMass.shape, shiftedUpperEnvelope).fits
     ).toBe(true);
