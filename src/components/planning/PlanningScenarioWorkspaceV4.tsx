@@ -360,7 +360,13 @@ function UnifiedStatusBanner({
   );
 }
 
-export function PlanningScenarioWorkspaceV4({ projectId }: { projectId: string }) {
+export function PlanningScenarioWorkspaceV4({
+  projectId,
+  embedded = false,
+}: {
+  projectId: string;
+  embedded?: boolean;
+}) {
   const data = useProjectStore((state) => state.data);
   const envelopePlan = useProjectStore((state) => state.envelopePlan);
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
@@ -570,43 +576,67 @@ export function PlanningScenarioWorkspaceV4({ projectId }: { projectId: string }
       style={{
         maxWidth: 1380,
         margin: "0 auto",
-        padding: "var(--s6) var(--s5) 80px",
+        padding: embedded
+          ? "var(--s5) var(--s5) var(--s6)"
+          : "var(--s6) var(--s5) 80px",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          marginBottom: "var(--s5)",
-          fontSize: 11.5,
-          color: "var(--fg-muted)",
-        }}
-      >
-        <Link
-          href={`/projects/${projectId}/status`}
-          style={{ color: "inherit", textDecoration: "none" }}
-        >
-          Stage 1 현황 분석
-        </Link>
-        <span>→</span>
-        <strong style={{ color: "var(--fg)" }}>Stage 2</strong>
-        <span>계획안 작성</span>
-      </div>
+      {!embedded && (
+        <>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginBottom: "var(--s5)",
+              fontSize: 11.5,
+              color: "var(--fg-muted)",
+            }}
+          >
+            <Link
+              href={`/projects/${projectId}/status`}
+              style={{ color: "inherit", textDecoration: "none" }}
+            >
+              Stage 1 현황 분석
+            </Link>
+            <span>→</span>
+            <strong style={{ color: "var(--fg)" }}>Stage 2</strong>
+            <span>계획안 작성</span>
+          </div>
 
-      <div className="page-heading">
-        <SectionTitle
-          size="lg"
-          title="계획 스튜디오"
-          desc={`${parcel.address} · ${parcel.zoning} · 층별 계획과 개략 사업성을 함께 검토합니다.`}
-        />
-        <button
-          type="button"
-          style={primaryButtonStyle}
-          onClick={() => setNewPlanOpen(true)}
-        >
-          ＋ 새 안 추가
-        </button>
-      </div>
+          <div className="page-heading">
+            <SectionTitle
+              size="lg"
+              title="계획 스튜디오"
+              desc={`${parcel.address} · ${parcel.zoning} · 층별 계획과 개략 사업성을 함께 검토합니다.`}
+            />
+            <button
+              type="button"
+              style={primaryButtonStyle}
+              onClick={() => setNewPlanOpen(true)}
+            >
+              ＋ 새 안 추가
+            </button>
+          </div>
+        </>
+      )}
+
+      {embedded && (
+        <div className="page-heading compact-heading">
+          <div>
+            <strong style={{ fontSize: 15 }}>내 계획안</strong>
+            <p style={{ margin: "4px 0 0", fontSize: 10.5, color: "var(--fg-muted)" }}>
+              {parcel.address} · {parcel.zoning}
+            </p>
+          </div>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            onClick={() => setNewPlanOpen(true)}
+          >
+            ＋ 새 안 추가
+          </button>
+        </div>
+      )}
 
       <div className="parcel-metrics">
         <Metric
