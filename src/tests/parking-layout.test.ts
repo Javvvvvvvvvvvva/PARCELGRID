@@ -102,6 +102,38 @@ describe("Stage 2 parking layout", () => {
     expect(result.warnings.join(" ")).toContain("직접진입");
   });
 
+  it("places a single piloti row when the front yard provides the maneuvering approach", () => {
+    const pilotiParcel = [
+      { x: -6, z: -9 },
+      { x: 6, z: -9 },
+      { x: 6, z: 7 },
+      { x: -6, z: 7 },
+    ];
+    const shallowPiloti = [
+      { x: -3, z: -2 },
+      { x: 3, z: -2 },
+      { x: 3, z: 4.3 },
+      { x: -3, z: 4.3 },
+    ];
+    const result = calculateParkingLayout({
+      strategy: "piloti",
+      parcelShape: pilotiParcel,
+      pilotiShape: shallowPiloti,
+      pilotiEnabled: true,
+      requiredCars: 2,
+      frontEdge: [pilotiParcel[0], pilotiParcel[1]],
+      parking: baseParking,
+    });
+
+    expect(result.capacityCars).toBe(2);
+    expect(result.accessMode).toBe("direct-frontage");
+    expect(result.requiredDepthM).toBe(5);
+    expect(result.targetDepthM).toBeCloseTo(6.3, 1);
+    expect(result.entryPath).toHaveLength(2);
+    expect(result.accessDistanceM).toBeCloseTo(7, 1);
+    expect(result.warnings.join(" ")).toContain("필로티 전면 단열");
+  });
+
   it("keeps site and depth diagnostics visible when no stall fits", () => {
     const tinyParcel = [
       { x: -2, z: -2 },

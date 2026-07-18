@@ -123,18 +123,22 @@ function svgPolygon(
 function ParkingPlanSvg({
   layout,
   frontEdge,
+  parcelShape,
 }: {
   layout: ParkingLayoutResult;
   frontEdge: [LocalPlanPoint, LocalPlanPoint] | null;
+  parcelShape: LocalPlanPoint[];
 }) {
   const width = 700;
   const height = 360;
   const bounds = boundsForShapes([
+    parcelShape,
     layout.targetShape,
     layout.exclusionShape,
     layout.aisleShape,
     layout.coreShape,
     ...layout.stalls.map((stall) => stall.corners),
+    layout.entryPath,
     frontEdge ?? [],
   ]);
 
@@ -146,12 +150,21 @@ function ParkingPlanSvg({
       style={{ width: "100%", height: "100%", display: "block" }}
     >
       <rect width={width} height={height} fill="var(--bg-sunken)" />
-      {layout.targetShape.length >= 3 && (
+      {parcelShape.length >= 3 && (
         <polygon
-          points={svgPolygon(layout.targetShape, bounds, width, height)}
-          fill="rgba(148,163,184,0.2)"
+          points={svgPolygon(parcelShape, bounds, width, height)}
+          fill="rgba(148,163,184,0.12)"
           stroke="var(--fg-muted)"
           strokeWidth="2"
+        />
+      )}
+      {layout.source === "piloti" && layout.targetShape.length >= 3 && (
+        <polygon
+          points={svgPolygon(layout.targetShape, bounds, width, height)}
+          fill="rgba(20,184,166,0.1)"
+          stroke="#0f766e"
+          strokeWidth="2"
+          strokeDasharray="6 4"
         />
       )}
       {layout.exclusionShape.length >= 3 && (
@@ -220,6 +233,26 @@ function ParkingPlanSvg({
           />
         );
       })}
+      {layout.entryPath.length >= 2 && (
+        <g>
+          <line
+            x1={svgPoint(layout.entryPath[0], bounds, width, height).x}
+            y1={svgPoint(layout.entryPath[0], bounds, width, height).y}
+            x2={svgPoint(layout.entryPath[1], bounds, width, height).x}
+            y2={svgPoint(layout.entryPath[1], bounds, width, height).y}
+            stroke="#7c3aed"
+            strokeWidth="3"
+            strokeDasharray="8 5"
+            strokeLinecap="round"
+          />
+          <circle
+            cx={svgPoint(layout.entryPath[1], bounds, width, height).x}
+            cy={svgPoint(layout.entryPath[1], bounds, width, height).y}
+            r="4"
+            fill="#7c3aed"
+          />
+        </g>
+      )}
       {frontEdge && (
         <line
           x1={svgPoint(frontEdge[0], bounds, width, height).x}
@@ -232,15 +265,15 @@ function ParkingPlanSvg({
         />
       )}
       <g transform="translate(14 20)">
-        <rect width="172" height="58" rx="8" fill="rgba(255,255,255,0.88)" />
+        <rect width="222" height="58" rx="8" fill="rgba(255,255,255,0.88)" />
         <text x="10" y="18" fontSize="12" fontWeight="700" fill="#0f172a">
           주차 배치 개략도
         </text>
         <text x="10" y="37" fontSize="11" fill="#475569">
-          초록/청록: 주차면 · 파랑: 통로
+          초록/청록: 주차면 · 파랑: 통로 · 보라: 진입
         </text>
         <text x="10" y="52" fontSize="11" fill="#475569">
-          주황: 코어 · 점: 기둥 · 빨강: 도로
+          점선 청록: 필로티 · 주황: 코어 · 빨강: 도로
         </text>
       </g>
     </svg>
@@ -416,7 +449,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
       },
       null
     );
-    return { layout, frontEdge, pilotiEnabled, recommendation };
+    return { layout, frontEdge, parcelShape, pilotiEnabled, recommendation };
   }, [parcel, scenario, calculation]);
 
   if (!parcel || !scenario || !calculation || !preview) return null;
@@ -561,7 +594,11 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                 overflow: "hidden",
               }}
             >
-              <ParkingPlanSvg layout={layout} frontEdge={preview.frontEdge} />
+              <ParkingPlanSvg
+                layout={layout}
+                frontEdge={preview.frontEdge}
+                parcelShape={preview.parcelShape}
+              />
             </div>
 
             {!requiredCarsConfirmed && (
@@ -670,6 +707,10 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               padding: 13,
               background: "var(--bg-sunken)",
               alignSelf: "start",
+              minWidth: 0,
+              maxWidth: "100%",
+              boxSizing: "border-box",
+              overflow: "hidden",
             }}
           >
             <div style={{ fontSize: 12, fontWeight: 750, marginBottom: 10 }}>
@@ -763,6 +804,18 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               <InfoRow label="배치 방향" value={`${num(layout.orientationDeg, 0)}°`} />
               <InfoRow label="진입 방식" value={ACCESS_MODE_LABEL[layout.accessMode]} />
               <InfoRow
+                label="도로–주차 진입"
+                value={
+                  layout.entryPath.length >= 2
+                    ? `${num(layout.accessDistanceM, 1)}m`
+                    : layout.accessMode === "internal-aisle"
+                      ? "내부 차로"
+                      : layout.accessMode === "direct-frontage"
+                        ? "경계 직접"
+                        : "-"
+                }
+              />
+              <InfoRow
                 label="깊이 검토"
                 value={`${num(layout.targetDepthM, 1)} / ${num(layout.requiredDepthM, 1)}m`}
               />
@@ -814,6 +867,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
           display: grid;
           grid-template-columns: minmax(0, 1fr) 300px;
           gap: 14px;
+          min-width: 0;
         }
         .parking-metrics {
           display: grid;
@@ -822,8 +876,9 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
         }
         .parking-fields {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 8px;
+          min-width: 0;
         }
         .parking-fields label {
           display: grid;
@@ -880,9 +935,9 @@ function NumberInput({
   onChange: (value: number) => void;
 }) {
   return (
-    <label>
-      <span>{label}</span>
-      <div style={{ position: "relative" }}>
+    <label style={{ display: "grid", gap: 4, minWidth: 0, maxWidth: "100%" }}>
+      <span style={{ fontSize: 9.5, color: "var(--fg-faint)" }}>{label}</span>
+      <div style={{ position: "relative", minWidth: 0, width: "100%" }}>
         <input
           type="number"
           min={0}
@@ -891,7 +946,20 @@ function NumberInput({
           onChange={(event) =>
             onChange(Math.max(0, fieldNumber(event.target.value, value)))
           }
-          style={{ paddingRight: 29 }}
+          style={{
+            display: "block",
+            minWidth: 0,
+            width: "100%",
+            maxWidth: "100%",
+            boxSizing: "border-box",
+            border: "1px solid var(--border)",
+            borderRadius: 7,
+            padding: "7px 29px 7px 8px",
+            background: "var(--bg-elev)",
+            color: "var(--fg)",
+            fontFamily: "inherit",
+            fontSize: 10.5,
+          }}
         />
         <span
           style={{
