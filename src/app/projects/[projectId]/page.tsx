@@ -9,12 +9,15 @@ import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
+import {
+  buildStage3Sensitivity,
+  findStage3BreakEvenRevenuePrice,
+  type Stage3Sensitivity,
+} from "@/lib/stage3/feasibility-analysis";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { won } from "@/lib/utils/format";
 
 const SQM_PER_PYEONG = 3.305785;
-const REVENUE_STEPS = [-10, -5, 0, 5, 10] as const;
-const COST_STEPS = [-10, -5, 0, 10, 20] as const;
 
 type Tone = "positive" | "review" | "negative" | "neutral";
 
@@ -133,8 +136,8 @@ export default function DashboardPage({
       scenario,
       [assumptions.equityIRR]
     ).results[0];
-    const sensitivity = buildSensitivity(parcel, scenario);
-    const breakEven = findBreakEvenRevenuePrice(parcel, scenario);
+    const sensitivity = buildStage3Sensitivity(parcel, scenario);
+    const breakEven = findStage3BreakEvenRevenuePrice(parcel, scenario);
     return {
       assumptions,
       acquisitionPrice,
@@ -446,51 +449,6 @@ export default function DashboardPage({
   );
 }
 
-function buildSensitivity(
-  parcel: Parameters<typeof calculateScenario>[0]["parcel"],
-  scenario: Parameters<typeof calculateScenario>[0]["scenario"]
-) {
-  const saleDriven = scenario.program.mix.residentialSale > 0;
-  const revenueField: keyof AssumptionSet = saleDriven ? "salePricePerSqM" : "rentPerSqMMonth";
-  const baseRevenue = scenario.assumptions[revenueField];
-  const baseCost = scenario.assumptions.constCostPerSqM;
-  const rows = COST_STEPS.map((costDelta) => REVENUE_STEPS.map((revenueDelta) => {
-    const assumptions = {
-      ...scenario.assumptions,
-      [revenueField]: baseRevenue * (1 + revenueDelta / 100),
-      constCostPerSqM: baseCost * (1 + costDelta / 100),
-    };
-    const result = calculateScenario({ parcel, scenario: { ...scenario, assumptions } });
-    return { profit: result.profit, irr: result.irr };
-  }));
-  return { rows, revenueLabel: saleDriven ? "매각·분양 단가" : "임대료", revenueSteps: REVENUE_STEPS, costSteps: COST_STEPS };
-}
-
-function findBreakEvenRevenuePrice(
-  parcel: Parameters<typeof calculateScenario>[0]["parcel"],
-  scenario: Parameters<typeof calculateScenario>[0]["scenario"]
-) {
-  const saleDriven = scenario.program.mix.residentialSale > 0;
-  const kind = saleDriven ? "sale" as const : "rent" as const;
-  const field: keyof AssumptionSet = saleDriven ? "salePricePerSqM" : "rentPerSqMMonth";
-  const current = scenario.assumptions[field];
-  let lo = 0;
-  let hi = Math.max(1, current * 4);
-  const profitAt = (value: number) => calculateScenario({
-    parcel,
-    scenario: { ...scenario, assumptions: { ...scenario.assumptions, [field]: value } },
-  }).profit;
-  if (profitAt(hi) < 0) return { kind, label: saleDriven ? "매각 단가" : "임대료", current, value: null, marginPct: null };
-  for (let i = 0; i < 36; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (profitAt(mid) >= 0) hi = mid;
-    else lo = mid;
-  }
-  const value = hi;
-  const marginPct = value > 0 ? ((current - value) / value) * 100 : null;
-  return { kind, label: saleDriven ? "매각 단가" : "임대료", current, value, marginPct };
-}
-
 function formatRevenuePrice(value: number, kind: "sale" | "rent") {
   if (kind === "sale") return `${Math.round((value * SQM_PER_PYEONG) / 10_000).toLocaleString()}만원/평`;
   return `${(value / 10_000).toFixed(1)}만원/㎡·월`;
@@ -538,7 +496,7 @@ function BreakdownPanel({ title, total, items }: { title: string; total: number;
   return <div><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><strong style={{ fontSize: 13 }}>{title}</strong><strong style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>{won(total)}</strong></div><div style={{ display: "grid", gap: 9, marginTop: 13 }}>{items.map(([label, value]) => <div key={label}><div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 9.5 }}><span style={{ color: "var(--fg-muted)" }}>{label}</span><span style={{ fontFamily: "var(--font-mono)" }}>{won(value)}</span></div><div style={{ height: 4, marginTop: 4, borderRadius: 999, background: "var(--bg-soft)", overflow: "hidden" }}><div style={{ width: `${Math.max(0, value / max * 100)}%`, height: "100%", background: "var(--fg-subtle)" }} /></div></div>)}</div></div>;
 }
 
-function SensitivityMatrix({ sensitivity }: { sensitivity: ReturnType<typeof buildSensitivity> }) {
+function SensitivityMatrix({ sensitivity }: { sensitivity: Stage3Sensitivity }) {
   return <div style={{ overflowX: "auto", marginTop: 14 }}><table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 4, fontSize: 9.5 }}><thead><tr><th style={{ textAlign: "left", color: "var(--fg-muted)" }}>공사비 \ 가격</th>{sensitivity.revenueSteps.map((step) => <th key={step} style={{ minWidth: 84, color: "var(--fg-muted)" }}>{step > 0 ? "+" : ""}{step}%</th>)}</tr></thead><tbody>{sensitivity.rows.map((row, ri) => <tr key={sensitivity.costSteps[ri]}><th style={{ textAlign: "left", color: "var(--fg-muted)" }}>{sensitivity.costSteps[ri] > 0 ? "+" : ""}{sensitivity.costSteps[ri]}%</th>{row.map((cell, ci) => { const base = sensitivity.costSteps[ri] === 0 && sensitivity.revenueSteps[ci] === 0; const tone: Tone = cell.profit >= 0 ? "positive" : "negative"; const colors = toneColors(tone); return <td key={sensitivity.revenueSteps[ci]} style={{ padding: "9px 7px", textAlign: "center", borderRadius: 7, outline: base ? "2px solid var(--fg)" : "none", background: colors.bg, color: colors.fg }}><strong style={{ display: "block", fontFamily: "var(--font-mono)" }}>{won(cell.profit)}</strong><small>IRR {cell.irr.toFixed(1)}%</small></td>; })}</tr>)}</tbody></table></div>;
 }
 
