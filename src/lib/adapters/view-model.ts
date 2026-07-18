@@ -88,9 +88,12 @@ export interface ScenarioVM {
   pf: number;
   ltc: number;
   dscr: number;
+  npv: number;
   irr: number;
   equityMultiple: number;
   taxBurden: number;
+  maxExposure: number;
+  paybackMonths: number;
   timeline: number;
   regulatory: number;
 
@@ -159,9 +162,12 @@ export function toScenarioVM(
     pf: result.pfLoan,
     ltc: result.ltc,
     dscr: result.dscr,
+    npv: result.npv,
     irr: result.irr,
     equityMultiple: equityMult,
     taxBurden: taxes.total,
+    maxExposure: result.maxExposure,
+    paybackMonths: result.paybackMonths,
     timeline: result.totalMonths,
     regulatory: complianceScore,
 
