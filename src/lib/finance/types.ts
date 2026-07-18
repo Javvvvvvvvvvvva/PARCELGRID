@@ -215,6 +215,8 @@ export interface ScenarioResult {
   ltc: Pct;
 
   // Returns
+  /** 요구수익률(equityIRR)로 할인한 자기자본 현금흐름 NPV */
+  npv: ManWon;
   irr: Pct;
   equityMultiple: number;
   dscr: number;
