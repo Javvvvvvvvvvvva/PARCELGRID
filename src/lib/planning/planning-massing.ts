@@ -3,6 +3,7 @@ import type {
   FloorUseType,
   PlanningPlacement,
 } from "@/lib/planning/types";
+import { featureCollection, intersect, polygon } from "@turf/turf";
 
 export interface LocalPlanPoint {
   x: number;
@@ -73,7 +74,7 @@ interface FittedFootprint {
 }
 
 const EPSILON = 1e-7;
-const MIN_SUPPORT_OVERLAP_RATIO = 0.12;
+const FULL_SUPPORT_OVERLAP_RATIO = 1 - 1e-6;
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -338,45 +339,81 @@ function fitScaledEnvelope(
   };
 }
 
-function boundingOverlapRatio(
+function closeRing(points: LocalPlanPoint[]): [number, number][] {
+  const ring = points.map(
+    (point) => [point.x, point.z] as [number, number]
+  );
+  if (ring.length > 0) ring.push([...ring[0]] as [number, number]);
+  return ring;
+}
+
+function coordinateRingArea(ring: number[][]): number {
+  if (ring.length < 4) return 0;
+  let sum = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const current = ring[index];
+    const next = ring[index + 1];
+    sum += current[0] * next[1] - next[0] * current[1];
+  }
+  return Math.abs(sum) / 2;
+}
+
+function coordinatePolygonArea(rings: number[][][]): number {
+  if (rings.length === 0) return 0;
+  return Math.max(
+    0,
+    coordinateRingArea(rings[0]) -
+      rings.slice(1).reduce((sum, ring) => sum + coordinateRingArea(ring), 0)
+  );
+}
+
+/**
+ * Returns the portion of the upper-floor footprint that is physically above
+ * the floor immediately below. This deliberately uses the real polygon
+ * intersection, not axis-aligned bounding boxes.
+ */
+export function calculateSupportOverlapRatio(
   upper: LocalPlanPoint[],
   lower: LocalPlanPoint[]
 ): number {
   if (upper.length < 3 || lower.length < 3) return 0;
-  const a = polygonBounds(upper);
-  const b = polygonBounds(lower);
-  const overlapWidth = Math.max(
-    0,
-    Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX)
-  );
-  const overlapDepth = Math.max(
-    0,
-    Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ)
-  );
-  const overlapArea = overlapWidth * overlapDepth;
-  const upperBoxArea = Math.max(
-    EPSILON,
-    (a.maxX - a.minX) * (a.maxZ - a.minZ)
-  );
-  const lowerBoxArea = Math.max(
-    EPSILON,
-    (b.maxX - b.minX) * (b.maxZ - b.minZ)
-  );
-  return clamp(overlapArea / Math.min(upperBoxArea, lowerBoxArea), 0, 1);
+  const upperArea = polygonAreaSqm(upper);
+  if (upperArea <= EPSILON) return 0;
+
+  try {
+    const overlap = intersect(
+      featureCollection([
+        polygon([closeRing(upper)]),
+        polygon([closeRing(lower)]),
+      ])
+    );
+    if (!overlap) return 0;
+    const overlapArea =
+      overlap.geometry.type === "Polygon"
+        ? coordinatePolygonArea(overlap.geometry.coordinates)
+        : overlap.geometry.coordinates.reduce(
+            (sum, rings) => sum + coordinatePolygonArea(rings),
+            0
+          );
+    return clamp(overlapArea / upperArea, 0, 1);
+  } catch {
+    // Invalid or self-intersecting input must never be treated as supported.
+    return 0;
+  }
 }
 
 function alignFootprintToSupport(
   shape: LocalPlanPoint[],
   supportShape: LocalPlanPoint[] | undefined,
   legalEnvelope: LocalPlanPoint[]
-): { shape: LocalPlanPoint[]; overlapRatio: number } {
+): { shape: LocalPlanPoint[]; overlapRatio: number; fullySupported: boolean } {
   if (!supportShape || supportShape.length < 3 || shape.length < 3) {
-    return { shape, overlapRatio: 1 };
+    return { shape, overlapRatio: 1, fullySupported: true };
   }
 
-  const initialOverlap = boundingOverlapRatio(shape, supportShape);
-  if (initialOverlap >= MIN_SUPPORT_OVERLAP_RATIO) {
-    return { shape, overlapRatio: initialOverlap };
+  const initialOverlap = calculateSupportOverlapRatio(shape, supportShape);
+  if (initialOverlap >= FULL_SUPPORT_OVERLAP_RATIO) {
+    return { shape, overlapRatio: 1, fullySupported: true };
   }
 
   const shapeCenter = polygonCentroid(shape);
@@ -390,15 +427,21 @@ function alignFootprintToSupport(
     const ratio = step / 80;
     const candidate = translateShape(shape, dx * ratio, dz * ratio);
     if (!polygonInsidePolygon(candidate, legalEnvelope)) continue;
-    const overlap = boundingOverlapRatio(candidate, supportShape);
+    const overlap = calculateSupportOverlapRatio(candidate, supportShape);
     if (overlap > bestOverlap) {
       bestOverlap = overlap;
       bestShape = candidate;
     }
-    if (overlap >= MIN_SUPPORT_OVERLAP_RATIO) break;
+    if (overlap >= FULL_SUPPORT_OVERLAP_RATIO) {
+      return { shape: candidate, overlapRatio: 1, fullySupported: true };
+    }
   }
 
-  return { shape: bestShape, overlapRatio: bestOverlap };
+  return {
+    shape: bestShape,
+    overlapRatio: bestOverlap,
+    fullySupported: false,
+  };
 }
 
 function applyPlacementTransform(
@@ -560,8 +603,7 @@ function buildMass(
     requiredSetbackM: nonNegative(envelope.requiredSetbackM),
     envelopeAvailable: envelope.envelopeAvailable,
     supportOverlapRatio: supported.overlapRatio,
-    supportedByLowerFloor:
-      !supportShape || supported.overlapRatio >= MIN_SUPPORT_OVERLAP_RATIO,
+    supportedByLowerFloor: supported.fullySupported,
     residentialUnits: countUnits(floor, ["residential"]),
     commercialUnits: countUnits(floor, ["retail", "office"]),
     dominantUse: dominantUse(floor),
