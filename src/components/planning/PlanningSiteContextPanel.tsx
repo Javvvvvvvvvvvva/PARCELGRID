@@ -251,13 +251,15 @@ function buildFocusedRoadStrip(
   ) {
     outward = { x: -outward.x, z: -outward.z };
   }
-  const referenceWidthM = Math.min(
-    12,
-    Math.max(
-      2,
-      frontage.plannedWidthAvgM ?? frontage.widthAvgM ?? 6
-    )
-  );
+  const sourceWidthM = frontage.plannedWidthAvgM ?? frontage.widthAvgM;
+  if (
+    sourceWidthM == null ||
+    !Number.isFinite(sourceWidthM) ||
+    sourceWidthM <= 0
+  ) {
+    return [];
+  }
+  const referenceWidthM = Math.min(12, Math.max(2, sourceWidthM));
   // 대상 접도부 주변만 면으로 보여 주변 건물 전체를 가르는 긴 계획도로 면을 피한다.
   const extensionM = Math.min(8, Math.max(5, referenceWidthM));
   const a = {
@@ -325,7 +327,7 @@ function RoadBoundary({
             </lineSegments>
           </group>
         )}
-        {showSourceBoundary && (
+        {(showSourceBoundary || focusedStrip.length < 3) && (
           <PolygonLine
             points={parcel.polygon}
             color="#4b5563"
