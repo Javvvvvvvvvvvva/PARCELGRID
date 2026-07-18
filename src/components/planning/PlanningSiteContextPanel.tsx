@@ -11,6 +11,7 @@ import {
   type CadastralContextSnapshot,
   type CadastralParcelFeature,
   type LocalCadastralParcel,
+  type CadastralRoadFrontage,
   type RoadClearanceAssessment,
 } from "@/lib/geo/cadastral-context";
 import {
@@ -221,16 +222,127 @@ function ContextBuilding({
   );
 }
 
-function RoadBoundary({ parcel }: { parcel: LocalCadastralParcel }) {
+function buildFocusedRoadStrip(
+  frontage: CadastralRoadFrontage,
+  roadPolygon: LocalPlanPoint[]
+): LocalPlanPoint[] {
+  const [start, end] = frontage.frontage;
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.1) return [];
+  const tangent = { x: dx / length, z: dz / length };
+  let outward = { x: -tangent.z, z: tangent.x };
+  const midpoint = { x: (start.x + end.x) / 2, z: (start.z + end.z) / 2 };
+  const roadCenter = roadPolygon.length
+    ? roadPolygon.reduce(
+        (sum, point) => ({ x: sum.x + point.x, z: sum.z + point.z }),
+        { x: 0, z: 0 }
+      )
+    : midpoint;
+  if (roadPolygon.length) {
+    roadCenter.x /= roadPolygon.length;
+    roadCenter.z /= roadPolygon.length;
+  }
+  if (
+    (roadCenter.x - midpoint.x) * outward.x +
+      (roadCenter.z - midpoint.z) * outward.z <
+    0
+  ) {
+    outward = { x: -outward.x, z: -outward.z };
+  }
+  const referenceWidthM = Math.min(
+    12,
+    Math.max(
+      2,
+      frontage.plannedWidthAvgM ?? frontage.widthAvgM ?? 6
+    )
+  );
+  // 대상 접도부 주변만 면으로 보여 주변 건물 전체를 가르는 긴 계획도로 면을 피한다.
+  const extensionM = Math.min(8, Math.max(5, referenceWidthM));
+  const a = {
+    x: start.x - tangent.x * extensionM,
+    z: start.z - tangent.z * extensionM,
+  };
+  const b = {
+    x: end.x + tangent.x * extensionM,
+    z: end.z + tangent.z * extensionM,
+  };
+  return [
+    a,
+    b,
+    {
+      x: b.x + outward.x * referenceWidthM,
+      z: b.z + outward.z * referenceWidthM,
+    },
+    {
+      x: a.x + outward.x * referenceWidthM,
+      z: a.z + outward.z * referenceWidthM,
+    },
+  ];
+}
+
+function RoadBoundary({
+  parcel,
+  frontage,
+  showSourceBoundary,
+}: {
+  parcel: LocalCadastralParcel;
+  frontage: CadastralRoadFrontage | null;
+  showSourceBoundary: boolean;
+}) {
   const geometry = useMemo(() => flatGeometry(parcel.polygon), [parcel.polygon]);
-  const upis = parcel.jimokCode === "UPIS-UQ151";
+  const upis =
+    parcel.boundarySource === "upis-planned-road" ||
+    parcel.jimokCode === "UPIS-UQ151";
+  const focusedStrip = useMemo(
+    () => (upis && frontage ? buildFocusedRoadStrip(frontage, parcel.polygon) : []),
+    [frontage, parcel.polygon, upis]
+  );
+  const focusedGeometry = useMemo(() => flatGeometry(focusedStrip), [focusedStrip]);
+
+  if (upis) {
+    return (
+      <group>
+        {focusedStrip.length >= 3 && (
+          <group>
+            <mesh geometry={focusedGeometry} position={[0, -0.028, 0]}>
+              <meshStandardMaterial
+                color="#5f6873"
+                transparent
+                opacity={0.22}
+                roughness={1}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+                depthTest
+              />
+            </mesh>
+            <lineSegments
+              geometry={new THREE.EdgesGeometry(focusedGeometry)}
+              position={[0, -0.006, 0]}
+            >
+              <lineBasicMaterial color="#374151" transparent opacity={0.62} />
+            </lineSegments>
+          </group>
+        )}
+        {showSourceBoundary && (
+          <PolygonLine
+            points={parcel.polygon}
+            color="#4b5563"
+            opacity={0.38}
+            y={-0.002}
+          />
+        )}
+      </group>
+    );
+  }
   return (
     <group>
       <mesh geometry={geometry} position={[0, -0.025, 0]}>
         <meshStandardMaterial
-          color={upis ? "#4b5563" : "#6b7280"}
+          color="#6b7280"
           transparent
-          opacity={upis ? 0.28 : 0.2}
+          opacity={0.2}
           roughness={1}
           side={THREE.DoubleSide}
           depthWrite={false}
@@ -238,7 +350,7 @@ function RoadBoundary({ parcel }: { parcel: LocalCadastralParcel }) {
       </mesh>
       <lineSegments geometry={new THREE.EdgesGeometry(geometry)} position={[0, -0.005, 0]}>
         <lineBasicMaterial
-          color={upis ? "#1f2937" : "#4b5563"}
+          color="#4b5563"
           transparent
           opacity={0.82}
         />
@@ -317,6 +429,7 @@ function SiteScene({
   showParcels,
   showRoads,
   showSamples,
+  showSourceRoadBoundary,
   roadClearance,
   extent,
 }: {
@@ -328,12 +441,18 @@ function SiteScene({
   showParcels: boolean;
   showRoads: boolean;
   showSamples: boolean;
+  showSourceRoadBoundary: boolean;
   roadClearance: RoadClearanceAssessment | null;
   extent: number;
 }) {
   const frontageIds = new Set(cadastral.frontages.map((frontage) => frontage.roadParcelPnu));
   const visibleRoads = cadastral.roadParcels.filter(
-    (parcel) => frontageIds.has(parcel.pnu) || parcel.distanceM <= 55
+    (parcel) =>
+      frontageIds.has(parcel.pnu) ||
+      ((parcel.boundarySource !== "upis-planned-road" &&
+        parcel.jimokCode !== "UPIS-UQ151") ||
+        showSourceRoadBoundary) &&
+        parcel.distanceM <= 55
   );
   const visibleParcels = cadastral.adjacentParcels.filter((parcel) => parcel.distanceM <= 45);
   const alignmentByBuilding = new Map(
@@ -360,7 +479,18 @@ function SiteScene({
         ))}
 
       {showRoads &&
-        visibleRoads.map((parcel) => <RoadBoundary key={parcel.pnu} parcel={parcel} />)}
+        visibleRoads.map((parcel) => (
+          <RoadBoundary
+            key={parcel.pnu}
+            parcel={parcel}
+            frontage={
+              cadastral.frontages.find(
+                (frontage) => frontage.roadParcelPnu === parcel.pnu
+              ) ?? null
+            }
+            showSourceBoundary={showSourceRoadBoundary}
+          />
+        ))}
 
       {showRoads &&
         planning.roads.map((road, roadIndex) => (
@@ -457,7 +587,12 @@ function calculateExtent(input: {
       building.polygons.flatMap((polygon) => polygon.outer)
     ),
     ...input.cadastral.roadParcels
-      .filter((parcel) => parcel.distanceM <= 55)
+      .filter(
+        (parcel) =>
+          parcel.distanceM <= 55 &&
+          parcel.boundarySource !== "upis-planned-road" &&
+          parcel.jimokCode !== "UPIS-UQ151"
+      )
       .flatMap((parcel) => parcel.polygon),
   ];
   let extent = 12;
@@ -485,6 +620,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const [showParcels, setShowParcels] = useState(true);
   const [showRoads, setShowRoads] = useState(true);
   const [showSamples, setShowSamples] = useState(true);
+  const [showSourceRoadBoundary, setShowSourceRoadBoundary] = useState(false);
 
   const parcel = data?.parcel;
   const scenario =
@@ -640,10 +776,32 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           {alignmentSummary.mismatchBuildings > 0 && (
             <span className="ui-tag">정합 불일치 {alignmentSummary.mismatchBuildings}동</span>
           )}
-          {primary?.widthAvgM != null && (
+          {(plannedRoadReference
+            ? primary?.plannedWidthAvgM
+            : primary?.widthAvgM) != null && (
             <span className="ui-tag">
-              폭 {num(primary.widthMinM ?? 0, 2)} / {num(primary.widthAvgM, 2)} /{" "}
-              {num(primary.widthMaxM ?? 0, 2)}m
+              {plannedRoadReference ? "계획폭 참고" : "폭"}{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthMinM
+                  : primary?.widthMinM) ?? 0,
+                2
+              )}{" "}
+              /{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthAvgM
+                  : primary?.widthAvgM) as number,
+                2
+              )}{" "}
+              /{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthMaxM
+                  : primary?.widthMaxM) ?? 0,
+                2
+              )}
+              m
             </span>
           )}
         </div>
@@ -662,7 +820,15 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               폭 샘플
             </Toggle>
           ) : (
-            <span className="ui-tag">폭 샘플 미사용</span>
+            <>
+              <span className="ui-tag">폭 샘플 미사용</span>
+              <Toggle
+                active={showSourceRoadBoundary}
+                onClick={() => setShowSourceRoadBoundary((value) => !value)}
+              >
+                원본 계획선
+              </Toggle>
+            </>
           )}
         </div>
       </div>
@@ -673,9 +839,13 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
       {plannedRoadReference && (
         <Notice>
-          현재 회색 도로는 연속지적도 도로 필지가 아니라 UPIS 도시계획시설 도로 참고
-          경계입니다. 인접 필지와 각도·위치가 다를 수 있어 지적상 도로 폭과 접도 폭
-          샘플을 확정하지 않습니다.
+          회색 면은 대상 접도부에 맞춰{" "}
+          {primary?.plannedWidthAvgM != null
+            ? `${num(primary.plannedWidthAvgM, 2)}m 계획폭`
+            : "계획도로 참고 폭"}
+          만 짧게 표시한 3D 참고 구간입니다. UPIS 원본 긴 경계는 법적 계산에
+          그대로 유지되며 ‘원본 계획선’에서 따로 확인할 수 있습니다. 현황·법정 도로폭
+          확정값은 아닙니다.
         </Notice>
       )}
       <RoadBuildingLineCard
@@ -737,6 +907,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               showParcels={showParcels}
               showRoads={showRoads}
               showSamples={showSamples}
+              showSourceRoadBoundary={showSourceRoadBoundary}
               roadClearance={primaryRoadClearance}
               extent={snapshots.extent}
             />
@@ -754,8 +925,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       >
         갈색선은 인접 지적 경계이며 별도로 회전하지 않습니다. 주변 건물과 지적선은 같은
         로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치입니다.
-        짙은 회색 면은 연속지적 도로 필지 또는 별도 표기된 UPIS 계획도로 참고
-        경계입니다. 파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
+        짙은 회색 면은 연속지적 도로 필지 또는 대상 접도부에 한정한 UPIS 계획폭 참고
+        구간입니다. UPIS 원본 경계는 토글로 분리했습니다. 파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
         경계와 충분히 평행할 때만 표시합니다. 모든 GIS 검사는 개략설계용이며 측량
         성과도를 대체하지 않습니다.
       </p>

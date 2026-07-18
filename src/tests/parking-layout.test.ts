@@ -73,6 +73,57 @@ describe("Stage 2 parking layout", () => {
     ).toBe(true);
   });
 
+  it("uses direct frontage access on small sites without forcing a 6m internal aisle", () => {
+    const smallParcel = [
+      { x: -5, z: -6 },
+      { x: 5, z: -6 },
+      { x: 5, z: 6 },
+      { x: -5, z: 6 },
+    ];
+    const rearBuilding = [
+      { x: -4, z: 0 },
+      { x: 4, z: 0 },
+      { x: 4, z: 5 },
+      { x: -4, z: 5 },
+    ];
+    const result = calculateParkingLayout({
+      strategy: "surface",
+      parcelShape: smallParcel,
+      buildingShape: rearBuilding,
+      requiredCars: 2,
+      frontEdge: [smallParcel[0], smallParcel[1]],
+      parking: { ...baseParking, strategy: "surface" },
+    });
+
+    expect(result.capacityCars).toBe(3);
+    expect(result.accessMode).toBe("direct-frontage");
+    expect(result.aisleShape).toHaveLength(0);
+    expect(result.requiredDepthM).toBe(5);
+    expect(result.warnings.join(" ")).toContain("직접진입");
+  });
+
+  it("keeps site and depth diagnostics visible when no stall fits", () => {
+    const tinyParcel = [
+      { x: -2, z: -2 },
+      { x: 2, z: -2 },
+      { x: 2, z: 2 },
+      { x: -2, z: 2 },
+    ];
+    const result = calculateParkingLayout({
+      strategy: "surface",
+      parcelShape: tinyParcel,
+      requiredCars: 1,
+      frontEdge: [tinyParcel[0], tinyParcel[1]],
+      parking: { ...baseParking, strategy: "surface" },
+    });
+
+    expect(result.capacityCars).toBe(0);
+    expect(result.supportedStrategy).toBe(true);
+    expect(result.targetShape).toEqual(tinyParcel);
+    expect(result.usableAreaSqm).toBe(16);
+    expect(result.requiredDepthM).toBe(5);
+  });
+
   it("blocks piloti capacity when the first floor has no piloti program", () => {
     const result = calculateParkingLayout({
       strategy: "piloti",
