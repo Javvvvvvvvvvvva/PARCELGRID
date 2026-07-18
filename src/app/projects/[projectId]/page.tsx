@@ -983,7 +983,7 @@ function StatusBadge({
         borderRadius: 8,
         background: colors[0],
         color: colors[1],
-        fontSize: 11px,
+        fontSize: 11,
         fontWeight: 700,
       }}
     >
@@ -1015,7 +1015,7 @@ function PlanFact({
       </span>
       <strong
         className={mono ? "mono" : undefined}
-        style={{ fontSize: mono ? 11px : 15px, overflowWrap: "anywhere" }}
+        style={{ fontSize: mono ? 11 : 15, overflowWrap: "anywhere" }}
       >
         {value}
       </strong>
@@ -1054,7 +1054,7 @@ function DecisionSignal({
     >
       <span
         style={{
-          fontSize: 10px,
+          fontSize: 10,
           fontWeight: 700,
           letterSpacing: "0.08em",
           color: "var(--fg-muted)",
@@ -1106,7 +1106,7 @@ function SectionHeader({
         style={{
           margin: 0,
           color: "var(--fg-muted)",
-          fontSize: 11px,
+          fontSize: 11,
           lineHeight: 1.5,
         }}
       >
