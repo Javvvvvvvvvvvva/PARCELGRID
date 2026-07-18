@@ -1,38 +1,39 @@
 "use client";
 
-/**
- * 대시보드 (PDF p1 디자인 풀 복원).
- *
- * 3-column 레이아웃:
- *   - 좌: ParcelRail (살아있는 컴포넌트, 별도 layout.tsx에서 렌더)
- *   - 중: 메인 (DecisionBanner + KPI + InvestmentSummary + ScenarioTable)
- *   - 우: RightSidebar (핵심 가정 + 데이터 출처 + 규제 매트릭스 + 다음 작업)
- *
- * 본인 도구 데이터 (ProjectComputed):
- *   parcel, scenarios, pfSchedule, parcelRisks, comps, meta
- */
-
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useProjectStore } from "@/lib/stores/project-store";
 import { calculateScenario } from "@/lib/finance/scenario";
-import {
-  applyEnvelopePlan,
-  applyRecommendedPlan,
-  recommendedMatchesInput,
-} from "@/lib/services/apply-envelope-plan";
-import type { EnvelopePlan } from "@/lib/stores/project-store";
-import { DecisionBanner, KPI } from "@/components/ui/KPI";
-import { ScenarioComparisonCard } from "@/components/ui/ScenarioComparisonCard";
-import { ScenarioComparisonTable } from "@/components/ui/ScenarioComparisonTable";
-import { WhyRecommendPanel } from "@/components/ui/WhyRecommendPanel";
-import { InvestmentSummary } from "@/components/ui/InvestmentSummary";
-import { SaleBasisNote } from "@/components/ui/SaleBasisNote";
-import { ScenarioTable } from "@/components/ui/ScenarioTable";
-import { RiskMatrix } from "@/components/ui/RiskMatrix";
+import type { AssumptionSet, ScenarioResult } from "@/lib/finance/types";
+import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
+import { useProjectStore } from "@/lib/stores/project-store";
+import { won } from "@/lib/utils/format";
+import type { ScenarioVM } from "@/lib/adapters/view-model";
 import { MaxAcquisitionPanel } from "@/components/ui/MaxAcquisitionPanel";
-import { won, pct, koreanDate } from "@/lib/utils/format";
-import type { RiskVM } from "@/lib/adapters/view-model";
+
+interface DashboardFinancials {
+  cost: number;
+  revenue: number;
+  profit: number;
+  profitMargin: number;
+  equity: number;
+  pf: number;
+  ltc: number;
+  dscr: number;
+  irr: number;
+  equityMultiple: number;
+  timeline: number;
+  landCost: number;
+  demolitionCost: number;
+  hardCost: number;
+  softCost: number;
+  financingCost: number;
+  contingency: number;
+  revenueSale: number;
+  revenueLease: number;
+  revenueRetail: number;
+  profitAtLowCost?: number;
+  profitAtHighCost?: number;
+}
 
 export default function DashboardPage({
   params,
@@ -40,762 +41,1389 @@ export default function DashboardPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
-  const data = useProjectStore((s) => s.data);
-  const setData = useProjectStore((s) => s.setData);
-  const envelopePlan = useProjectStore((s) => s.envelopePlan);
-  const setEnvelopePlan = useProjectStore((s) => s.setEnvelopePlan);
-  const draftAssumptions = useProjectStore((s) => s.draftAssumptions);
-  const resetDraftAssumptions = useProjectStore((s) => s.resetDraftAssumptions);
   const router = useRouter();
-  const [whyOpen, setWhyOpen] = useState(false);
-  const [appliedRecommendedMsg, setAppliedRecommendedMsg] = useState<string | null>(
-    null
+  const data = useProjectStore((state) => state.data);
+  const planningScenarios = useProjectStore(
+    (state) => state.planningScenarios
   );
-  const [recommendedApplied, setRecommendedApplied] = useState(false);
-  const [planBeforeRecommended, setPlanBeforeRecommended] =
-    useState<EnvelopePlan | null>(null);
+  const representativeScenarioId = useProjectStore(
+    (state) => state.representativePlanningScenarioId
+  );
+  const representativeGeometry = useProjectStore(
+    (state) => state.representativeGeometrySnapshot
+  );
+  const geometryValidationError = useProjectStore(
+    (state) => state.geometryValidationError
+  );
+  const draftAssumptions = useProjectStore(
+    (state) => state.draftAssumptions
+  );
+  const setDraftAssumption = useProjectStore(
+    (state) => state.setDraftAssumption
+  );
+  const resetDraftAssumptions = useProjectStore(
+    (state) => state.resetDraftAssumptions
+  );
 
-  useEffect(() => {
-    if (whyOpen) {
-      document
-        .getElementById("ai-why-panel")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [whyOpen]);
+  const projectPlanningScenarios = useMemo(
+    () =>
+      planningScenarios.filter(
+        (scenario) =>
+          scenario.projectId === projectId ||
+          scenario.id === representativeScenarioId
+      ),
+    [planningScenarios, projectId, representativeScenarioId]
+  );
 
-  // 권장(메인) 시나리오 — KPI live 재계산 대상.
-  const recForCalc = data
-    ? data.scenarios.find((s) => s.recommended) ?? data.scenarios[0]
-    : null;
-  const recDraft = recForCalc ? draftAssumptions[recForCalc.id] : undefined;
+  const context = useMemo(
+    () =>
+      resolveStage3DashboardContext({
+        projectId,
+        representativeScenarioId,
+        representativeGeometrySnapshot: representativeGeometry,
+        planningScenarios: projectPlanningScenarios,
+        financeScenarios: data?.scenarios ?? [],
+      }),
+    [
+      data?.scenarios,
+      projectId,
+      projectPlanningScenarios,
+      representativeGeometry,
+      representativeScenarioId,
+    ]
+  );
 
-  // 사이드바에서 가정을 바꾸면(draft) 즉시 재계산 — what-if 반영.
+  const activeScenarioId = context.ready
+    ? context.financeScenario.id
+    : representativeScenarioId;
+  const draft = activeScenarioId
+    ? draftAssumptions[activeScenarioId]
+    : undefined;
+
   const editedResult = useMemo(() => {
-    if (!recForCalc?._raw || !data?.parcel) return null;
-    if (!recDraft || Object.keys(recDraft).length === 0) return null;
+    if (!context.ready || !data?.parcel || !draft) return null;
+    if (Object.keys(draft).length === 0) return null;
     try {
       return calculateScenario({
         parcel: data.parcel,
         scenario: {
-          ...recForCalc._raw,
-          assumptions: { ...recForCalc._raw.assumptions, ...recDraft },
+          ...context.financeScenario._raw,
+          assumptions: {
+            ...context.financeScenario._raw.assumptions,
+            ...draft,
+          },
         },
       });
     } catch {
       return null;
     }
-  }, [recForCalc, data?.parcel, recDraft]);
+  }, [context, data?.parcel, draft]);
 
   if (!data) return null;
 
-  const rec = recForCalc!;
-  const baseScenario =
-    data.scenarios.find((s) => !s.recommended) ?? data.scenarios[1];
-
-  // 편집 반영값 (없으면 원본 VM 값)
-  const edited = editedResult != null;
-  const kpiProfit = editedResult ? editedResult.profit : rec.profit;
-  const kpiMargin = editedResult ? editedResult.profitMargin : rec.profitMargin;
-  const kpiEquity = editedResult ? editedResult.equity : rec.equity;
-  const kpiPf = editedResult ? editedResult.pfLoan : rec.pf;
-  const kpiDscr = editedResult ? editedResult.dscr : rec.dscr;
-
-  const profitDelta = baseScenario
-    ? ((kpiProfit - baseScenario.profit) / Math.abs(baseScenario.profit || 1)) *
-      100
-    : 0;
-  const marginDelta = baseScenario
-    ? kpiMargin - baseScenario.profitMargin
-    : 0;
-
-  const sc = data.scenarioComparison;
-  const canApplyRecommended =
-    !!sc &&
-    !!envelopePlan?.scenarioType &&
-    !!sc.input &&
-    !recommendedMatchesInput(sc.input, sc.recommended);
-
-  const applyButtonEnabled =
-    recommendedApplied || canApplyRecommended;
-
-  const applyRecommendedLabel = recommendedApplied
-    ? "다시 누르면 적용 전 내 계획으로 되돌립니다"
-    : !envelopePlan?.scenarioType
-      ? "먼저 Envelope에서 계획을 설정하세요"
-      : sc && sc.input && recommendedMatchesInput(sc.input, sc.recommended)
-        ? "이미 권장안과 동일합니다"
-        : undefined;
-
-  const handleToggleRecommended = () => {
-    if (!data.parcel || !sc || !envelopePlan?.scenarioType) return;
-
-    if (recommendedApplied && planBeforeRecommended) {
-      const ok = applyEnvelopePlan(
-        data.parcel,
-        planBeforeRecommended,
-        data,
-        setEnvelopePlan,
-        setData
-      );
-      if (ok) {
-        setRecommendedApplied(false);
-        const prev = planBeforeRecommended;
-        setAppliedRecommendedMsg(
-          `이전 내 계획으로 되돌렸습니다 — ${prev.floors}층 · ${prev.units > 0 ? `${prev.units}세대` : `${prev.farPct}%`}`
-        );
-      }
-      return;
-    }
-
-    if (!canApplyRecommended) return;
-
-    setPlanBeforeRecommended({ ...envelopePlan });
-    const ok = applyRecommendedPlan(
-      data.parcel,
-      sc,
-      envelopePlan,
-      data,
-      setEnvelopePlan,
-      setData
+  if (!context.ready) {
+    return (
+      <Stage3Blocked
+        title={context.title}
+        message={
+          geometryValidationError && context.code !== "missing-finance-scenario"
+            ? geometryValidationError
+            : context.message
+        }
+        projectId={projectId}
+        recalculating={context.code === "missing-finance-scenario"}
+      />
     );
-    if (ok) {
-      setRecommendedApplied(true);
-      const rec = sc.recommended;
-      setAppliedRecommendedMsg(
-        `권장안이 반영되었습니다 — ${rec.floors}층 · ${rec.units > 0 ? `${rec.units}세대` : `${rec.farUsedPct}%`}`
-      );
-    }
+  }
+
+  const { planningScenario, geometry, financeScenario } = context;
+  const financial = financials(financeScenario, editedResult);
+  const assumptionValues: AssumptionSet = {
+    ...financeScenario._raw.assumptions,
+    ...(draft ?? {}),
   };
+  const editedCount = Object.keys(draft ?? {}).length;
+  const confidence = data.saleEstimate?.confidence ?? "low";
+  const costItems = [
+    { label: "토지비", value: financial.landCost },
+    { label: "철거비", value: financial.demolitionCost },
+    { label: "직접 공사비", value: financial.hardCost },
+    { label: "설계·인허가·간접비", value: financial.softCost },
+    { label: "금융비", value: financial.financingCost },
+    { label: "예비비", value: financial.contingency },
+  ];
+  const revenueItems = [
+    { label: "분양 매출", value: financial.revenueSale },
+    { label: "임대 가치", value: financial.revenueLease },
+    { label: "근생 가치", value: financial.revenueRetail },
+  ];
+  const aboveFloors = geometry.building.aboveGroundFloors.length;
+  const basementFloors = geometry.building.basementFloors.length;
+  const unitCount = planningScenario.floorPrograms.reduce(
+    (sum, floor) =>
+      sum +
+      floor.zones.reduce(
+        (floorSum, zone) => floorSum + Math.max(0, zone.unitCount),
+        0
+      ),
+    0
+  );
+
+  const profitTone =
+    financial.profit > 0 ? "positive" : financial.profit === 0 ? "review" : "negative";
+  const debtTone =
+    financial.dscr >= 1.3
+      ? "positive"
+      : financial.dscr >= 1
+        ? "review"
+        : "negative";
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 240px",
-        gap: 16,
-        padding: 20,
-        alignItems: "start",
-      }}
-    >
-      {/* ─── 메인 영역 ─────────────────────────── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* Decision banner */}
-        <DecisionBanner
-          scenario={rec}
-          onCompare={() => router.push(`/projects/${projectId}/comparison`)}
-          onDetail={() =>
-            router.push(`/projects/${projectId}/scenarios/${rec.id}`)
-          }
-        />
+    <div className="stage3-page">
+      <header className="stage3-header">
+        <div>
+          <div className="eyebrow">STAGE 3 · FEASIBILITY</div>
+          <h1>대표 계획안의 사업성을 검토합니다</h1>
+          <p>
+            Stage 2에서 잠근 실제 매스만 사용합니다. 건축 타당성과 투자성은
+            하나의 점수로 합치지 않고 각각의 근거와 상태로 보여줍니다.
+          </p>
+        </div>
+        <div className="header-actions">
+          <StatusBadge
+            tone={geometry.validation.status === "pass" ? "positive" : "review"}
+          >
+            Geometry {geometry.validation.status === "pass" ? "확인" : "검토"}
+          </StatusBadge>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => router.push(`/projects/${projectId}/envelope`)}
+          >
+            계획 스튜디오
+          </button>
+        </div>
+      </header>
 
-        {/* 권장 vs 법적 최대 — 의사결정 도구 */}
-        {sc && (
-          <>
-            {appliedRecommendedMsg && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 12px",
-                  fontSize: 12,
-                  color: "var(--pos-fg)",
-                  background: "var(--pos-soft)",
-                  border: "1px solid var(--pos)",
-                  borderRadius: 8,
-                  marginBottom: -8,
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>{appliedRecommendedMsg}</span>
-                <span style={{ color: "var(--fg-subtle)" }}>
-                  {recommendedApplied
-                    ? "Envelope·분석에 반영됨 (직접 선택)"
-                    : "Envelope·분석에 복원됨"}
-                </span>
+      <section className="plan-lock-card">
+        <div className="plan-lock-main">
+          <span className="section-kicker">LOCKED REPRESENTATIVE</span>
+          <strong>{planningScenario.name}</strong>
+          <span>
+            v{planningScenario.version} · {aboveFloors}층
+            {basementFloors > 0 ? ` / 지하 ${basementFloors}층` : ""} ·
+            프로그램 {geometry.building.totalProgramAreaSqm.toFixed(1)}㎡
+          </span>
+        </div>
+        <PlanFact
+          label="실현 용적률"
+          value={`${geometry.building.preliminaryFarPct.toFixed(1)}%`}
+        />
+        <PlanFact
+          label="계획 세대·호"
+          value={unitCount > 0 ? `${unitCount}호` : "비주거 계획"}
+        />
+        <PlanFact
+          label="Geometry Hash"
+          value={geometry.geometryHash}
+          mono
+        />
+      </section>
+
+      <section className="signal-grid" aria-label="예비 사업성 판단">
+        <DecisionSignal
+          label="손익"
+          title={
+            financial.profit > 0
+              ? "예상 이익"
+              : financial.profit === 0
+                ? "손익분기"
+                : "예상 손실"
+          }
+          value={won(financial.profit)}
+          tone={profitTone}
+          note="현재 입력 가정 기준 · 확정 수익 아님"
+        />
+        <DecisionSignal
+          label="금융 안정성"
+          title={
+            financial.dscr >= 1.3
+              ? "예비 안정권"
+              : financial.dscr >= 1
+                ? "조건 검토"
+                : "상환여력 부족"
+          }
+          value={`DSCR ${financial.dscr.toFixed(2)}`}
+          tone={debtTone}
+          note="대주 조건·상환 구조 입력 전 예비값"
+        />
+        <DecisionSignal
+          label="가정 신뢰도"
+          title={
+            editedCount > 0
+              ? `사용자 수정 ${editedCount}건`
+              : confidence === "high"
+                ? "매각 근거 양호"
+                : confidence === "medium"
+                  ? "매각 근거 검토"
+                  : "핵심 가정 확인 필요"
+          }
+          value={
+            data.saleEstimate
+              ? `유사 사례 ${data.saleEstimate.count}건`
+              : "실거래 근거 부족"
+          }
+          tone={
+            editedCount > 0 || confidence !== "high" ? "review" : "positive"
+          }
+          note="공사비·임대료·금융조건은 사용자 확인 필요"
+        />
+      </section>
+
+      <div className="stage3-layout">
+        <main className="stage3-main">
+          <section className="dashboard-section">
+            <SectionHeader
+              eyebrow="FINANCIAL SUMMARY"
+              title="핵심 사업성"
+              description="모든 금액은 만원 기준이며, 편집한 가정은 즉시 동일 금융 엔진으로 재계산됩니다."
+            />
+            <div className="metric-grid">
+              <MetricCard label="총 사업비" value={won(financial.cost)} />
+              <MetricCard label="예상 매출·가치" value={won(financial.revenue)} />
+              <MetricCard
+                label="예상 손익"
+                value={won(financial.profit)}
+                tone={profitTone}
+              />
+              <MetricCard
+                label="이익률"
+                value={`${financial.profitMargin.toFixed(1)}%`}
+                tone={profitTone}
+              />
+              <MetricCard label="필요 자기자본" value={won(financial.equity)} />
+              <MetricCard
+                label="예상 PF"
+                value={won(financial.pf)}
+                sub={`LTC ${financial.ltc.toFixed(1)}%`}
+              />
+            </div>
+            <div className="return-strip">
+              <ReturnMetric
+                label="IRR"
+                value={`${financial.irr.toFixed(1)}%`}
+                note="자본수익률"
+              />
+              <ReturnMetric
+                label="DSCR"
+                value={financial.dscr.toFixed(2)}
+                note="원리금 상환여력"
+              />
+              <ReturnMetric
+                label="Equity Multiple"
+                value={`${financial.equityMultiple.toFixed(2)}x`}
+                note="자기자본 회수배수"
+              />
+              <ReturnMetric
+                label="사업기간"
+                value={`${Math.round(financial.timeline)}개월`}
+                note="설계·공사·회수"
+              />
+            </div>
+          </section>
+
+          <section className="dashboard-section split-section">
+            <BreakdownPanel
+              title="사업비 구성"
+              total={financial.cost}
+              items={costItems}
+            />
+            <BreakdownPanel
+              title="매출·가치 구성"
+              total={financial.revenue}
+              items={revenueItems}
+            />
+          </section>
+
+          <section className="dashboard-section">
+            <SectionHeader
+              eyebrow="SENSITIVITY"
+              title="공사비 민감도"
+              description="금융비의 2차 변화는 반영하지 않은 개략 범위입니다. 견적 입력 전 의사결정 참고용으로만 사용합니다."
+            />
+            <div className="sensitivity-grid">
+              <SensitivityCard
+                label="공사비 -15%"
+                value={financial.profitAtLowCost}
+                current={financial.profit}
+              />
+              <SensitivityCard
+                label="현재 가정"
+                value={financial.profit}
+                current={financial.profit}
+                active
+              />
+              <SensitivityCard
+                label="공사비 +20%"
+                value={financial.profitAtHighCost}
+                current={financial.profit}
+              />
+            </div>
+          </section>
+
+          {data.maxAcquisition.length > 0 && (
+            <section className="dashboard-section">
+              <SectionHeader
+                eyebrow="LAND BID"
+                title="최대 시행 가능 인수가"
+                description="목표 IRR별로 역산한 토지 매입 상한입니다. 대표 계획안과 현재 가정만 기준으로 확인하세요."
+              />
+              <MaxAcquisitionPanel
+                analyses={data.maxAcquisition.filter(
+                  (analysis) => analysis.scenarioId === financeScenario.id
+                )}
+                marketPrice={data.parcel.acquiredPrice}
+                marketProxyPrice={
+                  data.parcel.estMarketPrice && data.parcel.lotArea
+                    ? Math.round(
+                        (data.parcel.estMarketPrice * data.parcel.lotArea) /
+                          10_000
+                      )
+                    : undefined
+                }
+              />
+            </section>
+          )}
+
+          {data.scenarios.length > 1 && (
+            <section className="dashboard-section">
+              <SectionHeader
+                eyebrow="SAVED PLAN COMPARISON"
+                title="저장 계획안 사업성 비교"
+                description="Stage 2에서 저장한 계획안만 비교합니다. 대표 계획안은 별도로 표시합니다."
+              />
+              <ScenarioFinanceTable
+                scenarios={data.scenarios}
+                representativeId={financeScenario.id}
+                onOpen={(id) =>
+                  router.push(`/projects/${projectId}/scenarios/${id}`)
+                }
+              />
+            </section>
+          )}
+        </main>
+
+        <aside className="stage3-sidebar">
+          <section className="assumption-panel">
+            <div className="assumption-heading">
+              <div>
+                <span className="section-kicker">EDITABLE INPUTS</span>
+                <h2>핵심 가정</h2>
+              </div>
+              {editedCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => setAppliedRecommendedMsg(null)}
-                  style={{
-                    marginLeft: "auto",
-                    fontSize: 11,
-                    color: "var(--fg-muted)",
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                  }}
+                  className="text-button"
+                  onClick={() => resetDraftAssumptions(financeScenario.id)}
                 >
-                  닫기
+                  {editedCount}건 초기화
                 </button>
-              </div>
-            )}
-            <ScenarioComparisonCard
-              comparison={sc}
-              whyOpen={whyOpen}
-              onWhyClick={() => setWhyOpen((v) => !v)}
-              onApplyRecommended={handleToggleRecommended}
-              applyButtonEnabled={applyButtonEnabled}
-              recommendedApplied={recommendedApplied}
-              applyRecommendedLabel={applyRecommendedLabel}
+              )}
+            </div>
+
+            <AssumptionEditor
+              label="분양가"
+              value={assumptionValues.salePricePerSqM}
+              divisor={10_000}
+              suffix="만원/㎡"
+              step={10}
+              edited={draft?.salePricePerSqM != null}
+              source={
+                data.saleEstimate
+                  ? `실거래 ${data.saleEstimate.count}건 · ${confidenceLabel(confidence)}`
+                  : "비교사례 부족"
+              }
+              onChange={(value) =>
+                setDraftAssumption(
+                  financeScenario.id,
+                  "salePricePerSqM",
+                  value
+                )
+              }
             />
-          </>
-        )}
+            <AssumptionEditor
+              label="임대료"
+              value={assumptionValues.rentPerSqMMonth}
+              divisor={10_000}
+              suffix="만원/㎡·월"
+              step={0.1}
+              decimals={1}
+              edited={draft?.rentPerSqMMonth != null}
+              source="시장 임대사례 확인 필요"
+              onChange={(value) =>
+                setDraftAssumption(
+                  financeScenario.id,
+                  "rentPerSqMMonth",
+                  value
+                )
+              }
+            />
+            <AssumptionEditor
+              label="공사비"
+              value={assumptionValues.constCostPerSqM}
+              divisor={10_000}
+              suffix="만원/㎡"
+              step={10}
+              edited={draft?.constCostPerSqM != null}
+              source="개략 기본값 · 견적 확인 필요"
+              onChange={(value) =>
+                setDraftAssumption(
+                  financeScenario.id,
+                  "constCostPerSqM",
+                  value
+                )
+              }
+            />
+            <AssumptionEditor
+              label="공실률"
+              value={assumptionValues.vacancyRate}
+              divisor={1}
+              suffix="%"
+              step={0.5}
+              decimals={1}
+              edited={draft?.vacancyRate != null}
+              source="운영 가정"
+              onChange={(value) =>
+                setDraftAssumption(financeScenario.id, "vacancyRate", value)
+              }
+            />
+            <AssumptionEditor
+              label="PF 금리"
+              value={assumptionValues.interestRate}
+              divisor={1}
+              suffix="%"
+              step={0.1}
+              decimals={2}
+              edited={draft?.interestRate != null}
+              source="금융기관 확인 필요"
+              onChange={(value) =>
+                setDraftAssumption(financeScenario.id, "interestRate", value)
+              }
+            />
+            <AssumptionEditor
+              label="목표 LTC"
+              value={assumptionValues.ltcTarget}
+              divisor={1}
+              suffix="%"
+              step={1}
+              decimals={0}
+              edited={draft?.ltcTarget != null}
+              source="대주 조건 확인 필요"
+              onChange={(value) =>
+                setDraftAssumption(financeScenario.id, "ltcTarget", value)
+              }
+            />
 
-        {/* 상세 비교표 */}
-        {data.scenarioComparison && (
-          <ScenarioComparisonTable comparison={data.scenarioComparison} />
-        )}
-
-        {/* 왜 권장? — 버튼 클릭 시에만 펼침 (규칙 기반 계산 근거) */}
-        {data.scenarioComparison && whyOpen && (
-          <WhyRecommendPanel comparison={data.scenarioComparison} />
-        )}
-
-        {/* 가정 편집 반영 표시 */}
-        {edited && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 12px",
-              fontSize: 12,
-              color: "var(--accent)",
-              background: "var(--accent-soft)",
-              border: "1px solid var(--accent)",
-              borderRadius: 8,
-            }}
-          >
-            <span style={{ fontWeight: 600 }}>가정 편집 반영됨</span>
-            <span style={{ color: "var(--fg-subtle)" }}>
-              사이드바에서 수정한 값으로 실시간 재계산 중
-            </span>
             <button
-              onClick={() => resetDraftAssumptions(rec.id)}
-              style={{
-                marginLeft: "auto",
-                fontSize: 11.5,
-                color: "var(--fg)",
-                background: "var(--bg-elev)",
-                border: "1px solid var(--border)",
-                borderRadius: 5,
-                padding: "3px 8px",
-                cursor: "pointer",
-              }}
+              type="button"
+              className="primary-button"
+              onClick={() => router.push(`/projects/${projectId}/overrides`)}
             >
-              기본값 복원
+              모든 가정과 근거 편집
             </button>
-          </div>
-        )}
+          </section>
 
-        {/* KPI strip */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)",
-            gap: 12,
-          }}
-        >
-          <KPI
-            label="예상 이익"
-            value={won(kpiProfit)}
-            delta={baseScenario ? pct(profitDelta) : undefined}
-            deltaKind={profitDelta > 0 ? "pos" : "neg"}
-            sub="기준안 대비"
-          />
-          <KPI
-            label="이익률"
-            value={kpiMargin.toFixed(1)}
-            unit="%"
-            delta={baseScenario ? pct(marginDelta) : undefined}
-            deltaKind={marginDelta > 0 ? "pos" : "neg"}
-            sub="역삼 평균 28.4%"
-          />
-          <KPI label="필요 자본" value={won(kpiEquity)} sub={`PF ${won(kpiPf)}`} />
-          <KPI
-            label="DSCR"
-            value={kpiDscr.toFixed(2)}
-            sub="안정권 ≥ 1.30"
-            delta={kpiDscr >= 1.3 ? "안정" : "주의"}
-            deltaKind={kpiDscr >= 1.3 ? "pos" : "warn"}
-          />
-          <KPI
-            label="규제 위험"
-            value={data.parcel.risk}
-            sub={`${data.parcelRisks.length}개 중 ${data.parcelRisks.filter((r) => r.level !== "ok").length}개 협의`}
-            delta={data.parcelRisks.find((r) => r.level === "high")?.code ?? ""}
-            deltaKind="neg"
-          />
-        </div>
+          <section className="evidence-panel">
+            <span className="section-kicker">SOURCE CONTRACT</span>
+            <h2>분석 기준</h2>
+            <EvidenceRow
+              label="계획 매스"
+              value={geometry.geometryHash}
+              state="확정"
+            />
+            <EvidenceRow
+              label="좌표·단위"
+              value={`${geometry.coordinateSystem.unit} · ${geometry.coordinateSystem.horizontalCrs}`}
+              state="확정"
+            />
+            <EvidenceRow
+              label="분양가"
+              value={
+                data.saleEstimate
+                  ? data.saleEstimate.basis
+                  : "유사 실거래 부족"
+              }
+              state={data.saleEstimate ? "검토" : "미확정"}
+            />
+            <EvidenceRow
+              label="공사비"
+              value="개략 단가"
+              state="미확정"
+            />
+            <EvidenceRow
+              label="PF 조건"
+              value="사용자 입력 가정"
+              state="미확정"
+            />
+            <div className="evidence-note">
+              구조 안전·최종 법규·측량·금융 인디케이션은 이 화면에서 확정하지
+              않습니다. 보고서에는 현재 상태와 출처가 그대로 기록됩니다.
+            </div>
+          </section>
 
-        {/* 투자 요약 박스 (살아있는 InvestmentSummary) */}
-        <InvestmentSummary scenarios={data.scenarios} defaultScenarioId={rec.id} />
-        <SaleBasisNote saleEstimate={data.saleEstimate} />
-
-        {/* 최대 시행 가능 인수가 — 본인 도구의 진짜 차별화 */}
-        {data.maxAcquisition && data.maxAcquisition.length > 0 && (
-          <MaxAcquisitionPanel
-            analyses={data.maxAcquisition}
-            marketPrice={data.parcel.acquiredPrice}
-            marketProxyPrice={
-              data.parcel.estMarketPrice && data.parcel.lotArea
-                ? Math.round(
-                    (data.parcel.estMarketPrice * data.parcel.lotArea) / 10_000
-                  )
-                : undefined
-            }
-          />
-        )}
-
-        {/* 시나리오 테이블 */}
-        <ScenarioTable
-          scenarios={data.scenarios}
-          projectId={projectId}
-          selectedId={rec.id}
-          onSelect={(id) =>
-            router.push(`/projects/${projectId}/scenarios/${id}`)
-          }
-        />
+          <nav className="next-actions" aria-label="사업성 검토 다음 작업">
+            <button
+              type="button"
+              onClick={() => router.push(`/projects/${projectId}/comparison`)}
+            >
+              저장안 상세 비교
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push(`/projects/${projectId}/report`)}
+            >
+              투자 보고서 준비
+            </button>
+          </nav>
+        </aside>
       </div>
 
-      {/* ─── 우측 사이드바 ─────────────────────────── */}
-      <RightSidebar
-        scenario={rec}
-        projectId={projectId}
-        lastSyncedAt={data.meta.lastSyncedAt}
-        risks={data.parcelRisks}
-      />
+      <style jsx>{`
+        .stage3-page {
+          max-width: 1500px;
+          margin: 0 auto;
+          padding: 28px;
+          color: var(--fg);
+        }
+        .stage3-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+          margin-bottom: 22px;
+        }
+        .eyebrow,
+        .section-kicker {
+          display: block;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.16em;
+          color: var(--fg-muted);
+        }
+        .stage3-header h1 {
+          margin: 8px 0 7px;
+          font-size: clamp(27px, 3vw, 38px);
+          letter-spacing: -0.045em;
+          line-height: 1.08;
+        }
+        .stage3-header p {
+          max-width: 730px;
+          margin: 0;
+          color: var(--fg-muted);
+          font-size: 13px;
+          line-height: 1.65;
+        }
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+        .secondary-button,
+        .primary-button,
+        .next-actions button {
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-elev);
+          color: var(--fg);
+          font: inherit;
+          font-size: 12px;
+          font-weight: 650;
+          cursor: pointer;
+        }
+        .secondary-button {
+          height: 34px;
+          padding: 0 12px;
+        }
+        .plan-lock-card {
+          display: grid;
+          grid-template-columns: minmax(260px, 1.6fr) repeat(3, minmax(130px, 0.65fr));
+          gap: 1px;
+          overflow: hidden;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--border-faint);
+          margin-bottom: 14px;
+        }
+        .plan-lock-main,
+        .plan-fact {
+          background: var(--bg-elev);
+          padding: 15px 16px;
+        }
+        .plan-lock-main strong {
+          display: block;
+          margin: 6px 0 4px;
+          font-size: 17px;
+        }
+        .plan-lock-main > span:last-child {
+          font-size: 11.5px;
+          color: var(--fg-muted);
+        }
+        .signal-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+          margin-bottom: 18px;
+        }
+        .stage3-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 320px;
+          gap: 16px;
+          align-items: start;
+        }
+        .stage3-main {
+          display: grid;
+          gap: 14px;
+          min-width: 0;
+        }
+        .dashboard-section,
+        .assumption-panel,
+        .evidence-panel {
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--bg-elev);
+          padding: 18px;
+        }
+        .metric-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 9px;
+          margin-top: 15px;
+        }
+        .return-strip {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 1px;
+          margin-top: 10px;
+          overflow: hidden;
+          border: 1px solid var(--border-faint);
+          border-radius: 9px;
+          background: var(--border-faint);
+        }
+        .split-section {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 24px;
+        }
+        .sensitivity-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 9px;
+          margin-top: 14px;
+        }
+        .stage3-sidebar {
+          display: grid;
+          gap: 12px;
+          position: sticky;
+          top: 18px;
+        }
+        .assumption-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid var(--border-faint);
+        }
+        .assumption-heading h2,
+        .evidence-panel h2 {
+          margin: 5px 0 0;
+          font-size: 16px;
+        }
+        .text-button {
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: var(--accent);
+          font: inherit;
+          font-size: 11px;
+          cursor: pointer;
+        }
+        .primary-button {
+          width: 100%;
+          height: 36px;
+          margin-top: 12px;
+          background: var(--fg);
+          color: var(--bg);
+          border-color: var(--fg);
+        }
+        .evidence-note {
+          margin-top: 12px;
+          padding: 10px;
+          border-radius: 8px;
+          background: var(--bg-soft);
+          color: var(--fg-muted);
+          font-size: 10.5px;
+          line-height: 1.55;
+        }
+        .next-actions {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .next-actions button {
+          min-height: 38px;
+          padding: 7px 8px;
+        }
+        @media (max-width: 1180px) {
+          .stage3-layout {
+            grid-template-columns: 1fr;
+          }
+          .stage3-sidebar {
+            position: static;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .next-actions {
+            grid-column: 1 / -1;
+          }
+          .plan-lock-card {
+            grid-template-columns: repeat(3, 1fr);
+          }
+          .plan-lock-main {
+            grid-column: 1 / -1;
+          }
+        }
+        @media (max-width: 760px) {
+          .stage3-page {
+            padding: 18px 14px;
+          }
+          .stage3-header {
+            display: block;
+          }
+          .header-actions {
+            margin-top: 14px;
+          }
+          .signal-grid,
+          .metric-grid,
+          .sensitivity-grid,
+          .split-section,
+          .stage3-sidebar {
+            grid-template-columns: 1fr;
+          }
+          .return-strip {
+            grid-template-columns: repeat(2, 1fr);
+          }
+          .plan-lock-card {
+            grid-template-columns: 1fr;
+          }
+          .plan-lock-main {
+            grid-column: auto;
+          }
+        }
+      `}</style>
     </div>
   );
 }
 
-/* ─────────────────────────── 우측 사이드바 ─────────────────────────── */
+function financials(
+  scenario: ScenarioVM,
+  result: ScenarioResult | null
+): DashboardFinancials {
+  if (!result) {
+    return {
+      cost: scenario.cost,
+      revenue: scenario.revenue,
+      profit: scenario.profit,
+      profitMargin: scenario.profitMargin,
+      equity: scenario.equity,
+      pf: scenario.pf,
+      ltc: scenario.ltc,
+      dscr: scenario.dscr,
+      irr: scenario.irr,
+      equityMultiple: scenario.equityMultiple,
+      timeline: scenario.timeline,
+      landCost: scenario.landCost,
+      demolitionCost: scenario.demolitionCost,
+      hardCost: scenario.hardCost,
+      softCost: scenario.softCost,
+      financingCost: scenario.financingCost,
+      contingency: scenario.contingency,
+      revenueSale: scenario.revenueSale,
+      revenueLease: scenario.revenueLease,
+      revenueRetail: scenario.revenueRetail,
+      profitAtLowCost: scenario.profitAtLowCost,
+      profitAtHighCost: scenario.profitAtHighCost,
+    };
+  }
+  return {
+    cost: result.totalCost,
+    revenue: result.totalRevenue,
+    profit: result.profit,
+    profitMargin: result.profitMargin,
+    equity: result.equity,
+    pf: result.pfLoan,
+    ltc: result.ltc,
+    dscr: result.dscr,
+    irr: result.irr,
+    equityMultiple: result.equityMultiple,
+    timeline: result.totalMonths,
+    landCost: result.landCost,
+    demolitionCost: result.demolitionCost,
+    hardCost: result.hardCost,
+    softCost: result.softCost,
+    financingCost: result.financingCost,
+    contingency: result.contingency,
+    revenueSale: result.revenueSale,
+    revenueLease: result.revenueLease,
+    revenueRetail: result.revenueRetail,
+    profitAtLowCost: result.profitAtLowCost,
+    profitAtHighCost: result.profitAtHighCost,
+  };
+}
 
-function RightSidebar({
-  scenario,
+function Stage3Blocked({
+  title,
+  message,
   projectId,
-  lastSyncedAt,
-  risks,
+  recalculating,
 }: {
-  scenario: import("@/lib/adapters/view-model").ScenarioVM;
+  title: string;
+  message: string;
   projectId: string;
-  lastSyncedAt: string;
-  risks: RiskVM[];
+  recalculating: boolean;
 }) {
   const router = useRouter();
-  const draft = useProjectStore((s) => s.draftAssumptions[scenario.id]);
-  const setDraftAssumption = useProjectStore((s) => s.setDraftAssumption);
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const [risksOpen, setRisksOpen] = useState(false);
-
-  const effSale = draft?.salePricePerSqM ?? scenario.assumptions.sale;
-  const effRent = draft?.rentPerSqMMonth ?? scenario.assumptions.rent;
-  const warnCount = risks.filter((r) => r.level === "med" || r.level === "high").length;
-  // 본인 도구의 진짜 데이터 출처 (백엔드에서 호출하는 API들)
-  const dataSources = [
-    { name: "국토교통부 실거래가", date: koreanDate(lastSyncedAt) },
-    { name: "V월드 (지적/용도지역)", date: koreanDate(lastSyncedAt) },
-    { name: "MOLIT 건축물 대장", date: koreanDate(lastSyncedAt) },
-    { name: "Kakao 지오코딩", date: koreanDate(lastSyncedAt) },
-  ];
-
-  // 다음 작업 — 본인 도구에선 시나리오 기반 자동 제안 가능. 일단 정적 placeholder.
-  const nextActions = [
-    "건축심의 설계 검토",
-    "PF 인디케이션 요청 (시중은행)",
-    "주변 임대시세 추가 조사",
-    "투자위원회 보고서 준비",
-  ];
-
   return (
-    <aside
+    <div
       style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 16,
-        position: "sticky",
-        top: 20,
-      }}
-    >
-      {/* 핵심 가정 */}
-      <SidebarPanel title="핵심 가정">
-        <SidebarEditKV
-          k="분양가"
-          value={effSale}
-          unitDivisor={10000}
-          unitLabel="만/m²"
-          decimals={0}
-          source="주변 실거래 기반"
-          edited={draft?.salePricePerSqM != null}
-          onChange={(v) =>
-            setDraftAssumption(scenario.id, "salePricePerSqM", v)
-          }
-        />
-        <SidebarEditKV
-          k="임대료"
-          value={effRent}
-          unitDivisor={10000}
-          unitLabel="만/m²/월"
-          decimals={1}
-          source="기본 가정값 · 수정 필요"
-          edited={draft?.rentPerSqMMonth != null}
-          onChange={(v) =>
-            setDraftAssumption(scenario.id, "rentPerSqMMonth", v)
-          }
-        />
-        <SidebarKV
-          k="공실률"
-          v={`${scenario.assumptions.vacancy.toFixed(1)}%`}
-        />
-        <SidebarKV
-          k="Cap Rate"
-          v={`${scenario.assumptions.capRate.toFixed(1)}%`}
-        />
-        <SidebarKV
-          k="PF 금리"
-          v={`${scenario.assumptions.intRate.toFixed(2)}%`}
-        />
-        <div style={{ padding: "8px 0 0", borderTop: "1px solid var(--border-faint)", marginTop: 8 }}>
-          <button
-            onClick={() => router.push(`/projects/${projectId}/overrides`)}
-            style={{
-              width: "100%",
-              height: 26,
-              fontSize: 12,
-              fontWeight: 500,
-              color: "var(--fg)",
-              background: "var(--bg-elev)",
-              border: "1px solid var(--border)",
-              borderRadius: 5,
-              cursor: "pointer",
-            }}
-          >
-            ✎ 모든 가정 편집
-          </button>
-        </div>
-      </SidebarPanel>
-
-      {/* 데이터 출처 — 접기/펼치기 */}
-      <CollapsibleSidebarPanel
-        title="데이터 출처"
-        open={sourcesOpen}
-        onToggle={() => setSourcesOpen((v) => !v)}
-      >
-        {dataSources.map((src, i) => (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "5px 0",
-              fontSize: 12,
-            }}
-          >
-            <span
-              style={{
-                width: 4,
-                height: 4,
-                borderRadius: "50%",
-                background: "var(--pos)",
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: "var(--fg)", fontWeight: 500 }}>{src.name}</div>
-              <div
-                className="mono"
-                style={{ fontSize: 10.5, color: "var(--fg-muted)", marginTop: 1 }}
-              >
-                {src.date}
-              </div>
-            </div>
-          </div>
-        ))}
-      </CollapsibleSidebarPanel>
-
-      {/* 규제 매트릭스 — 접기/펼치기 */}
-      <CollapsibleSidebarPanel
-        title="규제 매트릭스"
-        open={risksOpen}
-        onToggle={() => setRisksOpen((v) => !v)}
-        badge={
-          warnCount > 0 ? (
-            <span
-              style={{
-                fontSize: 10.5,
-                fontWeight: 600,
-                color: "var(--warn-fg)",
-                background: "var(--warn-soft)",
-                borderRadius: 3,
-                padding: "1px 6px",
-              }}
-            >
-              {warnCount} 요주의
-            </span>
-          ) : undefined
-        }
-      >
-        <RiskMatrix risks={risks} showSummary={false} compact />
-      </CollapsibleSidebarPanel>
-
-      {/* 다음 작업 */}
-      <SidebarPanel title="다음 작업">
-        {nextActions.map((task, i) => (
-          <label
-            key={i}
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 7,
-              padding: "5px 0",
-              fontSize: 12,
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="checkbox"
-              style={{
-                marginTop: 2,
-                width: 14,
-                height: 14,
-                accentColor: "var(--fg)",
-                flexShrink: 0,
-              }}
-            />
-            <span style={{ color: "var(--fg)", lineHeight: 1.4 }}>{task}</span>
-          </label>
-        ))}
-      </SidebarPanel>
-    </aside>
-  );
-}
-
-/* ─────────────────────────── 헬퍼 ─────────────────────────── */
-
-function SidebarPanel({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "var(--bg-elev)",
-        border: "1px solid var(--border)",
-        borderRadius: 7,
-        padding: "12px 14px",
+        maxWidth: 840,
+        margin: "0 auto",
+        padding: "72px 28px",
       }}
     >
       <div
         style={{
-          fontSize: 10.5,
-          fontWeight: 600,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          color: "var(--fg-muted)",
-          marginBottom: 10,
+          border: "1px solid var(--border)",
+          borderRadius: 14,
+          background: "var(--bg-elev)",
+          padding: 28,
         }}
       >
-        {title}
-      </div>
-      <div>{children}</div>
-    </section>
-  );
-}
-
-/** 접기/펼치기 가능한 사이드바 패널 */
-function CollapsibleSidebarPanel({
-  title,
-  open,
-  onToggle,
-  badge,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  badge?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "var(--bg-elev)",
-        border: "1px solid var(--border)",
-        borderRadius: 7,
-        overflow: "hidden",
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          width: "100%",
-          padding: "10px 14px",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          textAlign: "left",
-        }}
-      >
-        <span
+        <span className="ui-tag">STAGE 3</span>
+        <h1 style={{ margin: "14px 0 8px", fontSize: 28 }}>{title}</h1>
+        <p
           style={{
-            fontSize: 10.5,
-            fontWeight: 600,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
+            margin: 0,
             color: "var(--fg-muted)",
-            flex: 1,
+            lineHeight: 1.65,
+            fontSize: 13,
           }}
         >
-          {title}
-        </span>
-        {badge}
-        <span
+          {message}
+        </p>
+        <div
           style={{
-            fontSize: 10,
-            color: "var(--fg-faint)",
-            transition: "transform 0.2s ease",
-            transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            marginTop: 18,
+            padding: "11px 12px",
+            borderRadius: 8,
+            background: "var(--bg-soft)",
+            fontSize: 11.5,
+            lineHeight: 1.55,
+            color: "var(--fg-muted)",
           }}
         >
-          ▼
-        </span>
-      </button>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateRows: open ? "1fr" : "0fr",
-          transition: "grid-template-rows 0.25s ease",
-        }}
-      >
-        <div style={{ overflow: "hidden" }}>
-          <div
-            style={{
-              padding: open ? "0 14px 12px" : "0 14px",
-              borderTop: open ? "1px solid var(--border-faint)" : "none",
-            }}
-          >
-            {children}
-          </div>
+          {recalculating
+            ? "대표 계획안의 금융 시나리오를 재계산하고 있습니다. 잠시 후에도 계속되면 계획 스튜디오에서 대표안을 다시 확정하세요."
+            : "구형 권장안이나 다른 계획안의 숫자로 대체하지 않았습니다. 대표안·Geometry Snapshot·금융 시나리오가 정확히 일치할 때만 사업성 정보를 표시합니다."}
         </div>
+        <button
+          type="button"
+          onClick={() => router.push(`/projects/${projectId}/envelope`)}
+          style={{
+            marginTop: 18,
+            height: 38,
+            padding: "0 15px",
+            border: 0,
+            borderRadius: 8,
+            background: "var(--fg)",
+            color: "var(--bg)",
+            font: "inherit",
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          계획 스튜디오에서 대표안 확인
+        </button>
       </div>
-    </section>
+    </div>
   );
 }
 
-/** 인라인 편집 가능한 가정값 (분양가·임대료) — 출처 라벨 포함 */
-function SidebarEditKV({
-  k,
-  value,
-  unitDivisor,
-  unitLabel,
-  decimals,
-  source,
-  edited,
-  onChange,
+function StatusBadge({
+  children,
+  tone,
 }: {
-  k: string;
-  value: number;
-  unitDivisor: number;
-  unitLabel: string;
-  decimals: number;
-  source: string;
-  edited: boolean;
-  onChange: (rawValue: number) => void;
+  children: React.ReactNode;
+  tone: "positive" | "review" | "negative";
 }) {
-  const display = value / unitDivisor;
-  const [focused, setFocused] = useState(false);
-  const [draft, setDraft] = useState(display.toFixed(decimals));
-
-  useEffect(() => {
-    if (!focused) setDraft(display.toFixed(decimals));
-  }, [display, decimals, focused]);
-
-  const commit = (raw: string) => {
-    const n = parseFloat(raw.replace(/,/g, ""));
-    if (!isNaN(n) && n >= 0) onChange(Math.round(n * unitDivisor));
-  };
-
+  const colors =
+    tone === "positive"
+      ? ["var(--pos-soft)", "var(--pos-fg)"]
+      : tone === "negative"
+        ? ["var(--neg-soft)", "var(--neg-fg)"]
+        : ["var(--warn-soft)", "var(--warn-fg)"];
   return (
-    <div style={{ padding: "5px 0" }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        minHeight: 34,
+        padding: "0 10px",
+        borderRadius: 8,
+        background: colors[0],
+        color: colors[1],
+        fontSize: 11px,
+        fontWeight: 700,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function PlanFact({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="plan-fact">
+      <span
+        style={{
+          display: "block",
+          marginBottom: 6,
+          color: "var(--fg-muted)",
+          fontSize: 10.5,
+        }}
+      >
+        {label}
+      </span>
+      <strong
+        className={mono ? "mono" : undefined}
+        style={{ fontSize: mono ? 11px : 15px, overflowWrap: "anywhere" }}
+      >
+        {value}
+      </strong>
+    </div>
+  );
+}
+
+function DecisionSignal({
+  label,
+  title,
+  value,
+  tone,
+  note,
+}: {
+  label: string;
+  title: string;
+  value: string;
+  tone: "positive" | "review" | "negative";
+  note: string;
+}) {
+  const border =
+    tone === "positive"
+      ? "var(--pos)"
+      : tone === "negative"
+        ? "var(--neg-fg)"
+        : "var(--warn-fg)";
+  return (
+    <article
+      style={{
+        border: "1px solid var(--border)",
+        borderTop: `3px solid ${border}`,
+        borderRadius: 10,
+        background: "var(--bg-elev)",
+        padding: "13px 14px",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 10px,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          color: "var(--fg-muted)",
+        }}
+      >
+        {label}
+      </span>
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "baseline",
-          gap: 8,
+          gap: 10,
+          marginTop: 8,
         }}
       >
-        <span style={{ color: "var(--fg-muted)", fontSize: 12 }}>{k}</span>
-        <span style={{ display: "inline-flex", alignItems: "baseline", gap: 3 }}>
-          <input
-            className="mono"
-            value={focused ? draft : display.toFixed(decimals)}
-            inputMode="decimal"
-            onFocus={() => {
-              setFocused(true);
-              setDraft(display.toFixed(decimals));
-            }}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              commit(e.target.value);
-            }}
-            onBlur={() => setFocused(false)}
-            style={{
-              width: 58,
-              textAlign: "right",
-              fontSize: 12,
-              fontWeight: 600,
-              color: edited ? "var(--accent)" : "var(--fg)",
-              background: "transparent",
-              border: "1px solid var(--border-faint)",
-              borderRadius: 4,
-              padding: "2px 5px",
-            }}
-          />
-          <span style={{ fontSize: 11, color: "var(--fg-subtle)" }}>
-            {unitLabel}
-          </span>
-        </span>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+        <strong className="mono" style={{ fontSize: 13 }}>
+          {value}
+        </strong>
       </div>
-      <div
+      <p
         style={{
+          margin: "7px 0 0",
+          color: "var(--fg-muted)",
           fontSize: 10.5,
-          color: edited ? "var(--accent)" : "var(--fg-faint)",
-          marginTop: 1,
         }}
       >
-        {edited ? "사용자 수정됨" : source}
+        {note}
+      </p>
+    </article>
+  );
+}
+
+function SectionHeader({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <span className="section-kicker">{eyebrow}</span>
+      <h2 style={{ margin: "6px 0 4px", fontSize: 17 }}>{title}</h2>
+      <p
+        style={{
+          margin: 0,
+          color: "var(--fg-muted)",
+          fontSize: 11px,
+          lineHeight: 1.5,
+        }}
+      >
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "positive" | "review" | "negative";
+}) {
+  const color =
+    tone === "positive"
+      ? "var(--pos-fg)"
+      : tone === "negative"
+        ? "var(--neg-fg)"
+        : tone === "review"
+          ? "var(--warn-fg)"
+          : "var(--fg)";
+  return (
+    <div
+      style={{
+        padding: "13px 14px",
+        borderRadius: 9,
+        border: "1px solid var(--border-faint)",
+        background: "var(--bg-soft)",
+      }}
+    >
+      <span style={{ display: "block", color: "var(--fg-muted)", fontSize: 10.5 }}>
+        {label}
+      </span>
+      <strong
+        className="mono"
+        style={{ display: "block", marginTop: 7, fontSize: 18, color }}
+      >
+        {value}
+      </strong>
+      {sub && (
+        <span style={{ display: "block", marginTop: 4, fontSize: 10, color: "var(--fg-muted)" }}>
+          {sub}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ReturnMetric({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <div style={{ background: "var(--bg-elev)", padding: "11px 12px" }}>
+      <span style={{ display: "block", color: "var(--fg-muted)", fontSize: 10 }}>
+        {label}
+      </span>
+      <strong className="mono" style={{ display: "block", marginTop: 5, fontSize: 15 }}>
+        {value}
+      </strong>
+      <span style={{ display: "block", marginTop: 2, color: "var(--fg-faint)", fontSize: 9.5 }}>
+        {note}
+      </span>
+    </div>
+  );
+}
+
+function BreakdownPanel({
+  title,
+  total,
+  items,
+}: {
+  title: string;
+  total: number;
+  items: { label: string; value: number }[];
+}) {
+  const max = Math.max(1, ...items.map((item) => item.value));
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+        <strong className="mono" style={{ fontSize: 12 }}>{won(total)}</strong>
+      </div>
+      <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
+        {items.map((item) => (
+          <div key={item.label}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 10.5 }}>
+              <span style={{ color: "var(--fg-muted)" }}>{item.label}</span>
+              <span className="mono">{won(item.value)}</span>
+            </div>
+            <div style={{ height: 4, marginTop: 4, borderRadius: 999, background: "var(--bg-soft)", overflow: "hidden" }}>
+              <div
+                style={{
+                  width: `${Math.max(0, (item.value / max) * 100)}%`,
+                  height: "100%",
+                  borderRadius: 999,
+                  background: "var(--fg-subtle)",
+                }}
+              />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function SidebarKV({ k, v }: { k: string; v: string }) {
+function SensitivityCard({
+  label,
+  value,
+  current,
+  active = false,
+}: {
+  label: string;
+  value?: number;
+  current: number;
+  active?: boolean;
+}) {
+  const available = value != null && Number.isFinite(value);
+  const delta = available ? value - current : 0;
+  const tone = available && value < 0 ? "var(--neg-fg)" : "var(--fg)";
   return (
     <div
       style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "5px 0",
-        fontSize: 12,
+        padding: "13px 14px",
+        borderRadius: 9,
+        border: `1px solid ${active ? "var(--fg)" : "var(--border-faint)"}`,
+        background: active ? "var(--bg-soft)" : "var(--bg-elev)",
       }}
     >
-      <span style={{ color: "var(--fg-muted)" }}>{k}</span>
-      <span
-        className="mono"
-        style={{ color: "var(--fg)", fontWeight: 500, fontSize: 12 }}
-      >
-        {v}
-      </span>
+      <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>{label}</span>
+      <strong className="mono" style={{ display: "block", marginTop: 7, color: tone, fontSize: 16 }}>
+        {available ? won(value) : "계산 없음"}
+      </strong>
+      {!active && available && (
+        <span style={{ display: "block", marginTop: 3, fontSize: 10, color: delta >= 0 ? "var(--pos-fg)" : "var(--neg-fg)" }}>
+          기준 대비 {delta >= 0 ? "+" : ""}{won(delta)}
+        </span>
+      )}
     </div>
   );
+}
+
+function AssumptionEditor({
+  label,
+  value,
+  divisor,
+  suffix,
+  step,
+  decimals = 0,
+  edited,
+  source,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  divisor: number;
+  suffix: string;
+  step: number;
+  decimals?: number;
+  edited: boolean;
+  source: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "block",
+        padding: "10px 0",
+        borderBottom: "1px solid var(--border-faint)",
+      }}
+    >
+      <span style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 11.5, color: "var(--fg-muted)" }}>{label}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <input
+            type="number"
+            value={(value / divisor).toFixed(decimals)}
+            min={0}
+            step={step}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (Number.isFinite(next) && next >= 0) onChange(next * divisor);
+            }}
+            style={{
+              width: 82,
+              height: 28,
+              border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`,
+              borderRadius: 6,
+              background: "var(--bg)",
+              color: edited ? "var(--accent)" : "var(--fg)",
+              textAlign: "right",
+              padding: "0 6px",
+              font: "inherit",
+              fontSize: 11.5,
+              fontWeight: 650,
+            }}
+          />
+          <span style={{ color: "var(--fg-faint)", fontSize: 9.5 }}>{suffix}</span>
+        </span>
+      </span>
+      <span
+        style={{
+          display: "block",
+          marginTop: 4,
+          color: edited ? "var(--accent)" : "var(--fg-faint)",
+          fontSize: 9.5,
+        }}
+      >
+        {edited ? "사용자 수정 · 실시간 재계산" : source}
+      </span>
+    </label>
+  );
+}
+
+function EvidenceRow({
+  label,
+  value,
+  state,
+}: {
+  label: string;
+  value: string;
+  state: "확정" | "검토" | "미확정";
+}) {
+  const color =
+    state === "확정"
+      ? "var(--pos-fg)"
+      : state === "검토"
+        ? "var(--warn-fg)"
+        : "var(--neg-fg)";
+  return (
+    <div style={{ padding: "9px 0", borderBottom: "1px solid var(--border-faint)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>{label}</span>
+        <span style={{ fontSize: 9.5, fontWeight: 700, color }}>{state}</span>
+      </div>
+      <div style={{ marginTop: 3, fontSize: 10.5, lineHeight: 1.45, overflowWrap: "anywhere" }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ScenarioFinanceTable({
+  scenarios,
+  representativeId,
+  onOpen,
+}: {
+  scenarios: ScenarioVM[];
+  representativeId: string;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div style={{ overflowX: "auto", marginTop: 14 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr style={{ color: "var(--fg-muted)", textAlign: "right" }}>
+            <th style={{ textAlign: "left", padding: "8px 9px" }}>계획안</th>
+            <th style={{ padding: "8px 9px" }}>총 사업비</th>
+            <th style={{ padding: "8px 9px" }}>매출·가치</th>
+            <th style={{ padding: "8px 9px" }}>손익</th>
+            <th style={{ padding: "8px 9px" }}>IRR</th>
+            <th style={{ padding: "8px 9px" }}>DSCR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scenarios.map((scenario) => {
+            const representative = scenario.id === representativeId;
+            return (
+              <tr
+                key={scenario.id}
+                onClick={() => onOpen(scenario.id)}
+                style={{
+                  borderTop: "1px solid var(--border-faint)",
+                  background: representative ? "var(--accent-soft)" : "transparent",
+                  cursor: "pointer",
+                  textAlign: "right",
+                }}
+              >
+                <td style={{ textAlign: "left", padding: "10px 9px" }}>
+                  <strong>{scenario.name}</strong>
+                  {representative && (
+                    <span style={{ marginLeft: 6, color: "var(--accent)", fontSize: 9.5 }}>
+                      대표안
+                    </span>
+                  )}
+                </td>
+                <td className="mono" style={{ padding: "10px 9px" }}>{won(scenario.cost)}</td>
+                <td className="mono" style={{ padding: "10px 9px" }}>{won(scenario.revenue)}</td>
+                <td className="mono" style={{ padding: "10px 9px", color: scenario.profit >= 0 ? "var(--pos-fg)" : "var(--neg-fg)" }}>{won(scenario.profit)}</td>
+                <td className="mono" style={{ padding: "10px 9px" }}>{scenario.irr.toFixed(1)}%</td>
+                <td className="mono" style={{ padding: "10px 9px" }}>{scenario.dscr.toFixed(2)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function confidenceLabel(confidence: "high" | "medium" | "low"): string {
+  return confidence === "high"
+    ? "신뢰도 높음"
+    : confidence === "medium"
+      ? "신뢰도 보통"
+      : "신뢰도 낮음";
 }
