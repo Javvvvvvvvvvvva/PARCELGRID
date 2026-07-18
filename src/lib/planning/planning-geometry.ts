@@ -335,7 +335,7 @@ function buildValidation(
         severity: "fail",
         floorId: floor.id,
         floorLabel: floor.label,
-        message: `${floor.label}의 하부 지지 중첩이 부족합니다.`,
+        message: `${floor.label} 실제 외곽선의 하부 지지율이 ${(floor.supportOverlapRatio * 100).toFixed(1)}%입니다. 상층 전체가 바로 아래층 안에 들어오지 않아 자동 확정할 수 없습니다.`,
       });
     }
     if (!Number.isFinite(floor.floorHeightM) || floor.floorHeightM <= 0) {
