@@ -100,6 +100,42 @@ describe("Planning Geometry Contract", () => {
     ).toBe(true);
   });
 
+  it("blocks representative confirmation and export for an unsupported upper floor", () => {
+    const boundary = squareBoundary();
+    const origin = planningRingCentroid(boundary);
+    const lotAreaSqm = polygonAreaSqm(
+      planningRingToLocalMeters(boundary, origin)
+    );
+    const scenario = scenarioWithArea(20);
+    const upper = createFloorProgram(
+      2,
+      [createFloorZone("residential", 20, 1)],
+      3
+    );
+    upper.northSetbackM = 50;
+    scenario.floorPrograms.push(upper);
+
+    const snapshot = buildPlanningGeometry({
+      projectId: "parcel-1",
+      scenario,
+      boundary,
+      lotAreaSqm,
+      zoning: "일반상업지역",
+      roads: [],
+      setback: { road: 0, side: 0, rear: 0 },
+    }).snapshot;
+
+    expect(snapshot.building.floors[1].supportedByLowerFloor).toBe(false);
+    expect(snapshot.validation.status).toBe("fail");
+    expect(snapshot.validation.representativeEligible).toBe(false);
+    expect(snapshot.validation.exportable).toBe(false);
+    expect(
+      snapshot.validation.issues.some(
+        (issue) => issue.code === "floor-support-insufficient"
+      )
+    ).toBe(true);
+  });
+
   it("creates a stable geometry hash independent of generation time", () => {
     const first = build(100, 100, "2026-07-14T00:00:00.000Z");
     const second = build(100, 100, "2026-07-15T00:00:00.000Z");
