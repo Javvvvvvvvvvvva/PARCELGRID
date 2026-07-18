@@ -28,6 +28,7 @@ import { AddressAutocomplete } from "@/components/ui/AddressAutocomplete";
 import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
 import type { BuildingInfo, RedevelopmentSignal } from "@/lib/integrations/molit-building";
+import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
 
 /* ─────────────────────────── 타입 ─────────────────────────── */
 
@@ -76,13 +77,12 @@ interface LookupResult {
   } | null;
 }
 
-interface EstimateResult {
-  estimatedPriceManwon: number;
-  estimatedPricePerPyeong: number;
-  method: "house-comps" | "by-comps" | "by-publicvalue" | "hybrid";
-  confidence: "high" | "medium" | "low";
+interface EstimateResult extends AcquisitionEstimateSnapshot {
   /** 추정 C: 구축 단독/다가구 토지 proxy (사례·근거) */
   houseEstimate?: import("@/lib/finance/land-price-from-comps").LandPriceEstimate;
+  marketMedianPerPyeong?: number;
+  marketMedianManwon?: number;
+  details?: AcquisitionEstimateSnapshot["details"];
   transactionCount?: number;
   transactions?: Array<{
     priceManwon: number;
@@ -201,6 +201,18 @@ export default function NewParcelPage() {
       estMarketPrice: estimate
         ? Math.round((estimate.estimatedPriceManwon * 10_000) / parcel.lotArea)
         : parcel.landPrice * 2,
+      acquisitionEstimate: estimate
+        ? {
+            estimatedPriceManwon: estimate.estimatedPriceManwon,
+            estimatedPricePerPyeong: estimate.estimatedPricePerPyeong,
+            method: estimate.method,
+            confidence: estimate.confidence,
+            marketMedianPerPyeong: estimate.marketMedianPerPyeong,
+            marketMedianManwon: estimate.marketMedianManwon,
+            transactionCount: estimate.transactionCount,
+            details: estimate.details,
+          }
+        : undefined,
       acquired: acquiredDate,
       acquiredPrice,
       demolitionCost,
