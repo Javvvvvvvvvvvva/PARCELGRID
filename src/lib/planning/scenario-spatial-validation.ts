@@ -95,7 +95,7 @@ function buildSpatialChecks(
   const supportDetails = supportFailures
     .map(
       (floor) =>
-        `${floor.label} 하부 중첩 ${round(floor.supportOverlapRatio * 100, 0)}%`
+        `${floor.label} 실제 하부 지지 ${round(floor.supportOverlapRatio * 100, 1)}%`
     )
     .join(" · ");
 
@@ -124,13 +124,13 @@ function buildSpatialChecks(
     },
     {
       code: "spatial-floor-support",
-      label: "층간 구조 연결",
+      label: "층간 기하 지지",
       status: supportFailures.length > 0 ? "fail" : "pass",
       message:
         supportFailures.length > 0
-          ? `${supportFailures.length}개 상층이 아래층과 충분히 겹치지 않습니다. ${supportDetails}. 법규 외곽선 안에서 연결 가능한 위치 또는 구조 전이 계획이 필요합니다.`
-          : "모든 지상 상층이 바로 아래층과 최소 지지 중첩을 확보합니다.",
-      source: "층별 매스 하부 중첩 예비 판정",
+          ? `${supportFailures.length}개 상층의 실제 외곽선 전체가 바로 아래층 내부에 포함되지 않습니다. ${supportDetails}. 자동 확정할 수 없으며, 배치를 조정하거나 별도 구조 모델과 구조기술자 검토를 반영해야 합니다.`
+          : "모든 지상 상층의 실제 외곽선이 바로 아래층 내부에 완전히 포함됩니다. 이는 보수적 기하 판정이며 구조 안전을 확정하지 않습니다.",
+      source: "실제 다각형 교차면적·완전 지지 예비 판정",
     },
   ];
 
