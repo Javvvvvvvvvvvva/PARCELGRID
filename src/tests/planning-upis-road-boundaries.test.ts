@@ -109,10 +109,61 @@ describe("VWorld UPIS road boundaries", () => {
       parcels: parsed.parcels,
     });
     expect(snapshot.summary.roadParcelCount).toBe(1);
-    expect(snapshot.summary.verifiedWidthFrontageCount).toBe(1);
-    expect(snapshot.summary.primaryWidthMinM).toBeCloseTo(6, 1);
-    expect(snapshot.summary.primaryWidthAvgM).toBeCloseTo(6, 1);
-    expect(snapshot.summary.primaryWidthMaxM).toBeCloseTo(6, 1);
+    expect(snapshot.summary.verifiedWidthFrontageCount).toBe(0);
+    expect(snapshot.summary.primaryWidthMinM).toBeNull();
+    expect(snapshot.summary.primaryWidthAvgM).toBeNull();
+    expect(snapshot.summary.primaryWidthMaxM).toBeNull();
+    expect(snapshot.summary.primaryPlannedWidthMinM).toBeCloseTo(6, 1);
+    expect(snapshot.summary.primaryPlannedWidthAvgM).toBeCloseTo(6, 1);
+    expect(snapshot.summary.primaryPlannedWidthMaxM).toBeCloseTo(6, 1);
+    expect(snapshot.frontages[0]?.status).toBe("planned-road-reference");
+    expect(snapshot.frontages[0]?.widthSamples).toHaveLength(0);
+    expect(snapshot.roadClearances[0]?.intrudes).toBe(false);
+    expect(snapshot.summary.primaryMassRoadClearanceM).toBeGreaterThan(0);
+    expect(snapshot.validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "upis-planned-road-reference-only" }),
+      ])
+    );
+  });
+
+  it("blocks a plan whose mass crosses an UPIS planned-road boundary", () => {
+    const overlappingRoad = localRingToLngLat([
+      [4, 15],
+      [10, 15],
+      [10, -15],
+      [4, -15],
+      [4, 15],
+    ]);
+    const parsed = parseUpisRoadFeatures({
+      center: { lng: ORIGIN[0], lat: ORIGIN[1] },
+      radiusM: 120,
+      maxCount: 20,
+      features: [
+        {
+          geometry: { type: "Polygon", coordinates: [overlappingRoad] },
+          properties: {
+            PRESENT_SN: "OVERLAP-01",
+            DGM_NM: "소로3류",
+          },
+        },
+      ],
+    });
+    const snapshot = buildCadastralContext({
+      planning: planning(),
+      targetPnu: "upis-target",
+      parcels: parsed.parcels,
+    });
+
+    expect(snapshot.summary.roadIntrusionCount).toBe(1);
+    expect(snapshot.roadClearances[0]?.intrusionAreaSqm).toBeGreaterThan(0);
+    expect(snapshot.validation.status).toBe("fail");
+    expect(snapshot.validation.usable).toBe(false);
+    expect(snapshot.validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "planned-road-mass-intrusion" }),
+      ])
+    );
   });
 
   it("supports uppercase SHP-style property names and MultiPolygon parts", () => {

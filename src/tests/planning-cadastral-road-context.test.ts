@@ -134,7 +134,38 @@ describe("Cadastral road context", () => {
     expect(snapshot.summary.primaryWidthMaxM).toBeCloseTo(6, 2);
     expect(snapshot.frontages[0].boundaryGapM).toBeCloseTo(0, 2);
     expect(snapshot.frontages[0].widthSamples.length).toBe(5);
+    expect(snapshot.summary.primaryPlannedWidthAvgM).toBeNull();
+    expect(snapshot.summary.roadIntrusionCount).toBe(0);
+    expect(snapshot.summary.primaryMassRoadClearanceM).toBeGreaterThan(0);
     expect(snapshot.validation.status).toBe("pass");
+  });
+
+  it("rejects an oblique road boundary instead of verifying a false frontage", () => {
+    const obliqueRoad = parcelFeature({
+      pnu: "oblique-road",
+      jibun: "비스듬한 도로",
+      jimok: "도로",
+      points: [
+        [10, 15],
+        [16, 13],
+        [26, -15],
+        [20, -13],
+      ],
+    });
+    const snapshot = buildCadastralContext({
+      planning: planning(),
+      targetPnu: "target-pnu",
+      parcels: [obliqueRoad],
+    });
+
+    expect(snapshot.frontages).toHaveLength(0);
+    expect(snapshot.summary.verifiedWidthFrontageCount).toBe(0);
+    expect(snapshot.summary.primaryWidthAvgM).toBeNull();
+    expect(snapshot.validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "cadastral-road-width-review" }),
+      ])
+    );
   });
 
   it("keeps a stable hash and changes it when road width changes", () => {

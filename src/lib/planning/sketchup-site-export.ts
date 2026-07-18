@@ -267,6 +267,7 @@ function createSiteMeshes(input: {
   });
 
   for (const frontage of input.cadastral.frontages) {
+    if (frontage.status === "planned-road-reference") continue;
     meshes.push(
       ...lineMeshes({
         layer: "PG_FRONTAGE",
@@ -368,8 +369,8 @@ function buildReadme(input: {
     "- PG_ROAD_PARCELS_CADASTRAL: 연속지적도의 지목=도로 필지",
     "- PG_ROAD_BOUNDARY_UPIS: VWorld 도시계획 도로 경계",
     "- PG_ROAD_CENTERLINE_REFERENCE: 도로명·방향 참고 중심선",
-    "- PG_FRONTAGE: 대상 필지 접도선",
-    "- PG_ROAD_WIDTH_SAMPLES: 도로 폭 수직 샘플",
+    "- PG_FRONTAGE: 연속지적 도로가 확인된 대상 필지 접도선",
+    "- PG_ROAD_WIDTH_SAMPLES: 연속지적 도로 폭 수직 샘플",
     "",
     "좌표",
     "- 단위: meter",
@@ -381,7 +382,7 @@ function buildReadme(input: {
     "주의",
     "- PG_PROPOSED_MASS만 검증된 설계 시작 기준 매스입니다.",
     "- PG_ROAD_BOUNDARY_UPIS는 도시계획 도로 도형이며 현황 포장·차도·보도 경계나 측량 성과도를 대체하지 않습니다.",
-    "- 도로 폭 최소/평균/최대값은 표시된 경계 폴리곤에서 수직 샘플로 계산했습니다.",
+    "- 도로 폭 최소/평균/최대값은 연속지적도 도로 필지가 확인된 경우에만 수직 샘플로 계산합니다.",
     "- 인허가와 실시설계 전에는 건축사 및 측량 성과도로 경계를 재확인해야 합니다.",
     "",
   ].join("\n");

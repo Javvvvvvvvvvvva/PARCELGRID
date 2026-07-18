@@ -47,6 +47,11 @@ export interface ParkingLayoutResult {
   coreShape: LocalPlanPoint[];
   columns: LocalPlanPoint[];
   orientationDeg: number;
+  accessMode: "none" | "internal-aisle" | "direct-frontage" | "mixed";
+  targetDepthM: number;
+  requiredDepthM: number;
+  entryPath: LocalPlanPoint[];
+  accessDistanceM: number;
   warnings: string[];
 }
 
@@ -71,6 +76,11 @@ interface CandidateLayout {
   rawCandidateCars: number;
   capacityCars: number;
   angleDeg: number;
+  accessMode: "internal-aisle" | "direct-frontage";
+  targetDepthM: number;
+  requiredDepthM: number;
+  entryPath: LocalPlanPoint[];
+  accessDistanceM: number;
 }
 
 function finitePositive(value: number | undefined, fallback: number): number {
@@ -140,10 +150,57 @@ function polygonInside(inner: LocalPlanPoint[], outer: LocalPlanPoint[]): boolea
   return inner.every((point) => pointInPolygon(point, outer));
 }
 
+function segmentsIntersect(
+  a: LocalPlanPoint,
+  b: LocalPlanPoint,
+  c: LocalPlanPoint,
+  d: LocalPlanPoint
+): boolean {
+  const signedArea = (
+    start: LocalPlanPoint,
+    end: LocalPlanPoint,
+    point: LocalPlanPoint
+  ) =>
+    (end.x - start.x) * (point.z - start.z) -
+    (end.z - start.z) * (point.x - start.x);
+  const abC = signedArea(a, b, c);
+  const abD = signedArea(a, b, d);
+  const cdA = signedArea(c, d, a);
+  const cdB = signedArea(c, d, b);
+  if (
+    ((abC > EPSILON && abD < -EPSILON) ||
+      (abC < -EPSILON && abD > EPSILON)) &&
+    ((cdA > EPSILON && cdB < -EPSILON) ||
+      (cdA < -EPSILON && cdB > EPSILON))
+  ) {
+    return true;
+  }
+  return (
+    (Math.abs(abC) <= EPSILON && pointOnSegment(c, a, b)) ||
+    (Math.abs(abD) <= EPSILON && pointOnSegment(d, a, b)) ||
+    (Math.abs(cdA) <= EPSILON && pointOnSegment(a, c, d)) ||
+    (Math.abs(cdB) <= EPSILON && pointOnSegment(b, c, d))
+  );
+}
+
 function shapesOverlap(a: LocalPlanPoint[], b: LocalPlanPoint[]): boolean {
   if (a.length < 3 || b.length < 3) return false;
   if (a.some((point) => pointInPolygon(point, b))) return true;
   if (b.some((point) => pointInPolygon(point, a))) return true;
+  for (let aIndex = 0; aIndex < a.length; aIndex += 1) {
+    for (let bIndex = 0; bIndex < b.length; bIndex += 1) {
+      if (
+        segmentsIntersect(
+          a[aIndex],
+          a[(aIndex + 1) % a.length],
+          b[bIndex],
+          b[(bIndex + 1) % b.length]
+        )
+      ) {
+        return true;
+      }
+    }
+  }
   const centerA = polygonCentroid(a);
   const centerB = polygonCentroid(b);
   return pointInPolygon(centerA, b) || pointInPolygon(centerB, a);
@@ -312,6 +369,11 @@ function generateCandidate(
     config.aisleWidthM,
     angleDeg
   );
+  if (!polygonInside(aisleShape, targetShape)) return null;
+  if (exclusionShape.length >= 3 && shapesOverlap(aisleShape, exclusionShape)) {
+    return null;
+  }
+  if (coreShape.length >= 3 && shapesOverlap(aisleShape, coreShape)) return null;
 
   const stalls: ParkingStallLayout[] = [];
   let index = 0;
@@ -356,7 +418,177 @@ function generateCandidate(
     rawCandidateCars: stalls.length,
     capacityCars,
     angleDeg,
+    accessMode: "internal-aisle",
+    targetDepthM: availableDepth,
+    requiredDepthM: totalDepth,
+    entryPath: [],
+    accessDistanceM: 0,
   };
+}
+
+function closestParallelEdge(
+  shape: LocalPlanPoint[],
+  reference: [LocalPlanPoint, LocalPlanPoint],
+  minimumLengthM: number
+): [LocalPlanPoint, LocalPlanPoint] | null {
+  const refDx = reference[1].x - reference[0].x;
+  const refDz = reference[1].z - reference[0].z;
+  const refLength = Math.hypot(refDx, refDz);
+  if (shape.length < 2 || refLength < EPSILON) return null;
+  const refMid = {
+    x: (reference[0].x + reference[1].x) / 2,
+    z: (reference[0].z + reference[1].z) / 2,
+  };
+  let best: {
+    edge: [LocalPlanPoint, LocalPlanPoint];
+    score: number;
+  } | null = null;
+  for (let index = 0; index < shape.length; index += 1) {
+    const start = shape[index];
+    const end = shape[(index + 1) % shape.length];
+    const dx = end.x - start.x;
+    const dz = end.z - start.z;
+    const length = Math.hypot(dx, dz);
+    if (length + EPSILON < minimumLengthM) continue;
+    const alignment = Math.abs((dx * refDx + dz * refDz) / (length * refLength));
+    if (alignment < Math.cos((18 * Math.PI) / 180)) continue;
+    const midpoint = { x: (start.x + end.x) / 2, z: (start.z + end.z) / 2 };
+    const distanceM = Math.hypot(midpoint.x - refMid.x, midpoint.z - refMid.z);
+    const score = distanceM + (1 - alignment) * 20;
+    if (!best || score < best.score) best = { edge: [start, end], score };
+  }
+  return best ? best.edge : null;
+}
+
+/**
+ * 소형 필지의 전면 직접진입 주차.
+ * 각 주차면이 전면도로에서 바로 진입하므로 별도 6m 내부 차로를 강제하지 않는다.
+ * 보도·도로점용·교차로 이격은 후속 인허가 검토로 남긴다.
+ */
+function generateDirectFrontageCandidate(
+  source: "surface" | "piloti",
+  targetShape: LocalPlanPoint[],
+  exclusionShape: LocalPlanPoint[],
+  coreShape: LocalPlanPoint[],
+  parkingEdge: [LocalPlanPoint, LocalPlanPoint],
+  roadFrontEdge: [LocalPlanPoint, LocalPlanPoint],
+  config: ParkingConfig
+): CandidateLayout | null {
+  const [start, end] = parkingEdge;
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const frontageLength = Math.hypot(dx, dz);
+  const edgeMarginM = 0.3;
+  if (frontageLength + EPSILON < config.stallWidthM + edgeMarginM * 2) {
+    return null;
+  }
+
+  const tangent = { x: dx / frontageLength, z: dz / frontageLength };
+  let inward = { x: -tangent.z, z: tangent.x };
+  const midpoint = {
+    x: (start.x + end.x) / 2,
+    z: (start.z + end.z) / 2,
+  };
+  const targetCenter = polygonCentroid(targetShape);
+  if (
+    (targetCenter.x - midpoint.x) * inward.x +
+      (targetCenter.z - midpoint.z) * inward.z <
+    0
+  ) {
+    inward = { x: -inward.x, z: -inward.z };
+  }
+
+  const maxSlots = Math.floor(
+    (frontageLength - edgeMarginM * 2 + EPSILON) / config.stallWidthM
+  );
+  const stalls: ParkingStallLayout[] = [];
+  for (let index = 0; index < maxSlots; index += 1) {
+    const offset = edgeMarginM + index * config.stallWidthM;
+    const a = {
+      x: start.x + tangent.x * offset,
+      z: start.z + tangent.z * offset,
+    };
+    const b = {
+      x: a.x + tangent.x * config.stallWidthM,
+      z: a.z + tangent.z * config.stallWidthM,
+    };
+    const corners = [
+      a,
+      b,
+      {
+        x: b.x + inward.x * config.stallDepthM,
+        z: b.z + inward.z * config.stallDepthM,
+      },
+      {
+        x: a.x + inward.x * config.stallDepthM,
+        z: a.z + inward.z * config.stallDepthM,
+      },
+    ];
+    if (!polygonInside(corners, targetShape)) continue;
+    if (exclusionShape.length >= 3 && shapesOverlap(corners, exclusionShape)) continue;
+    if (coreShape.length >= 3 && shapesOverlap(corners, coreShape)) continue;
+    stalls.push({
+      id: `${source}-direct-${index}`,
+      corners,
+      center: polygonCentroid(corners),
+      widthM: config.stallWidthM,
+      depthM: config.stallDepthM,
+      angleDeg: edgeAngle(parkingEdge) ?? 0,
+      source,
+    });
+  }
+  if (stalls.length === 0) return null;
+
+  const lossPct = source === "piloti" ? config.columnLossPct : 0;
+  const capacityCars = Math.max(
+    0,
+    Math.round(stalls.length * (1 - lossPct / 100))
+  );
+  const parkingMid = {
+    x: (parkingEdge[0].x + parkingEdge[1].x) / 2,
+    z: (parkingEdge[0].z + parkingEdge[1].z) / 2,
+  };
+  const roadMid = {
+    x: (roadFrontEdge[0].x + roadFrontEdge[1].x) / 2,
+    z: (roadFrontEdge[0].z + roadFrontEdge[1].z) / 2,
+  };
+  const accessDistanceM = Math.hypot(
+    parkingMid.x - roadMid.x,
+    parkingMid.z - roadMid.z
+  );
+  const angle = edgeAngle(parkingEdge) ?? 0;
+  const bounds = orientedBounds(targetShape, angle);
+
+  return {
+    stalls: stalls.slice(0, capacityCars),
+    aisleShape: [],
+    rawCandidateCars: stalls.length,
+    capacityCars,
+    angleDeg: angle,
+    accessMode: "direct-frontage",
+    targetDepthM: Math.max(0, bounds.maxV - bounds.minV),
+    requiredDepthM: config.stallDepthM,
+    entryPath: accessDistanceM > 0.05 ? [roadMid, parkingMid] : [],
+    accessDistanceM,
+  };
+}
+
+function candidateIsBetter(
+  candidate: CandidateLayout,
+  current: CandidateLayout | null
+): boolean {
+  if (!current) return true;
+  if (candidate.capacityCars !== current.capacityCars) {
+    return candidate.capacityCars > current.capacityCars;
+  }
+  if (candidate.rawCandidateCars !== current.rawCandidateCars) {
+    return candidate.rawCandidateCars > current.rawCandidateCars;
+  }
+  // 같은 대수라면 개별 출입구가 반복되는 직접진입형보다 내부 차로형을 우선한다.
+  return (
+    candidate.accessMode === "internal-aisle" &&
+    current.accessMode === "direct-frontage"
+  );
 }
 
 function emptyResult(
@@ -379,6 +611,11 @@ function emptyResult(
     coreShape: [],
     columns: [],
     orientationDeg: 0,
+    accessMode: "none",
+    targetDepthM: 0,
+    requiredDepthM: 0,
+    entryPath: [],
+    accessDistanceM: 0,
     warnings,
   };
 }
@@ -432,13 +669,7 @@ function calculateSingleLayout(
           offsetIndex / 6,
           config
         );
-        if (
-          candidate &&
-          (!best ||
-            candidate.capacityCars > best.capacityCars ||
-            (candidate.capacityCars === best.capacityCars &&
-              candidate.rawCandidateCars > best.rawCandidateCars))
-        ) {
+        if (candidate && candidateIsBetter(candidate, best)) {
           best = candidate;
           bestCore = coreShape;
         }
@@ -446,10 +677,64 @@ function calculateSingleLayout(
     }
   }
 
+  if (
+    input.frontEdge &&
+    (config.orientation === "auto" || config.orientation === "parallel-front")
+  ) {
+    const parkingEdge =
+      source === "surface"
+        ? input.frontEdge
+        : closestParallelEdge(
+            targetShape,
+            input.frontEdge,
+            config.stallWidthM + 0.6
+          );
+    const directAngle = parkingEdge ? edgeAngle(parkingEdge) ?? 0 : 0;
+    const directCore =
+      source === "piloti" && parkingEdge
+        ? coreRectangle(targetShape, directAngle, config.coreAreaSqm)
+        : [];
+    const direct = generateDirectFrontageCandidate(
+      source,
+      targetShape,
+      exclusionShape,
+      directCore,
+      parkingEdge ?? input.frontEdge,
+      input.frontEdge,
+      config
+    );
+    if (direct && candidateIsBetter(direct, best)) {
+      best = direct;
+      bestCore = directCore;
+    }
+  }
+
   if (!best) {
-    return emptyResult(input, source, [
-      `현재 ${source === "piloti" ? "필로티" : "지상"} 영역의 폭·깊이로는 주차면과 차량 통로를 함께 배치하지 못했습니다.`,
-    ]);
+    const angle = angles[0] ?? longestEdgeAngle(targetShape);
+    const bounds = orientedBounds(targetShape, angle);
+    const targetDepthM = Math.max(0, bounds.maxV - bounds.minV);
+    const usableAreaSqm = Math.max(
+      0,
+      polygonAreaSqm(targetShape) - polygonAreaSqm(exclusionShape)
+    );
+    return {
+      ...emptyResult(input, source, [
+        source === "surface"
+          ? `전면 직접진입에 필요한 깊이 ${config.stallDepthM.toFixed(1)}m 또는 내부 차로형 모듈 ${(config.stallDepthM + config.aisleWidthM).toFixed(1)}m를 건물 제외 영역에 확보하지 못했습니다.`
+          : `필로티 전면 단열 주차에 필요한 깊이 ${config.stallDepthM.toFixed(1)}m 또는 내부 차로형 모듈 ${(config.stallDepthM + config.aisleWidthM).toFixed(1)}m를 확보하지 못했습니다.`,
+      ]),
+      supportedStrategy: true,
+      targetShape,
+      exclusionShape,
+      usableAreaSqm,
+      targetDepthM,
+      requiredDepthM:
+        source === "surface"
+          ? config.stallDepthM
+          : input.frontEdge
+            ? config.stallDepthM
+            : config.stallDepthM + config.aisleWidthM,
+    };
   }
 
   const frontLength = input.frontEdge
@@ -465,6 +750,13 @@ function calculateSingleLayout(
   }
   if (source === "surface" && exclusionShape.length >= 3) {
     warnings.push("지상 주차는 건물 외곽선을 제외한 개략 배치이며 조경·보행로·소방 동선을 추가 확인해야 합니다.");
+  }
+  if (best.accessMode === "direct-frontage") {
+    warnings.push(
+      source === "piloti"
+        ? "필로티 전면 단열 주차입니다. 전면 마당을 진입·조향 공간으로 사용하므로 보도 횡단·출입구 허가·기둥 간섭을 확인해야 합니다."
+        : "소형 필지 전면 직접진입형입니다. 별도 내부 차로는 제외했으며 보도 횡단·출입구 허가·교차로 이격을 확인해야 합니다."
+    );
   }
   if (source === "piloti") {
     warnings.push("필로티 기둥은 개략 그리드이며 실제 구조 스팬·코어·보행 동선에 따라 재배치해야 합니다.");
@@ -497,6 +789,11 @@ function calculateSingleLayout(
     coreShape: bestCore,
     columns,
     orientationDeg: best.angleDeg,
+    accessMode: best.accessMode,
+    targetDepthM: best.targetDepthM,
+    requiredDepthM: best.requiredDepthM,
+    entryPath: best.entryPath,
+    accessDistanceM: best.accessDistanceM,
     warnings,
   };
 }
@@ -540,6 +837,15 @@ export function calculateParkingLayout(
       coreShape: piloti.coreShape,
       columns: piloti.columns,
       orientationDeg: surface.orientationDeg || piloti.orientationDeg,
+      accessMode: "mixed",
+      targetDepthM: Math.max(surface.targetDepthM, piloti.targetDepthM),
+      requiredDepthM: Math.max(surface.requiredDepthM, piloti.requiredDepthM),
+      entryPath:
+        surface.entryPath.length > 0 ? surface.entryPath : piloti.entryPath,
+      accessDistanceM: Math.max(
+        surface.accessDistanceM,
+        piloti.accessDistanceM
+      ),
       warnings: [...piloti.warnings, ...surface.warnings],
     };
   }

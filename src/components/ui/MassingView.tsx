@@ -13,7 +13,11 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { calcBuildableArea, type LngLat, type SunStep } from "@/lib/finance/buildable-area";
-import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import {
+  analyzeFrontage,
+  legalEdgeSetbacksFromFrontage,
+} from "@/lib/geo/road-frontage";
+import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import {
   layoutParkingFromBoundary,
   assessPilotiOverlap,
@@ -111,8 +115,9 @@ function FloorBox({
   const geometry = useMemo(() => {
     const shape = new THREE.Shape();
     mass.shape.forEach((p, i) => {
-      if (i === 0) shape.moveTo(p.x, p.z);
-      else shape.lineTo(p.x, p.z);
+      const shapePoint = planningPointToThreeShape(p);
+      if (i === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+      else shape.lineTo(shapePoint.x, shapePoint.y);
     });
     shape.closePath();
     const h = mass.topHeight - mass.baseHeight;
@@ -179,8 +184,9 @@ function ParkingStalls({ shapes }: { shapes: { x: number; z: number }[][] }) {
       {shapes.map((s, i) => {
         const shape = new THREE.Shape();
         s.forEach((p, j) => {
-          if (j === 0) shape.moveTo(p.x, p.z);
-          else shape.lineTo(p.x, p.z);
+          const shapePoint = planningPointToThreeShape(p);
+          if (j === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+          else shape.lineTo(shapePoint.x, shapePoint.y);
         });
         shape.closePath();
         const geo = new THREE.ShapeGeometry(shape);
@@ -210,8 +216,9 @@ function GroundPlate({ shape }: { shape: { x: number; z: number }[] }) {
   const geometry = useMemo(() => {
     const s = new THREE.Shape();
     shape.forEach((p, i) => {
-      if (i === 0) s.moveTo(p.x, p.z);
-      else s.lineTo(p.x, p.z);
+      const shapePoint = planningPointToThreeShape(p);
+      if (i === 0) s.moveTo(shapePoint.x, shapePoint.y);
+      else s.lineTo(shapePoint.x, shapePoint.y);
     });
     s.closePath();
     const geo = new THREE.ShapeGeometry(s);
@@ -287,8 +294,8 @@ function Scene({
     const sunApplies = /주거/.test(zoning);
     // 변별 이격 (엔진과 동일 로직 — 도로 접면 기반, 가정값 + 민법 0.5m 하한)
     const frontage =
-      roads && roads.length > 0 && setback ? analyzeFrontage(boundary, roads) : null;
-    const edgeSetbacks = edgeSetbacksFromFrontage(frontage, setback ?? { road: 0.5, side: 0.5, rear: 0.5 });
+      roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+    const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
     const ba = calcBuildableArea(boundary, 0.5, floors, floorHeightM, sunApplies, edgeSetbacks);
     const origin = ringCentroid(boundary);
     const groundShape = ringToLocalMeters(boundary, origin);

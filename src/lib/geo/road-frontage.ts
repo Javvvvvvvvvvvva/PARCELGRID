@@ -18,7 +18,7 @@ export interface FrontageEdge {
   /** 이 변에서 가장 가까운 도로 중심선까지 거리 (m) */
   roadDistM: number;
   role: EdgeRole;
-  /** 적용 이격거리 (m) — 전면 3, 측면 1.5, 후면 3 (제2종일반주거 실무 기본) */
+  /** 법적 최대 검토용 기본 이격거리 (m). 별도 설계 여유는 포함하지 않는다. */
   setbackM: number;
 }
 
@@ -32,8 +32,22 @@ export interface FrontageInfo {
   frontDistM: number;
 }
 
-/** 기본 이격거리 (m) — 제2종일반주거 시행 실무 기준 */
-const SETBACK = { front: 3, side: 1.5, rear: 3 };
+export interface BoundarySetbackSpec {
+  road: number;
+  side: number;
+  rear: number;
+}
+
+/**
+ * 법적 최대 매스의 검토 기본값.
+ * 도로측은 확인된 건축선을 기준으로 추가 후퇴 0m, 인접대지측은 민법상 0.5m를
+ * 보수적으로 적용한다. 용도·조례·별도 건축선은 검증 전 상태로 UI에 표시한다.
+ */
+export const LEGAL_MAX_BOUNDARY_SETBACK: BoundarySetbackSpec = {
+  road: 0,
+  side: 0.5,
+  rear: 0.5,
+};
 /** 전면으로 인정하는 최대 도로 거리 (m) — 이보다 멀면 맹지 가능성 */
 const FRONT_MAX_DIST = 12;
 
@@ -121,7 +135,7 @@ export function analyzeFrontage(
         lengthM: e.lengthM,
         roadDistM: e.dist,
         role: "측면" as EdgeRole,
-        setbackM: SETBACK.side,
+        setbackM: LEGAL_MAX_BOUNDARY_SETBACK.side,
       })),
       frontIndex: -1,
       rearIndex: -1,
@@ -138,13 +152,13 @@ export function analyzeFrontage(
     let setbackM: number;
     if (i === frontIndex) {
       role = "전면";
-      setbackM = SETBACK.front;
+      setbackM = LEGAL_MAX_BOUNDARY_SETBACK.road;
     } else if (i === rearIndex) {
       role = "후면";
-      setbackM = SETBACK.rear;
+      setbackM = LEGAL_MAX_BOUNDARY_SETBACK.rear;
     } else {
       role = "측면";
-      setbackM = SETBACK.side;
+      setbackM = LEGAL_MAX_BOUNDARY_SETBACK.side;
     }
     return { index: i, lengthM: e.lengthM, roadDistM: e.dist, role, setbackM };
   });
@@ -166,7 +180,7 @@ export function analyzeFrontage(
  */
 export function edgeSetbacksFromFrontage(
   info: FrontageInfo | null,
-  setback: { road: number; side: number; rear: number },
+  setback: BoundarySetbackSpec,
   minLegalM = 0.5
 ): number[] | undefined {
   if (!info || info.edges.length === 0) return undefined;
@@ -174,9 +188,18 @@ export function edgeSetbacksFromFrontage(
   for (const e of info.edges) {
     const v =
       e.role === "전면" ? setback.road : e.role === "후면" ? setback.rear : setback.side;
-    arr[e.index] = Math.max(minLegalM, v);
+    // 확인된 도로측 건축선에는 전국 공통 추가 0.5m를 강제하지 않는다.
+    arr[e.index] = Math.max(e.role === "전면" ? 0 : minLegalM, v);
   }
-  // 빈 슬롯은 민법 하한
-  for (let i = 0; i < arr.length; i++) if (arr[i] == null) arr[i] = minLegalM;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] == null) arr[i] = minLegalM;
+  }
   return arr;
+}
+
+/** 법적 최대 외곽선 전용. 사용자가 입력한 설계 여유거리와 분리한다. */
+export function legalEdgeSetbacksFromFrontage(
+  info: FrontageInfo | null
+): number[] | undefined {
+  return edgeSetbacksFromFrontage(info, LEGAL_MAX_BOUNDARY_SETBACK);
 }

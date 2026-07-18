@@ -9,7 +9,10 @@ import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
-import { analyzeFrontage, edgeSetbacksFromFrontage } from "@/lib/geo/road-frontage";
+import {
+  analyzeFrontage,
+  legalEdgeSetbacksFromFrontage,
+} from "@/lib/geo/road-frontage";
 import {
   buildPlanningMassModel,
   polygonAreaSqm,
@@ -18,6 +21,7 @@ import {
   type PlanningFloorMass,
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
+import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import type {
   FloorUseType,
   PlanningScenario,
@@ -111,8 +115,9 @@ function shapeGeometry(
   if (!hasRenderableShape(points)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   points.forEach((point, index) => {
-    if (index === 0) shape.moveTo(point.x, point.z);
-    else shape.lineTo(point.x, point.z);
+    const shapePoint = planningPointToThreeShape(point);
+    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+    else shape.lineTo(shapePoint.x, shapePoint.y);
   });
   shape.closePath();
   const depth = Math.max(0.05, topHeightM - baseHeightM);
@@ -246,8 +251,9 @@ function ParcelPlate({ shape }: { shape: LocalPlanPoint[] }) {
     if (!hasRenderableShape(shape)) return new THREE.BufferGeometry();
     const parcelShape = new THREE.Shape();
     shape.forEach((point, index) => {
-      if (index === 0) parcelShape.moveTo(point.x, point.z);
-      else parcelShape.lineTo(point.x, point.z);
+      const shapePoint = planningPointToThreeShape(point);
+      if (index === 0) parcelShape.moveTo(shapePoint.x, shapePoint.y);
+      else parcelShape.lineTo(shapePoint.x, shapePoint.y);
     });
     parcelShape.closePath();
     const result = new THREE.ShapeGeometry(parcelShape);
@@ -374,13 +380,8 @@ function createPlanningMassData(
         ) / groundFloors.length
       : 3;
   const frontage =
-    roads && roads.length > 0 && setback
-      ? analyzeFrontage(boundary, roads)
-      : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
-  );
+    roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
 
   const buildable = calcBuildableArea(
     boundary,

@@ -158,6 +158,7 @@ export async function fetchCadastralContextParcels(input: {
       lotAreaSqm: Math.round(area * 100) / 100,
       boundary,
       distanceM: Math.round(distance * 10) / 10,
+      boundarySource: "continuous-cadastral",
     });
   }
 

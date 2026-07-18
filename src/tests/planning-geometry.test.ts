@@ -109,6 +109,36 @@ describe("Planning Geometry Contract", () => {
     expect(changed.geometryHash).not.toBe(first.geometryHash);
   });
 
+  it("does not shrink the legal-max envelope with legacy design setback values", () => {
+    const boundary = squareBoundary();
+    const origin = planningRingCentroid(boundary);
+    const lotAreaSqm = polygonAreaSqm(
+      planningRingToLocalMeters(boundary, origin)
+    );
+    const common = {
+      projectId: "parcel-1",
+      scenario: scenarioWithArea(100),
+      boundary,
+      lotAreaSqm,
+      zoning: "일반상업지역",
+      roads: [],
+      generatedAt: "2026-07-17T00:00:00.000Z",
+    };
+    const legalOnly = buildPlanningGeometry({
+      ...common,
+      setback: { road: 0, side: 0, rear: 0 },
+    }).snapshot;
+    const legacyDesignMargin = buildPlanningGeometry({
+      ...common,
+      setback: { road: 3, side: 1.5, rear: 3 },
+    }).snapshot;
+
+    expect(legacyDesignMargin.building.floors[0].shape).toEqual(
+      legalOnly.building.floors[0].shape
+    );
+    expect(legacyDesignMargin.geometryHash).toBe(legalOnly.geometryHash);
+  });
+
   it("detects self-intersecting export polygons", () => {
     expect(
       polygonSelfIntersects([

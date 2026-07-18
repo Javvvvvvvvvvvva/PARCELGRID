@@ -4,10 +4,17 @@ import {
   polygonSelfIntersects,
 } from "@/lib/planning/planning-geometry";
 import { polygonAreaSqm, type LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { featureCollection, intersect, polygon } from "@turf/turf";
 
-export const CADASTRAL_CONTEXT_VERSION = "cadastral-context-v1" as const;
+export const CADASTRAL_CONTEXT_VERSION = "cadastral-context-v2" as const;
 export const CADASTRAL_ROAD_CONTACT_TOLERANCE_M = 0.75;
 export const CADASTRAL_ROAD_NEAR_TOLERANCE_M = 2;
+/** 접도 경계는 도로 경계와 10도 이내로 평행해야 한다. */
+export const CADASTRAL_ROAD_MIN_ALIGNMENT = Math.cos((10 * Math.PI) / 180);
+
+export type RoadBoundarySource =
+  | "continuous-cadastral"
+  | "upis-planned-road";
 
 export interface CadastralParcelFeature {
   pnu: string;
@@ -17,6 +24,8 @@ export interface CadastralParcelFeature {
   lotAreaSqm: number;
   boundary: [number, number][];
   distanceM: number;
+  /** 생략된 과거·테스트 데이터는 연속지적도로 취급한다. */
+  boundarySource?: RoadBoundarySource;
 }
 
 export interface LocalCadastralParcel {
@@ -28,7 +37,9 @@ export interface LocalCadastralParcel {
   measuredAreaSqm: number;
   distanceM: number;
   polygon: LocalPlanPoint[];
+  /** 하위 호환용 데이터셋 표기. 실제 경계 역할은 boundarySource가 기준이다. */
   source: "VWorld LP_PA_CBND_BUBUN";
+  boundarySource?: RoadBoundarySource;
 }
 
 export interface CadastralRoadWidthSample {
@@ -51,13 +62,35 @@ export interface CadastralRoadFrontage {
   widthMinM: number | null;
   widthAvgM: number | null;
   widthMaxM: number | null;
-  status: "verified-cadastral-width" | "frontage-only" | "nearby-road-parcel";
-  source: "VWorld continuous cadastral road parcel";
+  /** UPIS 계획도로 폴리곤의 기하 단면폭. 현재·법정 도로폭으로 승격하지 않는다. */
+  plannedWidthMinM: number | null;
+  plannedWidthAvgM: number | null;
+  plannedWidthMaxM: number | null;
+  status:
+    | "verified-cadastral-width"
+    | "frontage-only"
+    | "nearby-road-parcel"
+    | "planned-road-reference";
+  source:
+    | "VWorld continuous cadastral road parcel"
+    | "VWorld UPIS planned road boundary";
+}
+
+export interface RoadClearanceAssessment {
+  roadParcelPnu: string;
+  boundarySource: RoadBoundarySource;
+  minimumClearanceM: number;
+  intrusionAreaSqm: number;
+  intrudes: boolean;
+  floorLevel: number | null;
+  buildingPoint: LocalPlanPoint | null;
+  roadPoint: LocalPlanPoint | null;
+  status: "pass" | "fail";
 }
 
 export interface CadastralContextIssue {
   code: string;
-  severity: "review";
+  severity: "review" | "fail";
   message: string;
   parcelPnu?: string;
 }
@@ -75,6 +108,7 @@ export interface CadastralContextSnapshot {
   adjacentParcels: LocalCadastralParcel[];
   roadParcels: LocalCadastralParcel[];
   frontages: CadastralRoadFrontage[];
+  roadClearances: RoadClearanceAssessment[];
   summary: {
     adjacentParcelCount: number;
     roadParcelCount: number;
@@ -82,9 +116,14 @@ export interface CadastralContextSnapshot {
     primaryWidthMinM: number | null;
     primaryWidthAvgM: number | null;
     primaryWidthMaxM: number | null;
+    primaryPlannedWidthMinM: number | null;
+    primaryPlannedWidthAvgM: number | null;
+    primaryPlannedWidthMaxM: number | null;
+    primaryMassRoadClearanceM: number | null;
+    roadIntrusionCount: number;
   };
   validation: {
-    status: "pass" | "review";
+    status: "pass" | "review" | "fail";
     usable: boolean;
     issues: CadastralContextIssue[];
   };
@@ -181,6 +220,130 @@ function segmentDistance(
     pointToSegmentDistance(c, a, b),
     pointToSegmentDistance(d, a, b)
   );
+}
+
+function closestPointOnSegment(
+  point: LocalPlanPoint,
+  start: LocalPlanPoint,
+  end: LocalPlanPoint
+): LocalPlanPoint {
+  const segment = subtract(end, start);
+  const lengthSq = dot(segment, segment);
+  if (lengthSq < 1e-12) return start;
+  const t = Math.max(0, Math.min(1, dot(subtract(point, start), segment) / lengthSq));
+  return add(start, multiply(segment, t));
+}
+
+function segmentIntersectionPoint(
+  a: LocalPlanPoint,
+  b: LocalPlanPoint,
+  c: LocalPlanPoint,
+  d: LocalPlanPoint
+): LocalPlanPoint | null {
+  const ab = subtract(b, a);
+  const cd = subtract(d, c);
+  const denominator = cross(ab, cd);
+  if (Math.abs(denominator) < 1e-9) return null;
+  const offset = subtract(c, a);
+  const t = cross(offset, cd) / denominator;
+  const u = cross(offset, ab) / denominator;
+  if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+  return add(a, multiply(ab, Math.max(0, Math.min(1, t))));
+}
+
+function closestSegmentPoints(
+  a: LocalPlanPoint,
+  b: LocalPlanPoint,
+  c: LocalPlanPoint,
+  d: LocalPlanPoint
+): { distanceM: number; first: LocalPlanPoint; second: LocalPlanPoint } {
+  const intersectionPoint = segmentIntersectionPoint(a, b, c, d);
+  if (intersectionPoint) {
+    return { distanceM: 0, first: intersectionPoint, second: intersectionPoint };
+  }
+  const candidates = [
+    { first: a, second: closestPointOnSegment(a, c, d) },
+    { first: b, second: closestPointOnSegment(b, c, d) },
+    { first: closestPointOnSegment(c, a, b), second: c },
+    { first: closestPointOnSegment(d, a, b), second: d },
+  ].map((candidate) => ({
+    ...candidate,
+    distanceM: distance(candidate.first, candidate.second),
+  }));
+  return candidates.reduce((best, candidate) =>
+    candidate.distanceM < best.distanceM ? candidate : best
+  );
+}
+
+function polygonClearance(
+  firstPolygon: LocalPlanPoint[],
+  secondPolygon: LocalPlanPoint[]
+): { distanceM: number; first: LocalPlanPoint; second: LocalPlanPoint } | null {
+  const first = openRing(firstPolygon);
+  const second = openRing(secondPolygon);
+  if (first.length < 3 || second.length < 3) return null;
+
+  let best: { distanceM: number; first: LocalPlanPoint; second: LocalPlanPoint } | null =
+    null;
+  for (let firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
+    const a = first[firstIndex];
+    const b = first[(firstIndex + 1) % first.length];
+    for (let secondIndex = 0; secondIndex < second.length; secondIndex += 1) {
+      const c = second[secondIndex];
+      const d = second[(secondIndex + 1) % second.length];
+      const candidate = closestSegmentPoints(a, b, c, d);
+      if (!best || candidate.distanceM < best.distanceM) best = candidate;
+      if (candidate.distanceM <= 1e-9) return candidate;
+    }
+  }
+
+  if (pointInPolygon(first[0], second)) {
+    return { distanceM: 0, first: first[0], second: first[0] };
+  }
+  if (pointInPolygon(second[0], first)) {
+    return { distanceM: 0, first: second[0], second: second[0] };
+  }
+  return best;
+}
+
+function closedCoordinates(points: LocalPlanPoint[]): [number, number][] {
+  const ring = openRing(points).map((point) => [point.x, point.z] as [number, number]);
+  return ring.length > 0 ? [...ring, ring[0]] : [];
+}
+
+function coordinateRingArea(points: number[][]): number {
+  if (points.length < 4) return 0;
+  let area = 0;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    area += current[0] * next[1] - next[0] * current[1];
+  }
+  return Math.abs(area) / 2;
+}
+
+function polygonIntersectionAreaSqm(
+  first: LocalPlanPoint[],
+  second: LocalPlanPoint[]
+): number {
+  const firstRing = closedCoordinates(first);
+  const secondRing = closedCoordinates(second);
+  if (firstRing.length < 4 || secondRing.length < 4) return 0;
+  try {
+    const result = intersect(
+      featureCollection([polygon([firstRing]), polygon([secondRing])])
+    );
+    if (!result) return 0;
+    if (result.geometry.type === "Polygon") {
+      return coordinateRingArea(result.geometry.coordinates[0]);
+    }
+    return result.geometry.coordinates.reduce(
+      (sum, coordinates) => sum + coordinateRingArea(coordinates[0]),
+      0
+    );
+  } catch {
+    return 0;
+  }
 }
 
 function pointInPolygon(point: LocalPlanPoint, polygon: LocalPlanPoint[]): boolean {
@@ -284,7 +447,7 @@ function findFrontageCandidate(
       const roadUnit = normalize(roadVector);
       if (!roadUnit) continue;
       const alignment = Math.abs(dot(targetUnit, roadUnit));
-      if (alignment < 0.65) continue;
+      if (alignment < CADASTRAL_ROAD_MIN_ALIGNMENT) continue;
 
       const projectionA = dot(subtract(roadStart, targetStart), targetUnit);
       const projectionB = dot(subtract(roadEnd, targetStart), targetUnit);
@@ -334,18 +497,25 @@ function buildRoadFrontage(
 
   const ratios = [0.15, 0.3, 0.5, 0.7, 0.85];
   const widthSamples: CadastralRoadWidthSample[] = [];
+  const mayVerifyWidth = roadParcel.boundarySource === "continuous-cadastral";
+  const plannedGeometryWidths: number[] = [];
   for (const positionRatio of ratios) {
     const sampleOrigin = add(candidate.targetStart, multiply(edgeVector, positionRatio));
     const interval = roadIntervalAlongRay(sampleOrigin, normal, roadParcel.polygon);
     if (!interval) continue;
     if (interval.gapM > CADASTRAL_ROAD_NEAR_TOLERANCE_M || interval.widthM < 0.5) continue;
-    widthSamples.push({
-      positionRatio,
-      gapM: round(interval.gapM, 3),
-      widthM: round(interval.widthM, 3),
-      from: interval.from,
-      to: interval.to,
-    });
+    if (mayVerifyWidth) {
+      widthSamples.push({
+        positionRatio,
+        gapM: round(interval.gapM, 3),
+        widthM: round(interval.widthM, 3),
+        from: interval.from,
+        to: interval.to,
+      });
+    } else {
+      // UPIS 폴리곤 단면은 계획폭 참고값으로만 보존한다. 검증 폭/폭 샘플에는 넣지 않는다.
+      plannedGeometryWidths.push(round(interval.widthM, 3));
+    }
   }
 
   const widths = widthSamples.map((sample) => sample.widthM);
@@ -353,6 +523,15 @@ function buildRoadFrontage(
   const widthMaxM = widths.length > 0 ? Math.max(...widths) : null;
   const widthAvgM =
     widths.length > 0 ? widths.reduce((sum, value) => sum + value, 0) / widths.length : null;
+  const plannedWidthMinM =
+    plannedGeometryWidths.length > 0 ? Math.min(...plannedGeometryWidths) : null;
+  const plannedWidthMaxM =
+    plannedGeometryWidths.length > 0 ? Math.max(...plannedGeometryWidths) : null;
+  const plannedWidthAvgM =
+    plannedGeometryWidths.length > 0
+      ? plannedGeometryWidths.reduce((sum, value) => sum + value, 0) /
+        plannedGeometryWidths.length
+      : null;
   const avgGap =
     widthSamples.length > 0
       ? widthSamples.reduce((sum, sample) => sum + sample.gapM, 0) / widthSamples.length
@@ -370,13 +549,69 @@ function buildRoadFrontage(
     widthMinM: widthMinM == null ? null : round(widthMinM, 3),
     widthAvgM: widthAvgM == null ? null : round(widthAvgM, 3),
     widthMaxM: widthMaxM == null ? null : round(widthMaxM, 3),
+    plannedWidthMinM:
+      plannedWidthMinM == null ? null : round(plannedWidthMinM, 3),
+    plannedWidthAvgM:
+      plannedWidthAvgM == null ? null : round(plannedWidthAvgM, 3),
+    plannedWidthMaxM:
+      plannedWidthMaxM == null ? null : round(plannedWidthMaxM, 3),
     status:
-      widths.length >= 2 && avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
-        ? "verified-cadastral-width"
-        : avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
-          ? "frontage-only"
-          : "nearby-road-parcel",
-    source: "VWorld continuous cadastral road parcel",
+      roadParcel.boundarySource === "upis-planned-road"
+        ? "planned-road-reference"
+        : widths.length >= 2 && avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
+          ? "verified-cadastral-width"
+          : avgGap <= CADASTRAL_ROAD_CONTACT_TOLERANCE_M
+            ? "frontage-only"
+            : "nearby-road-parcel",
+    source:
+      roadParcel.boundarySource === "upis-planned-road"
+        ? "VWorld UPIS planned road boundary"
+        : "VWorld continuous cadastral road parcel",
+  };
+}
+
+function buildRoadClearance(
+  planning: PlanningGeometrySnapshot,
+  roadParcel: LocalCadastralParcel
+): RoadClearanceAssessment {
+  let minimumClearanceM = Number.POSITIVE_INFINITY;
+  let intrusionAreaSqm = 0;
+  let floorLevel: number | null = null;
+  let buildingPoint: LocalPlanPoint | null = null;
+  let roadPoint: LocalPlanPoint | null = null;
+
+  for (const floor of planning.building.floors) {
+    if (floor.shape.length < 3) continue;
+    const clearance = polygonClearance(floor.shape, roadParcel.polygon);
+    const floorIntrusionAreaSqm = polygonIntersectionAreaSqm(
+      floor.shape,
+      roadParcel.polygon
+    );
+    if (floorIntrusionAreaSqm > intrusionAreaSqm) {
+      intrusionAreaSqm = floorIntrusionAreaSqm;
+      floorLevel = floor.level;
+    }
+    if (clearance && clearance.distanceM < minimumClearanceM) {
+      minimumClearanceM = clearance.distanceM;
+      buildingPoint = clearance.first;
+      roadPoint = clearance.second;
+      if (floorLevel == null) floorLevel = floor.level;
+    }
+  }
+
+  const intrudes = intrusionAreaSqm > 0.01;
+  return {
+    roadParcelPnu: roadParcel.pnu,
+    boundarySource: roadParcel.boundarySource ?? "continuous-cadastral",
+    minimumClearanceM: Number.isFinite(minimumClearanceM)
+      ? round(minimumClearanceM, 3)
+      : 0,
+    intrusionAreaSqm: round(intrusionAreaSqm, 2),
+    intrudes,
+    floorLevel,
+    buildingPoint,
+    roadPoint,
+    status: intrudes ? "fail" : "pass",
   };
 }
 
@@ -398,6 +633,7 @@ function toLocalParcel(
     distanceM: feature.distanceM,
     polygon,
     source: "VWorld LP_PA_CBND_BUBUN",
+    boundarySource: feature.boundarySource ?? "continuous-cadastral",
   };
 }
 
@@ -436,6 +672,9 @@ export function buildCadastralContext(input: {
       const bVerified = b.status === "verified-cadastral-width" ? 0 : 1;
       return aVerified - bVerified || a.boundaryGapM - b.boundaryGapM;
     });
+  const roadClearances = roadParcels
+    .map((parcel) => buildRoadClearance(input.planning, parcel))
+    .sort((a, b) => a.minimumClearanceM - b.minimumClearanceM);
 
   if (sourceParcels.length === 0) {
     issues.push({
@@ -449,6 +688,15 @@ export function buildCadastralContext(input: {
       severity: "review",
       message: "조회 범위에서 지목이 도로인 필지를 찾지 못했습니다. 도로 중심선만 참고 레이어로 사용합니다.",
     });
+  } else if (
+    roadParcels.every((parcel) => parcel.boundarySource === "upis-planned-road")
+  ) {
+    issues.push({
+      code: "upis-planned-road-reference-only",
+      severity: "review",
+      message:
+        "연속지적도에서 도로 필지를 찾지 못해 UPIS 도시계획 도로를 참고로 표시합니다. 현재 지적상 도로 폭으로 확정하지 않으며 폭 샘플을 생성하지 않습니다.",
+    });
   } else if (!frontages.some((frontage) => frontage.status === "verified-cadastral-width")) {
     issues.push({
       code: "cadastral-road-width-review",
@@ -457,7 +705,25 @@ export function buildCadastralContext(input: {
     });
   }
 
+  for (const clearance of roadClearances.filter((candidate) => candidate.intrudes)) {
+    const plannedRoad = clearance.boundarySource === "upis-planned-road";
+    issues.push({
+      code: plannedRoad
+        ? "planned-road-mass-intrusion"
+        : "cadastral-road-mass-intrusion",
+      severity: "fail",
+      parcelPnu: clearance.roadParcelPnu,
+      message: `${plannedRoad ? "UPIS 계획도로 결정선" : "지적상 도로 필지"}과 계획 매스가 ${clearance.intrusionAreaSqm.toFixed(2)}㎡ 겹칩니다. 건축선과 실시계획을 확인하기 전에는 대표안으로 확정할 수 없습니다.`,
+    });
+  }
+
   const primary = frontages[0] ?? null;
+  const primaryRoadClearance =
+    (primary
+      ? roadClearances.find(
+          (clearance) => clearance.roadParcelPnu === primary.roadParcelPnu
+        )
+      : null) ?? roadClearances[0] ?? null;
   const canonical = {
     version: CADASTRAL_CONTEXT_VERSION,
     projectId: input.planning.projectId,
@@ -481,6 +747,16 @@ export function buildCadastralContext(input: {
         gapM: sample.gapM,
         widthM: sample.widthM,
       })),
+      plannedWidths: [
+        frontage.plannedWidthMinM,
+        frontage.plannedWidthAvgM,
+        frontage.plannedWidthMaxM,
+      ],
+    })),
+    roadClearances: roadClearances.map((clearance) => ({
+      roadParcelPnu: clearance.roadParcelPnu,
+      minimumClearanceM: clearance.minimumClearanceM,
+      intrusionAreaSqm: clearance.intrusionAreaSqm,
     })),
   };
 
@@ -497,6 +773,7 @@ export function buildCadastralContext(input: {
     adjacentParcels,
     roadParcels,
     frontages,
+    roadClearances,
     summary: {
       adjacentParcelCount: adjacentParcels.length,
       roadParcelCount: roadParcels.length,
@@ -506,15 +783,27 @@ export function buildCadastralContext(input: {
       primaryWidthMinM: primary?.widthMinM ?? null,
       primaryWidthAvgM: primary?.widthAvgM ?? null,
       primaryWidthMaxM: primary?.widthMaxM ?? null,
+      primaryPlannedWidthMinM: primary?.plannedWidthMinM ?? null,
+      primaryPlannedWidthAvgM: primary?.plannedWidthAvgM ?? null,
+      primaryPlannedWidthMaxM: primary?.plannedWidthMaxM ?? null,
+      primaryMassRoadClearanceM:
+        primaryRoadClearance?.minimumClearanceM ?? null,
+      roadIntrusionCount: roadClearances.filter((clearance) => clearance.intrudes)
+        .length,
     },
     validation: {
-      status: issues.length > 0 ? "review" : "pass",
-      usable: true,
+      status: issues.some((issue) => issue.severity === "fail")
+        ? "fail"
+        : issues.length > 0
+          ? "review"
+          : "pass",
+      usable: !issues.some((issue) => issue.severity === "fail"),
       issues,
     },
     sourceNotes: [
-      "대상·인접·도로 필지 경계는 VWorld 연속지적도 LP_PA_CBND_BUBUN을 동일한 로컬 미터 좌표로 변환합니다.",
-      "지적상 도로 폭은 대상 필지 접도 경계에서 지목이 도로인 필지의 반대편 경계까지 수직 샘플로 계산합니다.",
+      "대상·인접 필지와 지적상 도로는 VWorld 연속지적도 LP_PA_CBND_BUBUN을 동일한 로컬 미터 좌표로 변환합니다.",
+      "UPIS LT_C_UPISUQ151은 도시계획시설 도로 참고 경계로만 분리 표시하며 지적상 도로 폭 산정에는 사용하지 않습니다.",
+      "지적상 도로 폭은 연속지적도 도로 필지와 대상 필지 접도 경계가 10도 이내로 평행할 때만 수직 샘플로 계산합니다.",
       "지적상 도로 폭은 현황 포장·차도·보도 폭과 다를 수 있으며 경계측량을 대체하지 않습니다.",
       "VWorld 도로 중심선은 도로명과 방향 확인용 참고 레이어이며 실제 도로 경계로 사용하지 않습니다.",
     ],

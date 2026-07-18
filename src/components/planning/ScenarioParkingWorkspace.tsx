@@ -37,6 +37,13 @@ const ORIENTATION_LABEL: Record<ParkingOrientation, string> = {
   "perpendicular-front": "전면도로 직각",
 };
 
+const ACCESS_MODE_LABEL: Record<ParkingLayoutResult["accessMode"], string> = {
+  none: "배치 없음",
+  "internal-aisle": "내부 차로형",
+  "direct-frontage": "전면 직접진입형",
+  mixed: "혼합형",
+};
+
 function openRing(ring: LngLat[]): LngLat[] {
   if (ring.length < 2) return ring;
   const first = ring[0];
@@ -116,18 +123,22 @@ function svgPolygon(
 function ParkingPlanSvg({
   layout,
   frontEdge,
+  parcelShape,
 }: {
   layout: ParkingLayoutResult;
   frontEdge: [LocalPlanPoint, LocalPlanPoint] | null;
+  parcelShape: LocalPlanPoint[];
 }) {
   const width = 700;
   const height = 360;
   const bounds = boundsForShapes([
+    parcelShape,
     layout.targetShape,
     layout.exclusionShape,
     layout.aisleShape,
     layout.coreShape,
     ...layout.stalls.map((stall) => stall.corners),
+    layout.entryPath,
     frontEdge ?? [],
   ]);
 
@@ -139,12 +150,21 @@ function ParkingPlanSvg({
       style={{ width: "100%", height: "100%", display: "block" }}
     >
       <rect width={width} height={height} fill="var(--bg-sunken)" />
-      {layout.targetShape.length >= 3 && (
+      {parcelShape.length >= 3 && (
         <polygon
-          points={svgPolygon(layout.targetShape, bounds, width, height)}
-          fill="rgba(148,163,184,0.2)"
+          points={svgPolygon(parcelShape, bounds, width, height)}
+          fill="rgba(148,163,184,0.12)"
           stroke="var(--fg-muted)"
           strokeWidth="2"
+        />
+      )}
+      {layout.source === "piloti" && layout.targetShape.length >= 3 && (
+        <polygon
+          points={svgPolygon(layout.targetShape, bounds, width, height)}
+          fill="rgba(20,184,166,0.1)"
+          stroke="#0f766e"
+          strokeWidth="2"
+          strokeDasharray="6 4"
         />
       )}
       {layout.exclusionShape.length >= 3 && (
@@ -213,6 +233,26 @@ function ParkingPlanSvg({
           />
         );
       })}
+      {layout.entryPath.length >= 2 && (
+        <g>
+          <line
+            x1={svgPoint(layout.entryPath[0], bounds, width, height).x}
+            y1={svgPoint(layout.entryPath[0], bounds, width, height).y}
+            x2={svgPoint(layout.entryPath[1], bounds, width, height).x}
+            y2={svgPoint(layout.entryPath[1], bounds, width, height).y}
+            stroke="#7c3aed"
+            strokeWidth="3"
+            strokeDasharray="8 5"
+            strokeLinecap="round"
+          />
+          <circle
+            cx={svgPoint(layout.entryPath[1], bounds, width, height).x}
+            cy={svgPoint(layout.entryPath[1], bounds, width, height).y}
+            r="4"
+            fill="#7c3aed"
+          />
+        </g>
+      )}
       {frontEdge && (
         <line
           x1={svgPoint(frontEdge[0], bounds, width, height).x}
@@ -225,15 +265,15 @@ function ParkingPlanSvg({
         />
       )}
       <g transform="translate(14 20)">
-        <rect width="172" height="58" rx="8" fill="rgba(255,255,255,0.88)" />
+        <rect width="222" height="58" rx="8" fill="rgba(255,255,255,0.88)" />
         <text x="10" y="18" fontSize="12" fontWeight="700" fill="#0f172a">
           주차 배치 개략도
         </text>
         <text x="10" y="37" fontSize="11" fill="#475569">
-          초록/청록: 주차면 · 파랑: 통로
+          초록/청록: 주차면 · 파랑: 통로 · 보라: 진입
         </text>
         <text x="10" y="52" fontSize="11" fill="#475569">
-          주황: 코어 · 점: 기둥 · 빨강: 도로
+          점선 청록: 필로티 · 주황: 코어 · 빨강: 도로
         </text>
       </g>
     </svg>
@@ -363,17 +403,53 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
             parcelShape[(frontage.frontIndex + 1) % parcelShape.length],
           ] as [LocalPlanPoint, LocalPlanPoint])
         : null;
-    const layout = calculateParkingLayout({
-      strategy: scenario.parking.strategy,
+    const layoutInput = {
       parcelShape,
       buildingShape: firstMass?.shape ?? [],
       pilotiShape: firstMass?.shape ?? [],
       pilotiEnabled,
       requiredCars: calculation.parking.requiredCars,
       frontEdge,
+    };
+    const layout = calculateParkingLayout({
+      ...layoutInput,
+      strategy: scenario.parking.strategy,
       parking: scenario.parking,
     });
-    return { layout, frontEdge, pilotiEnabled };
+    const candidateStrategies: ParkingStrategy[] = pilotiEnabled
+      ? ["surface", "piloti", "mixed"]
+      : ["surface"];
+    const alternatives = candidateStrategies.map((strategy) => ({
+      strategy,
+      layout: calculateParkingLayout({
+        ...layoutInput,
+        strategy,
+        parking: {
+          ...scenario.parking,
+          strategy,
+          orientation: "auto",
+        },
+      }),
+    }));
+    const recommendation = alternatives.reduce<(typeof alternatives)[number] | null>(
+      (best, candidate) => {
+        if (!candidate.layout.supportedStrategy || candidate.layout.capacityCars <= 0) {
+          return best;
+        }
+        if (!best || candidate.layout.capacityCars > best.layout.capacityCars) {
+          return candidate;
+        }
+        if (
+          candidate.layout.capacityCars === best.layout.capacityCars &&
+          candidate.strategy === scenario.parking.strategy
+        ) {
+          return candidate;
+        }
+        return best;
+      },
+      null
+    );
+    return { layout, frontEdge, parcelShape, pilotiEnabled, recommendation };
   }, [parcel, scenario, calculation]);
 
   if (!parcel || !scenario || !calculation || !preview) return null;
@@ -389,7 +465,8 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
     0,
     calculation.parking.requiredCars - layout.capacityCars
   );
-  const status = !layout.supportedStrategy
+  const requiredCarsConfirmed = calculation.parking.requiredCars > 0;
+  const status = !layout.supportedStrategy || !requiredCarsConfirmed
     ? "review"
     : shortfall > 0
       ? "fail"
@@ -460,7 +537,9 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               fontWeight: 750,
             }}
           >
-            {status === "pass"
+            {!requiredCarsConfirmed
+              ? "의무주차 대수 확인 필요"
+              : status === "pass"
               ? "필요 주차 충족"
               : status === "fail"
                 ? `주차 ${shortfall}대 부족`
@@ -472,13 +551,19 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
           <div style={{ display: "grid", gap: 12 }}>
             <div className="parking-metrics">
               <Metric
-                label="예상 의무주차"
+                label={requiredCarsConfirmed ? "예상 의무주차" : "예상 의무주차 · 미확정"}
                 value={`${calculation.parking.requiredCars}대`}
               />
               <Metric
                 label="실제 배치 가능"
                 value={`${layout.capacityCars}대`}
-                tone={layout.capacityCars >= calculation.parking.requiredCars ? "positive" : "negative"}
+                tone={
+                  !requiredCarsConfirmed
+                    ? "neutral"
+                    : layout.capacityCars >= calculation.parking.requiredCars
+                      ? "positive"
+                      : "negative"
+                }
               />
               <Metric
                 label="저장된 계획대수"
@@ -487,7 +572,13 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               <Metric
                 label="배치 부족"
                 value={`${shortfall}대`}
-                tone={shortfall > 0 ? "negative" : "positive"}
+                tone={
+                  !requiredCarsConfirmed
+                    ? "neutral"
+                    : shortfall > 0
+                      ? "negative"
+                      : "positive"
+                }
               />
               <Metric
                 label="주차 가용면적"
@@ -503,13 +594,80 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                 overflow: "hidden",
               }}
             >
-              <ParkingPlanSvg layout={layout} frontEdge={preview.frontEdge} />
+              <ParkingPlanSvg
+                layout={layout}
+                frontEdge={preview.frontEdge}
+                parcelShape={preview.parcelShape}
+              />
             </div>
+
+            {!requiredCarsConfirmed && (
+              <div
+                style={{
+                  padding: "9px 11px",
+                  borderRadius: 8,
+                  background: "var(--warn-soft)",
+                  color: "var(--warn-fg)",
+                  fontSize: 10.5,
+                  lineHeight: 1.5,
+                }}
+              >
+                현재 용도·세대·면적 입력으로 의무대수가 0대로 계산됐습니다. 이는 법정
+                주차 면제를 확정한 값이 아니므로 용도별 설치기준을 다시 확인하세요.
+              </div>
+            )}
+
+            {preview.recommendation &&
+              (preview.recommendation.strategy !== scenario.parking.strategy ||
+                preview.recommendation.layout.capacityCars > layout.capacityCars) && (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 10,
+                    flexWrap: "wrap",
+                    padding: "10px 11px",
+                    border: "1px solid var(--accent-fg)",
+                    borderRadius: 9,
+                    background: "var(--accent-soft)",
+                  }}
+                >
+                  <div style={{ fontSize: 10.5, lineHeight: 1.5 }}>
+                    <strong>자동 추천</strong> · {STRATEGY_LABEL[preview.recommendation.strategy]} ·{" "}
+                    {ACCESS_MODE_LABEL[preview.recommendation.layout.accessMode]} ·{" "}
+                    {preview.recommendation.layout.capacityCars}대
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateParking({
+                        strategy: preview.recommendation!.strategy,
+                        orientation: "auto",
+                        providedCars: preview.recommendation!.layout.capacityCars,
+                      })
+                    }
+                    style={{
+                      border: "1px solid var(--accent-fg)",
+                      borderRadius: 7,
+                      padding: "7px 9px",
+                      background: "var(--bg-elev)",
+                      color: "var(--accent-fg)",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                    }}
+                  >
+                    추천안 적용
+                  </button>
+                </div>
+              )}
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
-                disabled={!layout.supportedStrategy}
+                disabled={!layout.supportedStrategy || layout.capacityCars <= 0}
                 onClick={() => updateParking({ providedCars: layout.capacityCars })}
                 style={{
                   border: "1px solid var(--fg)",
@@ -517,8 +675,12 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                   padding: "8px 11px",
                   background: "var(--fg)",
                   color: "var(--bg-elev)",
-                  cursor: layout.supportedStrategy ? "pointer" : "not-allowed",
-                  opacity: layout.supportedStrategy ? 1 : 0.45,
+                  cursor:
+                    layout.supportedStrategy && layout.capacityCars > 0
+                      ? "pointer"
+                      : "not-allowed",
+                  opacity:
+                    layout.supportedStrategy && layout.capacityCars > 0 ? 1 : 0.45,
                   fontFamily: "inherit",
                   fontSize: 11,
                   fontWeight: 700,
@@ -545,6 +707,10 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               padding: 13,
               background: "var(--bg-sunken)",
               alignSelf: "start",
+              minWidth: 0,
+              maxWidth: "100%",
+              boxSizing: "border-box",
+              overflow: "hidden",
             }}
           >
             <div style={{ fontSize: 12, fontWeight: 750, marginBottom: 10 }}>
@@ -636,6 +802,23 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
             >
               <InfoRow label="선택 방식" value={STRATEGY_LABEL[scenario.parking.strategy]} />
               <InfoRow label="배치 방향" value={`${num(layout.orientationDeg, 0)}°`} />
+              <InfoRow label="진입 방식" value={ACCESS_MODE_LABEL[layout.accessMode]} />
+              <InfoRow
+                label="도로–주차 진입"
+                value={
+                  layout.entryPath.length >= 2
+                    ? `${num(layout.accessDistanceM, 1)}m`
+                    : layout.accessMode === "internal-aisle"
+                      ? "내부 차로"
+                      : layout.accessMode === "direct-frontage"
+                        ? "경계 직접"
+                        : "-"
+                }
+              />
+              <InfoRow
+                label="깊이 검토"
+                value={`${num(layout.targetDepthM, 1)} / ${num(layout.requiredDepthM, 1)}m`}
+              />
               <InfoRow label="원시 후보" value={`${layout.rawCandidateCars}대`} />
               <InfoRow label="코어" value={`${num(scenario.parking.coreAreaSqm ?? 10, 1)}㎡`} />
               <InfoRow label="기둥 표시" value={`${layout.columns.length}개`} />
@@ -658,6 +841,23 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                 ))}
               </div>
             )}
+            {layout.capacityCars === 0 && !preview.pilotiEnabled && (
+              <div
+                style={{
+                  marginTop: 9,
+                  padding: 10,
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-elev)",
+                  color: "var(--fg-muted)",
+                  fontSize: 10.5,
+                  lineHeight: 1.5,
+                }}
+              >
+                지상 배치가 0대라면 1층 프로그램에 ‘필로티’ 또는 ‘주차’ 구역을 먼저
+                지정하세요. 그러면 필로티·혼합 대안이 자동 추천에 포함됩니다.
+              </div>
+            )}
           </aside>
         </div>
       </div>
@@ -667,6 +867,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
           display: grid;
           grid-template-columns: minmax(0, 1fr) 300px;
           gap: 14px;
+          min-width: 0;
         }
         .parking-metrics {
           display: grid;
@@ -675,8 +876,9 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
         }
         .parking-fields {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 8px;
+          min-width: 0;
         }
         .parking-fields label {
           display: grid;
@@ -733,9 +935,9 @@ function NumberInput({
   onChange: (value: number) => void;
 }) {
   return (
-    <label>
-      <span>{label}</span>
-      <div style={{ position: "relative" }}>
+    <label style={{ display: "grid", gap: 4, minWidth: 0, maxWidth: "100%" }}>
+      <span style={{ fontSize: 9.5, color: "var(--fg-faint)" }}>{label}</span>
+      <div style={{ position: "relative", minWidth: 0, width: "100%" }}>
         <input
           type="number"
           min={0}
@@ -744,7 +946,20 @@ function NumberInput({
           onChange={(event) =>
             onChange(Math.max(0, fieldNumber(event.target.value, value)))
           }
-          style={{ paddingRight: 29 }}
+          style={{
+            display: "block",
+            minWidth: 0,
+            width: "100%",
+            maxWidth: "100%",
+            boxSizing: "border-box",
+            border: "1px solid var(--border)",
+            borderRadius: 7,
+            padding: "7px 29px 7px 8px",
+            background: "var(--bg-elev)",
+            color: "var(--fg)",
+            fontFamily: "inherit",
+            fontSize: 10.5,
+          }}
         />
         <span
           style={{

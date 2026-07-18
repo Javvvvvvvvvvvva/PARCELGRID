@@ -11,6 +11,8 @@ import {
   type CadastralContextSnapshot,
   type CadastralParcelFeature,
   type LocalCadastralParcel,
+  type CadastralRoadFrontage,
+  type RoadClearanceAssessment,
 } from "@/lib/geo/cadastral-context";
 import {
   buildContextParcelAlignment,
@@ -19,6 +21,7 @@ import {
 } from "@/lib/planning/context-parcel-alignment";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import {
   buildSketchupExportPackage,
   type ContextGeometryBuilding,
@@ -40,6 +43,13 @@ interface ApiResponse {
       | "centerline-reference-only";
     upisDataCode: string;
   };
+  upisRoadSummaries?: Array<{
+    presentSn: string;
+    label: string;
+    grade: string;
+    roadType: string;
+    roadNo: string;
+  }>;
   error?: string;
 }
 
@@ -64,8 +74,9 @@ function flatGeometry(points: LocalPlanPoint[]): THREE.BufferGeometry {
   if (!hasShape(ring)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   ring.forEach((point, index) => {
-    if (index === 0) shape.moveTo(point.x, point.z);
-    else shape.lineTo(point.x, point.z);
+    const shapePoint = planningPointToThreeShape(point);
+    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+    else shape.lineTo(shapePoint.x, shapePoint.y);
   });
   shape.closePath();
   const geometry = new THREE.ShapeGeometry(shape);
@@ -82,8 +93,9 @@ function prismGeometry(
   if (!hasShape(ring)) return new THREE.BufferGeometry();
   const shape = new THREE.Shape();
   ring.forEach((point, index) => {
-    if (index === 0) shape.moveTo(point.x, point.z);
-    else shape.lineTo(point.x, point.z);
+    const shapePoint = planningPointToThreeShape(point);
+    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
+    else shape.lineTo(shapePoint.x, shapePoint.y);
   });
   shape.closePath();
   const geometry = new THREE.ExtrudeGeometry(shape, {
@@ -210,16 +222,129 @@ function ContextBuilding({
   );
 }
 
-function RoadBoundary({ parcel }: { parcel: LocalCadastralParcel }) {
+function buildFocusedRoadStrip(
+  frontage: CadastralRoadFrontage,
+  roadPolygon: LocalPlanPoint[]
+): LocalPlanPoint[] {
+  const [start, end] = frontage.frontage;
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.1) return [];
+  const tangent = { x: dx / length, z: dz / length };
+  let outward = { x: -tangent.z, z: tangent.x };
+  const midpoint = { x: (start.x + end.x) / 2, z: (start.z + end.z) / 2 };
+  const roadCenter = roadPolygon.length
+    ? roadPolygon.reduce(
+        (sum, point) => ({ x: sum.x + point.x, z: sum.z + point.z }),
+        { x: 0, z: 0 }
+      )
+    : midpoint;
+  if (roadPolygon.length) {
+    roadCenter.x /= roadPolygon.length;
+    roadCenter.z /= roadPolygon.length;
+  }
+  if (
+    (roadCenter.x - midpoint.x) * outward.x +
+      (roadCenter.z - midpoint.z) * outward.z <
+    0
+  ) {
+    outward = { x: -outward.x, z: -outward.z };
+  }
+  const sourceWidthM = frontage.plannedWidthAvgM ?? frontage.widthAvgM;
+  if (
+    sourceWidthM == null ||
+    !Number.isFinite(sourceWidthM) ||
+    sourceWidthM <= 0
+  ) {
+    return [];
+  }
+  const referenceWidthM = Math.min(12, Math.max(2, sourceWidthM));
+  // 대상 접도부 주변만 면으로 보여 주변 건물 전체를 가르는 긴 계획도로 면을 피한다.
+  const extensionM = Math.min(8, Math.max(5, referenceWidthM));
+  const a = {
+    x: start.x - tangent.x * extensionM,
+    z: start.z - tangent.z * extensionM,
+  };
+  const b = {
+    x: end.x + tangent.x * extensionM,
+    z: end.z + tangent.z * extensionM,
+  };
+  return [
+    a,
+    b,
+    {
+      x: b.x + outward.x * referenceWidthM,
+      z: b.z + outward.z * referenceWidthM,
+    },
+    {
+      x: a.x + outward.x * referenceWidthM,
+      z: a.z + outward.z * referenceWidthM,
+    },
+  ];
+}
+
+function RoadBoundary({
+  parcel,
+  frontage,
+  showSourceBoundary,
+}: {
+  parcel: LocalCadastralParcel;
+  frontage: CadastralRoadFrontage | null;
+  showSourceBoundary: boolean;
+}) {
   const geometry = useMemo(() => flatGeometry(parcel.polygon), [parcel.polygon]);
-  const upis = parcel.jimokCode === "UPIS-UQ151";
+  const upis =
+    parcel.boundarySource === "upis-planned-road" ||
+    parcel.jimokCode === "UPIS-UQ151";
+  const focusedStrip = useMemo(
+    () => (upis && frontage ? buildFocusedRoadStrip(frontage, parcel.polygon) : []),
+    [frontage, parcel.polygon, upis]
+  );
+  const focusedGeometry = useMemo(() => flatGeometry(focusedStrip), [focusedStrip]);
+
+  if (upis) {
+    return (
+      <group>
+        {focusedStrip.length >= 3 && (
+          <group>
+            <mesh geometry={focusedGeometry} position={[0, -0.028, 0]}>
+              <meshStandardMaterial
+                color="#5f6873"
+                transparent
+                opacity={0.22}
+                roughness={1}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+                depthTest
+              />
+            </mesh>
+            <lineSegments
+              geometry={new THREE.EdgesGeometry(focusedGeometry)}
+              position={[0, -0.006, 0]}
+            >
+              <lineBasicMaterial color="#374151" transparent opacity={0.62} />
+            </lineSegments>
+          </group>
+        )}
+        {(showSourceBoundary || focusedStrip.length < 3) && (
+          <PolygonLine
+            points={parcel.polygon}
+            color="#4b5563"
+            opacity={0.38}
+            y={-0.002}
+          />
+        )}
+      </group>
+    );
+  }
   return (
     <group>
       <mesh geometry={geometry} position={[0, -0.025, 0]}>
         <meshStandardMaterial
-          color={upis ? "#4b5563" : "#6b7280"}
+          color="#6b7280"
           transparent
-          opacity={upis ? 0.28 : 0.2}
+          opacity={0.2}
           roughness={1}
           side={THREE.DoubleSide}
           depthWrite={false}
@@ -227,7 +352,7 @@ function RoadBoundary({ parcel }: { parcel: LocalCadastralParcel }) {
       </mesh>
       <lineSegments geometry={new THREE.EdgesGeometry(geometry)} position={[0, -0.005, 0]}>
         <lineBasicMaterial
-          color={upis ? "#1f2937" : "#4b5563"}
+          color="#4b5563"
           transparent
           opacity={0.82}
         />
@@ -255,6 +380,48 @@ function PolygonLine({
   return <Line points={positions} color={color} transparent opacity={opacity} lineWidth={1} />;
 }
 
+function RoadClearanceMarker({
+  assessment,
+}: {
+  assessment: RoadClearanceAssessment;
+}) {
+  const from = assessment.buildingPoint;
+  const to = assessment.roadPoint;
+  if (!from || !to) return null;
+  const color = assessment.intrudes ? "#dc2626" : "#16a34a";
+  const midpoint: [number, number, number] = [
+    (from.x + to.x) / 2,
+    0.22,
+    (from.z + to.z) / 2,
+  ];
+  return (
+    <group>
+      {!assessment.intrudes && assessment.minimumClearanceM > 0.01 && (
+        <Line
+          points={[
+            [from.x, 0.18, from.z],
+            [to.x, 0.18, to.z],
+          ]}
+          color={color}
+          lineWidth={2.4}
+        />
+      )}
+      <Text
+        position={midpoint}
+        rotation={[-Math.PI / 2, 0, 0]}
+        fontSize={0.7}
+        color={color}
+        anchorX="center"
+        anchorY="bottom"
+      >
+        {assessment.intrudes
+          ? `도로 저촉 ${assessment.intrusionAreaSqm.toFixed(2)}㎡`
+          : `도로 경계 ${assessment.minimumClearanceM.toFixed(2)}m`}
+      </Text>
+    </group>
+  );
+}
+
 function SiteScene({
   planning,
   context,
@@ -264,6 +431,8 @@ function SiteScene({
   showParcels,
   showRoads,
   showSamples,
+  showSourceRoadBoundary,
+  roadClearance,
   extent,
 }: {
   planning: ReturnType<typeof buildPlanningGeometry>["snapshot"];
@@ -274,11 +443,18 @@ function SiteScene({
   showParcels: boolean;
   showRoads: boolean;
   showSamples: boolean;
+  showSourceRoadBoundary: boolean;
+  roadClearance: RoadClearanceAssessment | null;
   extent: number;
 }) {
   const frontageIds = new Set(cadastral.frontages.map((frontage) => frontage.roadParcelPnu));
   const visibleRoads = cadastral.roadParcels.filter(
-    (parcel) => frontageIds.has(parcel.pnu) || parcel.distanceM <= 55
+    (parcel) =>
+      frontageIds.has(parcel.pnu) ||
+      ((parcel.boundarySource !== "upis-planned-road" &&
+        parcel.jimokCode !== "UPIS-UQ151") ||
+        showSourceRoadBoundary) &&
+        parcel.distanceM <= 55
   );
   const visibleParcels = cadastral.adjacentParcels.filter((parcel) => parcel.distanceM <= 45);
   const alignmentByBuilding = new Map(
@@ -305,7 +481,18 @@ function SiteScene({
         ))}
 
       {showRoads &&
-        visibleRoads.map((parcel) => <RoadBoundary key={parcel.pnu} parcel={parcel} />)}
+        visibleRoads.map((parcel) => (
+          <RoadBoundary
+            key={parcel.pnu}
+            parcel={parcel}
+            frontage={
+              cadastral.frontages.find(
+                (frontage) => frontage.roadParcelPnu === parcel.pnu
+              ) ?? null
+            }
+            showSourceBoundary={showSourceRoadBoundary}
+          />
+        ))}
 
       {showRoads &&
         planning.roads.map((road, roadIndex) => (
@@ -322,7 +509,9 @@ function SiteScene({
         ))}
 
       {showSamples &&
-        cadastral.frontages.map((frontage) => (
+        cadastral.frontages
+          .filter((frontage) => frontage.status !== "planned-road-reference")
+          .map((frontage) => (
           <group key={`${frontage.roadParcelPnu}-${frontage.targetEdgeIndex}`}>
             <Line
               points={frontage.frontage.map(
@@ -360,6 +549,10 @@ function SiteScene({
         <ProposedMass key={floor.id} floor={floor} />
       ))}
 
+      {showRoads && roadClearance && (
+        <RoadClearanceMarker assessment={roadClearance} />
+      )}
+
       <Text
         position={[0, 0.1, -extent * 0.9]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -396,7 +589,12 @@ function calculateExtent(input: {
       building.polygons.flatMap((polygon) => polygon.outer)
     ),
     ...input.cadastral.roadParcels
-      .filter((parcel) => parcel.distanceM <= 55)
+      .filter(
+        (parcel) =>
+          parcel.distanceM <= 55 &&
+          parcel.boundarySource !== "upis-planned-road" &&
+          parcel.jimokCode !== "UPIS-UQ151"
+      )
       .flatMap((parcel) => parcel.polygon),
   ];
   let extent = 12;
@@ -415,12 +613,16 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   );
   const [sourceParcels, setSourceParcels] = useState<CadastralParcelFeature[]>([]);
   const [sourceSummary, setSourceSummary] = useState<ApiResponse["sourceSummary"]>(undefined);
+  const [upisRoadSummaries, setUpisRoadSummaries] = useState<
+    NonNullable<ApiResponse["upisRoadSummaries"]>
+  >([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showBuildings, setShowBuildings] = useState(true);
   const [showParcels, setShowParcels] = useState(true);
   const [showRoads, setShowRoads] = useState(true);
   const [showSamples, setShowSamples] = useState(true);
+  const [showSourceRoadBoundary, setShowSourceRoadBoundary] = useState(false);
 
   const parcel = data?.parcel;
   const scenario =
@@ -437,6 +639,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!parcel || !targetPnu || !Number.isFinite(parcel.lat) || !Number.isFinite(parcel.lng)) {
       setSourceParcels([]);
+      setSourceSummary(undefined);
+      setUpisRoadSummaries([]);
       setLoadState("idle");
       return;
     }
@@ -464,12 +668,14 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       .then((payload) => {
         setSourceParcels(payload.parcels ?? []);
         setSourceSummary(payload.sourceSummary);
+        setUpisRoadSummaries(payload.upisRoadSummaries ?? []);
         setLoadState("ready");
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
         setSourceParcels([]);
         setSourceSummary(undefined);
+        setUpisRoadSummaries([]);
         setLoadState("error");
         setLoadError(error instanceof Error ? error.message : "도로 경계 조회 실패");
       });
@@ -525,6 +731,19 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         ? "VWorld 도시계획 도로 경계"
         : "도로 중심선 참고";
   const alignmentSummary = snapshots.alignment.summary;
+  const plannedRoadReference =
+    sourceSummary?.activeRoadBoundarySource === "upis-road-boundary";
+  const primaryRoadClearance =
+    (primary
+      ? snapshots.cadastral.roadClearances.find(
+          (clearance) => clearance.roadParcelPnu === primary.roadParcelPnu
+        )
+      : null) ?? snapshots.cadastral.roadClearances[0] ?? null;
+  const primaryUpisSummary = primary
+    ? upisRoadSummaries.find((summary) =>
+        primary.roadParcelPnu.includes(summary.presentSn)
+      ) ?? upisRoadSummaries[0] ?? null
+    : upisRoadSummaries[0] ?? null;
 
   return (
     <Panel
@@ -559,10 +778,32 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           {alignmentSummary.mismatchBuildings > 0 && (
             <span className="ui-tag">정합 불일치 {alignmentSummary.mismatchBuildings}동</span>
           )}
-          {primary?.widthAvgM != null && (
+          {(plannedRoadReference
+            ? primary?.plannedWidthAvgM
+            : primary?.widthAvgM) != null && (
             <span className="ui-tag">
-              폭 {num(primary.widthMinM ?? 0, 2)} / {num(primary.widthAvgM, 2)} /{" "}
-              {num(primary.widthMaxM ?? 0, 2)}m
+              {plannedRoadReference ? "계획폭 참고" : "폭"}{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthMinM
+                  : primary?.widthMinM) ?? 0,
+                2
+              )}{" "}
+              /{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthAvgM
+                  : primary?.widthAvgM) as number,
+                2
+              )}{" "}
+              /{" "}
+              {num(
+                (plannedRoadReference
+                  ? primary?.plannedWidthMaxM
+                  : primary?.widthMaxM) ?? 0,
+                2
+              )}
+              m
             </span>
           )}
         </div>
@@ -576,9 +817,21 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           <Toggle active={showRoads} onClick={() => setShowRoads((value) => !value)}>
             도로 경계
           </Toggle>
-          <Toggle active={showSamples} onClick={() => setShowSamples((value) => !value)}>
-            폭 샘플
-          </Toggle>
+          {!plannedRoadReference ? (
+            <Toggle active={showSamples} onClick={() => setShowSamples((value) => !value)}>
+              폭 샘플
+            </Toggle>
+          ) : (
+            <>
+              <span className="ui-tag">폭 샘플 미사용</span>
+              <Toggle
+                active={showSourceRoadBoundary}
+                onClick={() => setShowSourceRoadBoundary((value) => !value)}
+              >
+                원본 계획선
+              </Toggle>
+            </>
+          )}
         </div>
       </div>
 
@@ -586,6 +839,31 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>VWorld 지적·UPIS 도로 경계를 불러오고 있습니다.</Notice>
       )}
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
+      {plannedRoadReference && (
+        <Notice>
+          회색 면은 대상 접도부에 맞춰{" "}
+          {primary?.plannedWidthAvgM != null
+            ? `${num(primary.plannedWidthAvgM, 2)}m 계획폭`
+            : "계획도로 참고 폭"}
+          만 짧게 표시한 3D 참고 구간입니다. UPIS 원본 긴 경계는 법적 계산에
+          그대로 유지되며 ‘원본 계획선’에서 따로 확인할 수 있습니다. 현황·법정 도로폭
+          확정값은 아닙니다.
+        </Notice>
+      )}
+      <RoadBuildingLineCard
+        plannedRoadReference={plannedRoadReference}
+        roadLabel={primaryUpisSummary?.label || primary?.roadParcelJibun || null}
+        roadNo={primaryUpisSummary?.roadNo || null}
+        frontageLengthM={primary?.frontageLengthM ?? null}
+        boundaryGapM={primary?.boundaryGapM ?? null}
+        verifiedWidthMinM={primary?.widthMinM ?? null}
+        verifiedWidthAvgM={primary?.widthAvgM ?? null}
+        verifiedWidthMaxM={primary?.widthMaxM ?? null}
+        plannedWidthMinM={primary?.plannedWidthMinM ?? null}
+        plannedWidthAvgM={primary?.plannedWidthAvgM ?? null}
+        plannedWidthMaxM={primary?.plannedWidthMaxM ?? null}
+        clearance={primaryRoadClearance}
+      />
       {alignmentSummary.mismatchBuildings > 0 && (
         <Notice tone="fail">
           주변 건물 {alignmentSummary.mismatchBuildings}동이 대상·인접 필지 경계 안에 60%
@@ -631,6 +909,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               showParcels={showParcels}
               showRoads={showRoads}
               showSamples={showSamples}
+              showSourceRoadBoundary={showSourceRoadBoundary}
+              roadClearance={primaryRoadClearance}
               extent={snapshots.extent}
             />
           </Suspense>
@@ -647,11 +927,137 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       >
         갈색선은 인접 지적 경계이며 별도로 회전하지 않습니다. 주변 건물과 지적선은 같은
         로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치입니다.
-        짙은 회색 면은 VWorld 도시계획 도로 또는 연속지적 도로 경계이고, 파란색은 선택된
-        접도선, 주황색 가는 선은 수직 폭 샘플입니다. 모든 GIS 검사는 개략설계용이며 측량
+        짙은 회색 면은 연속지적 도로 필지 또는 대상 접도부에 한정한 UPIS 계획폭 참고
+        구간입니다. UPIS 원본 경계는 토글로 분리했습니다. 파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
+        경계와 충분히 평행할 때만 표시합니다. 모든 GIS 검사는 개략설계용이며 측량
         성과도를 대체하지 않습니다.
       </p>
     </Panel>
+  );
+}
+
+function plannedRoadRange(label: string | null): string | null {
+  if (!label) return null;
+  const ranges: Record<string, string> = {
+    소로1류: "10m 이상 12m 미만",
+    소로2류: "8m 이상 10m 미만",
+    소로3류: "8m 미만",
+    중로1류: "20m 이상 25m 미만",
+    중로2류: "15m 이상 20m 미만",
+    중로3류: "12m 이상 15m 미만",
+  };
+  return ranges[label] ?? null;
+}
+
+function RoadBuildingLineCard({
+  plannedRoadReference,
+  roadLabel,
+  roadNo,
+  frontageLengthM,
+  boundaryGapM,
+  verifiedWidthMinM,
+  verifiedWidthAvgM,
+  verifiedWidthMaxM,
+  plannedWidthMinM,
+  plannedWidthAvgM,
+  plannedWidthMaxM,
+  clearance,
+}: {
+  plannedRoadReference: boolean;
+  roadLabel: string | null;
+  roadNo: string | null;
+  frontageLengthM: number | null;
+  boundaryGapM: number | null;
+  verifiedWidthMinM: number | null;
+  verifiedWidthAvgM: number | null;
+  verifiedWidthMaxM: number | null;
+  plannedWidthMinM: number | null;
+  plannedWidthAvgM: number | null;
+  plannedWidthMaxM: number | null;
+  clearance: RoadClearanceAssessment | null;
+}) {
+  const range = plannedRoadRange(roadLabel);
+  const cells = [
+    {
+      label: "도로 출처",
+      value: plannedRoadReference ? "UPIS 계획도로" : "연속지적 도로",
+      detail: roadLabel
+        ? `${roadLabel}${range ? ` · ${range}` : ""}${roadNo ? ` · ${roadNo}호` : ""}`
+        : "등급 확인 필요",
+    },
+    {
+      label: plannedRoadReference ? "계획폭 추정" : "지적 도로폭",
+      value:
+        (plannedRoadReference ? plannedWidthAvgM : verifiedWidthAvgM) != null
+          ? `${num(
+              (plannedRoadReference ? plannedWidthAvgM : verifiedWidthAvgM) as number,
+              2
+            )}m`
+          : "산정 불가",
+      detail:
+        (plannedRoadReference ? plannedWidthMinM : verifiedWidthMinM) != null &&
+        (plannedRoadReference ? plannedWidthMaxM : verifiedWidthMaxM) != null
+          ? `${num(
+              (plannedRoadReference ? plannedWidthMinM : verifiedWidthMinM) as number,
+              2
+            )}~${num(
+              (plannedRoadReference ? plannedWidthMaxM : verifiedWidthMaxM) as number,
+              2
+            )}m · ${plannedRoadReference ? "법정 현황폭 아님" : "지적 경계 단면"}`
+          : "도로대장 확인 필요",
+    },
+    {
+      label: "필지–도로 경계",
+      value: boundaryGapM != null ? `${num(boundaryGapM, 2)}m` : "미확인",
+      detail:
+        frontageLengthM != null
+          ? `접도 후보 길이 ${num(frontageLengthM, 2)}m`
+          : "접도 후보 없음",
+    },
+    {
+      label: "매스–도로 경계",
+      value: clearance
+        ? clearance.intrudes
+          ? `${num(clearance.intrusionAreaSqm, 2)}㎡ 저촉`
+          : `${num(clearance.minimumClearanceM, 2)}m`
+        : "미확인",
+      detail: clearance?.intrudes
+        ? "배치 수정 및 건축선 확인 필요"
+        : "도형상 침범 없음 · 법적 건축선은 미확정",
+      tone: clearance?.intrudes ? "fail" : "pass",
+    },
+  ];
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        gap: 8,
+        marginBottom: 10,
+      }}
+    >
+      {cells.map((cell) => (
+        <div
+          key={cell.label}
+          style={{
+            border: `1px solid ${
+              cell.tone === "fail" ? "var(--neg-fg)" : "var(--border)"
+            }`,
+            borderRadius: 9,
+            padding: "9px 10px",
+            background:
+              cell.tone === "fail" ? "var(--neg-soft)" : "var(--bg-elev)",
+          }}
+        >
+          <div style={{ fontSize: 9.5, color: "var(--fg-muted)" }}>{cell.label}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>{cell.value}</div>
+          <div style={{ fontSize: 9.5, color: "var(--fg-subtle)", marginTop: 3 }}>
+            {cell.detail}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
