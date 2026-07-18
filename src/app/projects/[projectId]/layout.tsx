@@ -180,7 +180,7 @@ function makeCrumb(pathname: string, parcelLabel: string): string[] {
     ? ["시나리오 상세"]
     : map[last]
       ? [map[last]]
-      : ["대시보드"];
+      : ["사업성 검토"];
   return ["프로젝트", parcelLabel, ...tail];
 }
 
