@@ -375,7 +375,7 @@ export default function DashboardPage({
         </main>
 
         <aside className="stage3-sidebar">
-          <section className="assumption-panel">
+          <section className="assumption-panel" id="inputs">
             <div className="assumption-heading">
               <div><span className="section-kicker">LIVE INPUTS</span><h2>계산 조정</h2></div>
               {editedCount > 0 && <button className="text-button" onClick={resetAll}>{editedCount}건 초기화</button>}
