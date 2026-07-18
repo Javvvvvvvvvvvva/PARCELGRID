@@ -126,6 +126,17 @@ describe("calculateScenario", () => {
     expect(r.equity + r.pfLoan).toBeCloseTo(exFin, -1);
   });
 
+  it("higher hurdle rate lowers NPV without changing operating profit", () => {
+    const low = makeScenario();
+    low.assumptions.equityIRR = 10;
+    const high = makeScenario();
+    high.assumptions.equityIRR = 25;
+    const a = calculateScenario({ parcel, scenario: low });
+    const b = calculateScenario({ parcel, scenario: high });
+    expect(a.npv).toBeGreaterThan(b.npv);
+    expect(a.profit).toBe(b.profit);
+  });
+
   it("changing irrelevant fields does not change profit (purity)", () => {
     const a = calculateScenario({ parcel, scenario: makeScenario() });
     const b = calculateScenario({ parcel, scenario: makeScenario() });
