@@ -62,6 +62,11 @@ interface ProjectStore {
   ) => void;
   resetDraftAssumptions: (scenarioId: string) => void;
 
+  /** 프로젝트별 사용자가 검토 중인 토지 매입가(만원). 기본 인수가와 분리한다. */
+  draftAcquisitionPrices: Record<string, number>;
+  setDraftAcquisitionPrice: (projectId: string, value: number) => void;
+  resetDraftAcquisitionPrice: (projectId: string) => void;
+
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
   clearEnvelopePlan: () => void;
@@ -164,6 +169,21 @@ export const useProjectStore = create<ProjectStore>()(
             const next = { ...state.draftAssumptions };
             delete next[scenarioId];
             return { draftAssumptions: next };
+          }),
+
+        draftAcquisitionPrices: {},
+        setDraftAcquisitionPrice: (projectId, value) =>
+          set((state) => ({
+            draftAcquisitionPrices: {
+              ...state.draftAcquisitionPrices,
+              [projectId]: value,
+            },
+          })),
+        resetDraftAcquisitionPrice: (projectId) =>
+          set((state) => {
+            const next = { ...state.draftAcquisitionPrices };
+            delete next[projectId];
+            return { draftAcquisitionPrices: next };
           }),
 
         envelopePlan: null,
@@ -385,6 +405,7 @@ export const useProjectStore = create<ProjectStore>()(
             state.representativeGeometrySnapshot,
           activeScenarioId: state.activeScenarioId,
           draftAssumptions: state.draftAssumptions,
+          draftAcquisitionPrices: state.draftAcquisitionPrices,
         }),
       }
     )
