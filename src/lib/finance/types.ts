@@ -17,6 +17,32 @@ export type Months = number;
 
 // ─────────────────────────── Parcel ───────────────────────────
 
+export type AcquisitionEstimateMethod =
+  | "house-comps"
+  | "by-comps"
+  | "by-publicvalue"
+  | "hybrid";
+
+export interface AcquisitionEstimateSnapshot {
+  estimatedPriceManwon: ManWon;
+  estimatedPricePerPyeong: number;
+  method: AcquisitionEstimateMethod;
+  confidence: "high" | "medium" | "low";
+  marketMedianPerPyeong?: number;
+  marketMedianManwon?: ManWon;
+  transactionCount?: number;
+  details?: {
+    fromPublicValue: ManWon;
+    fromComps: ManWon;
+    locationMultiplier: number;
+    sizeMultiplier: number;
+    finalMultiplier: number;
+    locationTier: string;
+    sampleSize: number;
+    medianPricePerPyeong: number;
+  };
+}
+
 export interface Parcel {
   id: string;
   address: string;
@@ -48,6 +74,8 @@ export interface Parcel {
 
   landPrice: Won; // 공시지가 원/m²
   estMarketPrice: Won; // 실거래 추정 원/m²
+  /** 새 부지 등록 시 잠근 토지 시장가 추정 근거. 예전 프로젝트에는 없을 수 있다. */
+  acquisitionEstimate?: AcquisitionEstimateSnapshot;
 
   acquired: string; // ISO date
   acquiredPrice: ManWon;
@@ -187,6 +215,8 @@ export interface ScenarioResult {
   ltc: Pct;
 
   // Returns
+  /** 요구수익률(equityIRR)로 할인한 자기자본 현금흐름 NPV */
+  npv: ManWon;
   irr: Pct;
   equityMultiple: number;
   dscr: number;

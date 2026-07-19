@@ -11,6 +11,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
 
 /**
  * Stored parcel shape — matches what /projects/new writes to sessionStorage.
@@ -35,6 +36,7 @@ export interface StoredParcel {
   landPriceYear: string;
   setback?: { road: number; side: number; rear: number };
   estMarketPrice?: number;
+  acquisitionEstimate?: AcquisitionEstimateSnapshot;
   acquired: string;
   acquiredPrice: number;
   demolitionCost?: number;
@@ -111,6 +113,7 @@ export function useDynamicProject(projectId: string) {
           setback: stored.setback,
           landPrice: stored.landPrice,
           estMarketPrice: stored.estMarketPrice,
+          acquisitionEstimate: stored.acquisitionEstimate,
           acquired: stored.acquired,
           acquiredPrice: stored.acquiredPrice,
           demolitionCost: stored.demolitionCost,

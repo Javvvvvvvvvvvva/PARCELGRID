@@ -231,6 +231,8 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     }
   }
   const annualIRR = annualizeIRR(monthlyIRR, 12).times(HUNDRED);
+  const monthlyHurdleRate = Math.pow(1 + a.equityIRR / 100, 1 / 12) - 1;
+  const equityNPV = npv(monthlyHurdleRate, monthlyCF);
 
   // Equity multiple = total positive flows / equity
   const totalPositive = monthlyCF
@@ -305,6 +307,7 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     pfLoan: toManWon(pfLoan),
     ltc: toPct(ltcActual),
 
+    npv: toManWon(equityNPV),
     irr: toPct(annualIRR),
     equityMultiple: equityMult.toDecimalPlaces(2).toNumber(),
     dscr: dscrValue.toDecimalPlaces(2).toNumber(),
