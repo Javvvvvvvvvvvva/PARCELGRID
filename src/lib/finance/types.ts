@@ -260,11 +260,17 @@ export interface TaxLine {
   rate: string; // "4.6%"
   amount: ManWon;
   note: string;
+  status?: "estimated" | "not-calculated";
+  source?: string;
 }
 
 export interface TaxBreakdown {
   lines: TaxLine[];
+  /** 계산 가능한 항목만 합산한 부분 추정액. 완결된 세후 세액이 아니다. */
   total: ManWon;
+  asOf?: string;
+  complete?: boolean;
+  warnings?: string[];
 }
 
 // ─────────────────────────── Sensitivity ───────────────────────────
