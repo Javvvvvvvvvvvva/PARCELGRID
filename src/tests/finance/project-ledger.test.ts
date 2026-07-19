@@ -37,10 +37,10 @@ function scenarioAtRate(interestRate: number): Scenario {
   };
 }
 
-function build(interestRate = 6) {
+function build(interestRate = 6, scenario = scenarioAtRate(interestRate)) {
   return buildProjectLedger({
     parcel,
-    scenario: scenarioAtRate(interestRate),
+    scenario,
     revenueSale: 130_000,
     revenueExit: 0,
     hardCost: 40_000,
@@ -67,6 +67,28 @@ describe("auditable project ledger", () => {
   it("uses the configured timeline and allocates 100% of revenue", () => {
     const ledger = build();
     expect(ledger.rows).toHaveLength(4 + 12 + 3 + 1);
+    expect(ledger.totalRevenue).toBeCloseTo(130_000, 8);
+  });
+
+  it("collects single-house and multi-family whole-asset sales at exit", () => {
+    const ledger = build();
+    expect(ledger.revenueCollectionPolicy).toBe("bulk-exit");
+    expect(ledger.rows.slice(0, -1).every((row) => row.revenueInflow === 0)).toBe(true);
+    expect(ledger.rows.at(-1)?.revenueInflow).toBeCloseTo(130_000, 8);
+    expect(ledger.projectBreakEvenMonth).toBe(ledger.rows.at(-1)?.month);
+  });
+
+  it("keeps the explicit presale policy for non-bulk residential sales", () => {
+    const base = scenarioAtRate(6);
+    const presaleScenario: Scenario = {
+      ...base,
+      program: { ...base.program, type: "officetel" },
+    };
+    const ledger = build(6, presaleScenario);
+    expect(ledger.revenueCollectionPolicy).toBe("presale-10-60-30");
+    expect(
+      ledger.rows.slice(0, -1).some((row) => row.revenueInflow > 0)
+    ).toBe(true);
     expect(ledger.totalRevenue).toBeCloseTo(130_000, 8);
   });
 
