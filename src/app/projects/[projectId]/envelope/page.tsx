@@ -2,6 +2,8 @@
 
 import "@/lib/three/guard-empty-paths";
 import { use, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useProjectStore } from "@/lib/stores/project-store";
 import { PlanningRecommendationPanelV2 } from "@/components/planning/PlanningRecommendationPanelV2";
 import { PlanningScenarioWorkspaceV4 } from "@/components/planning/PlanningScenarioWorkspaceV4";
 import { PlanningGeometryContractPanel } from "@/components/planning/PlanningGeometryContractPanel";
@@ -58,6 +60,42 @@ export default function EnvelopePage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
+  const router = useRouter();
+  const representativeScenarioId = useProjectStore(
+    (state) => state.representativePlanningScenarioId
+  );
+  const representativeGeometry = useProjectStore(
+    (state) => state.representativeGeometrySnapshot
+  );
+  const planningScenarios = useProjectStore((state) => state.planningScenarios);
+  const financeScenarios = useProjectStore((state) => state.data?.scenarios ?? []);
+  const representativeScenario = planningScenarios.find(
+    (scenario) =>
+      scenario.id === representativeScenarioId &&
+      (!scenario.projectId || scenario.projectId === projectId)
+  );
+  const geometryReady = Boolean(
+    representativeScenarioId &&
+      representativeScenario &&
+      representativeGeometry &&
+      representativeGeometry.projectId === projectId &&
+      representativeGeometry.scenarioId === representativeScenarioId &&
+      representativeGeometry.scenarioVersion === representativeScenario.version &&
+      representativeGeometry.validation.status !== "fail" &&
+      representativeGeometry.validation.representativeEligible
+  );
+  const handoffReady = Boolean(
+    geometryReady &&
+      financeScenarios.some((scenario) => scenario.id === representativeScenarioId)
+  );
+  const handoffMessage = !representativeScenarioId
+    ? "대표 계획안을 먼저 확정하세요"
+    : !geometryReady
+      ? "대표안 Geometry 검증을 다시 확인하세요"
+      : !handoffReady
+        ? "대표안 사업성을 재계산하고 있습니다"
+        : "대표 계획안 사업성 검토로 이동";
+
   const [activeSection, setActiveSection] = useState<StudioSection>("plan");
   const [visitedSections, setVisitedSections] = useState<StudioSection[]>([
     "plan",
@@ -91,9 +129,20 @@ export default function EnvelopePage({
               내보내기로 전달합니다.
             </p>
           </div>
-          <div className="studio-progress" aria-label="계획 스튜디오 진행 단계">
-            <strong>{activeIndex + 1}</strong>
-            <span>/ {STUDIO_SECTIONS.length}</span>
+          <div className="studio-flow-actions">
+            <button
+              type="button"
+              className="stage3-handoff"
+              disabled={!handoffReady}
+              title={handoffMessage}
+              onClick={() => router.push(`/projects/${projectId}`)}
+            >
+              사업성 검토 →
+            </button>
+            <div className="studio-progress" aria-label="계획 스튜디오 진행 단계">
+              <strong>{activeIndex + 1}</strong>
+              <span>/ {STUDIO_SECTIONS.length}</span>
+            </div>
           </div>
         </div>
 
@@ -212,6 +261,10 @@ export default function EnvelopePage({
           <StudioStepFooter
             previousLabel="3D 컨텍스트"
             onPrevious={() => selectSection("context")}
+            nextLabel="사업성 검토"
+            onNext={() => router.push(`/projects/${projectId}`)}
+            nextDisabled={!handoffReady}
+            nextTitle={handoffMessage}
           />
         </section>
       )}
@@ -255,6 +308,30 @@ export default function EnvelopePage({
           font-size: 11px;
           line-height: 1.5;
           color: var(--fg-muted);
+        }
+        .studio-flow-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .stage3-handoff {
+          min-height: 36px;
+          border: 1px solid var(--fg);
+          border-radius: 9px;
+          padding: 0 13px;
+          background: var(--fg);
+          color: var(--bg-elev);
+          font-family: inherit;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .stage3-handoff:disabled {
+          border-color: var(--border);
+          background: var(--bg-sunken);
+          color: var(--fg-faint);
+          cursor: not-allowed;
         }
         .studio-progress {
           display: flex;
@@ -411,11 +488,15 @@ function StudioStepFooter({
   onPrevious,
   nextLabel,
   onNext,
+  nextDisabled = false,
+  nextTitle,
 }: {
   previousLabel?: string;
   onPrevious?: () => void;
   nextLabel?: string;
   onNext?: () => void;
+  nextDisabled?: boolean;
+  nextTitle?: string;
 }) {
   return (
     <div
@@ -434,7 +515,13 @@ function StudioStepFooter({
         </button>
       )}
       {onNext && (
-        <button type="button" className="studio-flow-button" onClick={onNext}>
+        <button
+          type="button"
+          className="studio-flow-button"
+          onClick={onNext}
+          disabled={nextDisabled}
+          title={nextTitle}
+        >
           {nextLabel} →
         </button>
       )}
@@ -449,6 +536,12 @@ function StudioStepFooter({
           font-size: 11.5px;
           font-weight: 700;
           cursor: pointer;
+        }
+        .studio-flow-button:disabled {
+          border-color: var(--border);
+          background: var(--bg-sunken);
+          color: var(--fg-faint);
+          cursor: not-allowed;
         }
         .studio-flow-button.secondary {
           border-color: var(--border);
