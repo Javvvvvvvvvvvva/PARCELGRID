@@ -13,9 +13,10 @@
  *     - 두 추정 비율 0.3~3.0 밖 → 추정 A (medium)
  *     - 정상 범위 → 큰 값 (high if 20+, else medium)
  *
- * 한계 (정직히):
- *   1. 시군구 배율도 평균값. 같은 시군구 내 동(洞)별 차이 있음.
- *   2. 추정 정확도 약 ±25%. 시도 단위(±30%) 보다 개선.
+ * 한계:
+ *   1. 시군구·부지 크기 배율은 외부 통계모형으로 검증되지 않은 자체 규칙이다.
+ *   2. 같은 시군구 안에서도 동·도로·형상·권리관계에 따른 가격 차이를 설명하지 못한다.
+ *   3. 오차율을 검증한 적이 없으므로 정확도 범위를 표시하거나 감정평가처럼 사용하지 않는다.
  */
 
 import type { MolitTransaction } from "@/lib/integrations/molit";
@@ -41,7 +42,12 @@ import {
 
 export type EstimateConfidence = "high" | "medium" | "low";
 
+export const MARKET_PRICE_MODEL_VERSION = "experimental-2026.1";
+
 export interface EstimatePriceResult {
+  modelVersion: typeof MARKET_PRICE_MODEL_VERSION;
+  modelStatus: "experimental-unvalidated";
+  warnings: string[];
   estimatedPriceManwon: number;
   estimatedPricePerPyeong: number;
   method: EstimateMethod;
@@ -265,6 +271,13 @@ export function estimateMarketPrice(
     lotPyeong > 0 ? Math.round(estimatedPriceManwon / lotPyeong) : 0;
 
   return {
+    modelVersion: MARKET_PRICE_MODEL_VERSION,
+    modelStatus: "experimental-unvalidated",
+    warnings: [
+      "시군구·부지 크기 보정계수는 외부 통계검증 전 자체 규칙입니다.",
+      "실거래 표본은 물건 상태·도로·권리관계 차이를 완전히 보정하지 않습니다.",
+      "감정평가액이나 매입 확정가가 아닌 비교 검토용 참고 추정입니다.",
+    ],
     estimatedPriceManwon,
     estimatedPricePerPyeong,
     marketMedianPerPyeong: medianPricePerPyeong, // 실거래 중앙값 평당 (참고용)
@@ -286,13 +299,16 @@ export function estimateMarketPrice(
 }
 
 export function methodLabel(method: EstimateMethod): string {
-  return method === "by-comps"
-    ? "실거래 기반"
-    : method === "by-publicvalue"
-      ? "공시지가 기반"
-      : "혼합 (공시지가 + 실거래)";
+  if (method === "house-comps") return "구축 단독·다가구 사례 기반 참고";
+  if (method === "by-comps") return "토지 실거래 기반 참고";
+  if (method === "by-publicvalue") return "공시지가 자체 보정 참고";
+  return "공시지가·실거래 혼합 참고";
 }
 
 export function confidenceLabel(c: EstimateConfidence): string {
-  return c === "high" ? "신뢰도 높음" : c === "medium" ? "신뢰도 중간" : "신뢰도 낮음";
+  return c === "high"
+    ? "표본 근거 충분"
+    : c === "medium"
+      ? "표본 근거 보통"
+      : "표본 근거 부족";
 }
