@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
 import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 import { TopBar } from "@/components/ui/TopBar";
 import { WorkRail } from "@/components/ui/WorkRail";
-import { ParcelRail } from "@/components/ui/ParcelRail";
 import { usePathname } from "next/navigation";
 
 interface ProjectLayoutProps {
@@ -41,7 +40,6 @@ function ProjectShell({
   const { projectId } = useUnwrappedParams(params);
   const { data, isLoading, error } = useDynamicProject(projectId);
   const setData = useProjectStore((s) => s.setData);
-  const storeData = useProjectStore((s) => s.data);
   const envelopePlan = useProjectStore((s) => s.envelopePlan);
   const planningScenarios = useProjectStore((s) => s.planningScenarios);
   const representativePlanningScenarioId = useProjectStore(
@@ -49,23 +47,6 @@ function ProjectShell({
   );
   const pathname = usePathname();
   const lastKeyRef = useRef<string>("");
-  const [railCollapsed, setRailCollapsed] = useState(false);
-
-  useEffect(() => {
-    try {
-      if (localStorage.getItem("pg-rail-collapsed") === "1") setRailCollapsed(true);
-    } catch {}
-  }, []);
-
-  const toggleRail = () =>
-    setRailCollapsed((c) => {
-      const next = !c;
-      try {
-        localStorage.setItem("pg-rail-collapsed", next ? "1" : "0");
-      } catch {}
-      return next;
-    });
-
   useEffect(() => {
     if (!data) return;
 
@@ -152,12 +133,6 @@ function ProjectShell({
       <TopBar crumb={crumb} />
       <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
         <WorkRail projectId={projectId} />
-        <ParcelRail
-          parcel={storeData?.parcel ?? data.parcel}
-          compact={pathname.includes("/scenarios/")}
-          collapsed={railCollapsed}
-          onToggleCollapse={toggleRail}
-        />
         <main className="scroll-host" style={{ flex: 1, minWidth: 0 }}>
           {children}
         </main>
