@@ -9,7 +9,9 @@
  * - PF funds the configured LTC share of hard, soft, and contingency costs.
  * - Interest is paid monthly by equity on average monthly PF balance
  *   (opening balance + half of the current draw).
- * - Sale receipts follow an explicit 10/60/30 collection assumption.
+ * - Single-house and multi-family whole-asset sales are collected at exit.
+ * - Other residential sale programs use an explicit 10/60/30 collection
+ *   assumption until a project-specific collection schedule is available.
  * - Lease/retail capitalized value is treated as an exit receipt at project end.
  * - Available sale receipts sweep PF principal before distribution to equity.
  *
@@ -21,7 +23,11 @@
 import { D, ZERO, type Decimal } from "./math";
 import type { Parcel, Scenario } from "./types";
 
-export const PROJECT_LEDGER_MODEL_VERSION = "pre-audit-2026.1";
+export const PROJECT_LEDGER_MODEL_VERSION = "pre-audit-2026.2";
+
+export type RevenueCollectionPolicy =
+  | "bulk-exit"
+  | "presale-10-60-30";
 
 export interface ProjectLedgerInput {
   parcel: Pick<Parcel, "acquiredPrice" | "demolitionCost">;
@@ -53,6 +59,7 @@ export interface MonthlyProjectLedgerRow {
 
 export interface ProjectLedger {
   modelVersion: string;
+  revenueCollectionPolicy: RevenueCollectionPolicy;
   rows: MonthlyProjectLedgerRow[];
   financingCost: number;
   maxPfBalance: number;
@@ -103,6 +110,15 @@ function phaseAt(
   return "exit";
 }
 
+export function revenueCollectionPolicyForScenario(
+  scenario: Scenario
+): RevenueCollectionPolicy {
+  return scenario.program.type === "single-house" ||
+    scenario.program.type === "multi-family"
+    ? "bulk-exit"
+    : "presale-10-60-30";
+}
+
 export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
   const { parcel, scenario } = input;
   const assumptions = scenario.assumptions;
@@ -115,6 +131,8 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
   const saleOutMonths = Math.max(1, Math.round(assumptions.saleOutMonths));
   const occupancyMonth = designMonths + constructionMonths;
   const totalMonths = occupancyMonth + saleOutMonths;
+  const revenueCollectionPolicy =
+    revenueCollectionPolicyForScenario(scenario);
 
   const landByMonth = new Map<number, Decimal>([
     [0, D(parcel.acquiredPrice)],
@@ -141,24 +159,28 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
 
   const saleRevenue = D(input.revenueSale);
   if (saleRevenue.gt(0)) {
-    const presaleMonth = Math.min(
-      occupancyMonth,
-      designMonths + Math.max(1, Math.floor(constructionMonths * 0.4))
-    );
-    const interimMonths = monthRange(presaleMonth + 1, occupancyMonth);
-    const finalMonths = monthRange(occupancyMonth + 1, totalMonths);
+    if (revenueCollectionPolicy === "bulk-exit") {
+      allocate(revenueByMonth, saleRevenue, [totalMonths]);
+    } else {
+      const presaleMonth = Math.min(
+        occupancyMonth,
+        designMonths + Math.max(1, Math.floor(constructionMonths * 0.4))
+      );
+      const interimMonths = monthRange(presaleMonth + 1, occupancyMonth);
+      const finalMonths = monthRange(occupancyMonth + 1, totalMonths);
 
-    allocate(revenueByMonth, saleRevenue.times(0.1), [presaleMonth]);
-    allocate(
-      revenueByMonth,
-      saleRevenue.times(0.6),
-      interimMonths.length > 0 ? interimMonths : [occupancyMonth]
-    );
-    allocate(
-      revenueByMonth,
-      saleRevenue.times(0.3),
-      finalMonths.length > 0 ? finalMonths : [totalMonths]
-    );
+      allocate(revenueByMonth, saleRevenue.times(0.1), [presaleMonth]);
+      allocate(
+        revenueByMonth,
+        saleRevenue.times(0.6),
+        interimMonths.length > 0 ? interimMonths : [occupancyMonth]
+      );
+      allocate(
+        revenueByMonth,
+        saleRevenue.times(0.3),
+        finalMonths.length > 0 ? finalMonths : [totalMonths]
+      );
+    }
   }
   allocate(revenueByMonth, D(input.revenueExit), [totalMonths]);
 
@@ -167,6 +189,7 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
 
   const rows: MonthlyProjectLedgerRow[] = [];
   const equityCashFlows: number[] = [];
+  const cumulativeProjectByMonth: number[] = [];
   let pfBalance = ZERO;
   let maxPfBalance = ZERO;
   let financingCost = ZERO;
@@ -174,7 +197,6 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
   let equityDistributions = ZERO;
   let cumulativeProject = ZERO;
   let maxProjectExposure = ZERO;
-  let projectBreakEvenMonth: number | null = null;
 
   for (let month = 0; month <= totalMonths; month += 1) {
     const landCost = valueAt(landByMonth, month);
@@ -220,15 +242,9 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
     }
 
     cumulativeProject = cumulativeProject.plus(projectNet);
+    cumulativeProjectByMonth.push(cumulativeProject.toNumber());
     if (cumulativeProject.lt(maxProjectExposure)) {
       maxProjectExposure = cumulativeProject;
-    }
-    if (
-      projectBreakEvenMonth === null &&
-      month > 0 &&
-      cumulativeProject.gte(0)
-    ) {
-      projectBreakEvenMonth = month;
     }
 
     const numericEquityCashFlow = equityCashFlow.toNumber();
@@ -260,9 +276,25 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
     (sum, row) => sum + row.revenueInflow,
     0
   );
+  const projectBreakEvenMonth =
+    cumulativeProjectByMonth.findIndex(
+      (value, month) =>
+        month > 0 &&
+        value >= 0 &&
+        cumulativeProjectByMonth
+          .slice(month)
+          .every((laterValue) => laterValue >= 0)
+    );
+  const sustainedBreakEvenMonth =
+    projectBreakEvenMonth >= 0 ? projectBreakEvenMonth : null;
+  const revenueWarning =
+    revenueCollectionPolicy === "bulk-exit"
+      ? "단독·다가구 통매각 매출은 사업 종료 시 100% 회수하는 것으로 가정합니다."
+      : "분양 수입은 10/60/30 회수 가정이며 실제 분양·신탁 약정으로 교체해야 합니다.";
 
   return {
     modelVersion: PROJECT_LEDGER_MODEL_VERSION,
+    revenueCollectionPolicy,
     rows,
     financingCost: financingCost.toNumber(),
     maxPfBalance: maxPfBalance.toNumber(),
@@ -270,12 +302,13 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
     equityDistributions: equityDistributions.toNumber(),
     equityCashFlows,
     maxProjectExposure: maxProjectExposure.toNumber(),
-    projectBreakEvenMonth,
+    projectBreakEvenMonth: sustainedBreakEvenMonth,
     totalProjectOutflow,
     totalRevenue,
     warnings: [
       "PF 조건은 금융기관 약정이 아닌 LTC·금리 입력 기반 예비 모델입니다.",
-      "분양 수입은 10/60/30, 임대·근생 가치는 사업 종료 시 회수하는 것으로 가정합니다.",
+      revenueWarning,
+      "임대·근생 가치는 사업 종료 시 회수하는 것으로 가정합니다.",
       "PF 이자는 월초잔액과 당월 인출액의 절반을 사용한 월평균잔액 기준입니다.",
     ],
   };
