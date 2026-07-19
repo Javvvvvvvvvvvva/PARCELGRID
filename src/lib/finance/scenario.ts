@@ -23,6 +23,7 @@
 
 import { D, ZERO, ONE, HUNDRED, Decimal } from "./math";
 import { calculateEffectiveGFA } from "@/lib/finance/parking-core";
+import { buildProjectLedger } from "@/lib/finance/project-ledger";
 import {
   npv,
   irr,
@@ -128,35 +129,26 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   const softCost = hardCost.times(D(a.softCostRate).div(HUNDRED));
   const contingency = hardCost.plus(softCost).times(D(a.contingencyRate).div(HUNDRED));
 
-  // ─── 4. Capital structure ───────────────────────────────────────────
-  // Korean PF practice: equity covers ALL of land cost + a small bridge to
-  // first PF draw. PF covers construction (hard + soft + contingency) up
-  // to its LTC limit on that base. So:
-  //   equity   = landCost + (1 - ltc) × constructionCost
-  //   pfLoan   = ltc × constructionCost
-  // This matches the mock (S1: equity 11억 ≈ 26.8억 토지 − some PF bridge,
-  // PF 30.2억 ≈ 73% × 41.2억 construction).
-  //
-  // For simplicity we treat land as funded by equity and construction as
-  // partly funded by PF. Bridge loans against land are a future enhancement.
+  // ─── 4. Capital structure + auditable monthly ledger ────────────────
   const constructionCost = hardCost.plus(softCost).plus(contingency);
-  const ltcDecimal = D(a.ltcTarget).div(HUNDRED);
-  const pfLoan = constructionCost.times(ltcDecimal);
-  const equityForConstruction = constructionCost.minus(pfLoan);
-  const equity = landCost.plus(equityForConstruction);
   const projectCostExFin = landCost.plus(demolitionCost).plus(constructionCost);
 
-  // ─── 5. Financing cost ──────────────────────────────────────────────
-  // PF is interest-only during construction, drawn pro-rata to construction
-  // months. Average outstanding ≈ pfLoan / 2 over construction period.
-  // This is a simplification; the schedule below does the exact accrual.
-  const totalMonths = D(a.designMonths).plus(D(a.constructionMonths)).plus(D(a.saleOutMonths));
-  const constructionYears = D(a.constructionMonths).div(12);
-  const averagePF = pfLoan.div(2);
-  const financingCost = interestOnly(averagePF, D(a.interestRate).div(HUNDRED)).times(
-    constructionYears.plus(D(a.saleOutMonths).div(12))
-  );
-
+  // A single monthly ledger now drives PF exposure, interest, IRR/NPV and
+  // the quarterly dashboard. The funding waterfall remains a preliminary
+  // underwriting assumption and is disclosed in the UI.
+  const ledger = buildProjectLedger({
+    parcel,
+    scenario,
+    revenueSale: revenueSale.toNumber(),
+    revenueExit: valueResidentialLease.plus(valueRetail).toNumber(),
+    hardCost: hardCost.toNumber(),
+    softCost: softCost.toNumber(),
+    contingency: contingency.toNumber(),
+  });
+  const financingCost = D(ledger.financingCost);
+  const pfLoan = D(ledger.maxPfBalance);
+  const equity = D(ledger.equityInvested);
+  const totalMonths = D(ledger.rows.length - 1);
   const totalCost = projectCostExFin.plus(financingCost);
 
   // ─── 6. Profit ──────────────────────────────────────────────────────
@@ -165,52 +157,8 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     ? profit.div(totalRevenue).times(HUNDRED)
     : ZERO;
 
-  // ─── 7. Cashflow schedule for IRR ───────────────────────────────────
-  // Build a monthly cashflow array from the equity investor's perspective.
-  // The IRR is the return on equity, not on total project capital.
-  //
-  // Equity perspective:
-  //   t=0:           -equity          (capital call)
-  //   t=designEnd+1: +0               (PF loan draws cover construction; equity already deployed)
-  //   tConstruction: $0               (PF pays the bills; no further equity)
-  //   tSale phase:   project receives sale proceeds, pays back PF principal+interest,
-  //                  remaining cash flows to equity. We treat this as the equity distribution.
-  //
-  // So equity sees: -E in t0, then distributions during sale phase totaling (revenue - PF - financingCost - softCost - hardCost - contingency + equity) = profit + equity.
-  // Equivalently the investor invests E and gets back E + profit.
-  const months = totalMonths.toNumber();
-  const monthlyCF: Decimal[] = new Array(months + 1).fill(ZERO);
-
-  // t=0: equity capital call
-  monthlyCF[0] = equity.negated();
-
-  // Equity distributions follow the actual sale ramp. Realistic Korean
-  // 분양 schedule: presales start during construction (month 4 of construction),
-  // 계약금 10% at presale, 중도금 60% spread across the construction tail,
-  // 잔금 30% at occupancy. We model this as monthly draws.
-  const presaleStart = a.designMonths + Math.floor(a.constructionMonths * 0.4);
-  const stabilization = months;
-  const totalEquityReturn = equity.plus(profit); // = E × multiple
-
-  // Approximate the 10/60/30 split across the timeline
-  const presaleMonths = Math.max(1, a.constructionMonths - Math.floor(a.constructionMonths * 0.4));
-  const occupancyMonth = a.designMonths + a.constructionMonths;
-  const saleOutMonths = Math.max(1, a.saleOutMonths);
-
-  // 10% at presale launch
-  if (presaleStart <= months) {
-    monthlyCF[presaleStart] = monthlyCF[presaleStart].plus(totalEquityReturn.times(0.10));
-  }
-  // 60% spread across remaining construction
-  const midPayPerMonth = totalEquityReturn.times(0.60).div(presaleMonths);
-  for (let m = presaleStart + 1; m <= occupancyMonth && m <= months; m++) {
-    monthlyCF[m] = monthlyCF[m].plus(midPayPerMonth);
-  }
-  // 30% spread across sale-out / occupancy window
-  const finalPayPerMonth = totalEquityReturn.times(0.30).div(saleOutMonths);
-  for (let m = occupancyMonth + 1; m <= stabilization && m <= months; m++) {
-    monthlyCF[m] = monthlyCF[m].plus(finalPayPerMonth);
-  }
+  // ─── 7. Equity cash flow from the shared ledger ────────────────────
+  const monthlyCF: Decimal[] = ledger.equityCashFlows.map(D);
 
   // ─── 8. Metrics ─────────────────────────────────────────────────────
   // IRR이 수렴 안 하면 (보통 손실 시나리오) — 손실률 기반 음수 IRR 추정.
@@ -253,15 +201,8 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
       ? dscrFn(stabilizedNOI, annualDebtService)
       : D(1.5); // sale-driven: bank uses sales coverage instead
 
-  // Max exposure = most negative cumulative cash
-  let cum = ZERO;
-  let maxExposure = ZERO;
-  let breakEvenIdx: number | null = null;
-  for (let m = 0; m <= months; m++) {
-    cum = cum.plus(monthlyCF[m]);
-    if (cum.lt(maxExposure)) maxExposure = cum;
-    if (breakEvenIdx === null && cum.gte(0) && m > 0) breakEvenIdx = m;
-  }
+  const maxExposure = D(ledger.maxProjectExposure);
+  const breakEvenIdx = ledger.projectBreakEvenMonth;
 
   // ltc actual (after sizing)
   const ltcActual = projectCostExFin.gt(0)
@@ -311,12 +252,12 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     irr: toPct(annualIRR),
     equityMultiple: equityMult.toDecimalPlaces(2).toNumber(),
     dscr: dscrValue.toDecimalPlaces(2).toNumber(),
-    paybackMonths: breakEvenIdx ?? months,
+    paybackMonths: breakEvenIdx ?? totalMonths.toNumber(),
 
     maxExposure: toManWon(maxExposure),
     breakEvenQuarter: null, // set by PF schedule below
 
-    totalMonths: months,
+    totalMonths: totalMonths.toNumber(),
   };
 }
 
