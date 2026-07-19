@@ -193,13 +193,13 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   const stabilizedNOI = annualRentResidential
     .plus(annualRentRetail)
     .div(WON_TO_MANWON);
-  // For mostly-sale projects (no/low lease pool), DSCR isn't the binding
-  // constraint; we still report it for the bank's stress test.
+  // For sale-only projects there is no stabilized NOI, so DSCR is not
+  // applicable. Return 0 as a transport value; the UI explicitly renders N/A.
   const annualDebtService = interestOnly(pfLoan, D(a.interestRate).div(HUNDRED));
   const dscrValue =
     annualDebtService.gt(0) && stabilizedNOI.gt(0)
       ? dscrFn(stabilizedNOI, annualDebtService)
-      : D(1.5); // sale-driven: bank uses sales coverage instead
+      : ZERO;
 
   const maxExposure = D(ledger.maxProjectExposure);
   const breakEvenIdx = ledger.projectBreakEvenMonth;
