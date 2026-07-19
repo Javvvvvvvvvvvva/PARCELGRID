@@ -4,7 +4,8 @@ import { use, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { calculateScenario, ASSUMPTION_META } from "@/lib/finance/scenario";
 import { generatePFSchedule } from "@/lib/finance/cashflow";
-import { calculateTaxes } from "@/lib/finance/tax";
+import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
+import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
@@ -199,7 +200,7 @@ export default function DashboardPage({
         <div>
           <div className="eyebrow">STAGE 3 · FEASIBILITY</div>
           <h1>대표 계획안의 가격과 사업성을 검토합니다</h1>
-          <p>Stage 2에서 잠근 실제 매스에 시장 가격, 공사비, 금융조건을 연결합니다. 모든 수정값은 같은 계산 엔진으로 즉시 다시 계산됩니다.</p>
+          <p>Stage 2 대표 매스에 관측자료와 검토 가정을 연결한 예비 사업성 모델입니다. 금융기관 약정·시공사 견적·세무 검토 전에는 투자 확정값으로 사용할 수 없습니다.</p>
         </div>
         <div className="header-actions">
           <StatusBadge tone={geometry.validation.status === "pass" ? "positive" : "review"}>
@@ -209,6 +210,11 @@ export default function DashboardPage({
         </div>
       </header>
 
+      <section className="audit-banner" role="status">
+        <strong>예비 사업성 모델 · 전문가 검토 전</strong>
+        <span>실거래 원본, 사용자 입력, 알고리즘 추정과 미산정 항목을 분리합니다. 현재 결과는 비교·민감도 검토용이며 매입가 확정, 대출 심사 또는 세무신고용이 아닙니다.</span>
+      </section>
+
       <section className="source-lock">
         <div className="source-main">
           <span className="section-kicker">LOCKED REPRESENTATIVE</span>
@@ -217,30 +223,30 @@ export default function DashboardPage({
         </div>
         <Fact label="실현 용적률" value={`${geometry.building.preliminaryFarPct.toFixed(1)}%`} />
         <Fact label="Geometry hash" value={geometry.geometryHash} mono />
-        <Fact label="계산 버전" value={data.meta.version} mono />
+        <Fact label="금융 원장" value={`${PROJECT_LEDGER_MODEL_VERSION} · ${data.meta.version}`} mono />
       </section>
 
       <section className="decision-grid">
         <DecisionSignal
           label="사업 손익"
-          title={result.profit > 0 ? "흑자 예상" : "손실 예상"}
+          title={result.profit > 0 ? "현재 가정상 흑자" : "현재 가정상 손실"}
           value={won(result.profit)}
           tone={profitTone}
-          note={`매출 대비 ${result.profitMargin.toFixed(1)}% · 세금은 별도 참고`}
+          note={`세전 매출 대비 ${result.profitMargin.toFixed(1)}% · 미산정 세금 있음`}
         />
         <DecisionSignal
           label="요구수익률"
-          title={result.irr >= assumptions.equityIRR ? "목표 충족" : "목표 미달"}
+          title={result.irr >= assumptions.equityIRR ? "현재 가정상 목표 충족" : "현재 가정상 목표 미달"}
           value={`IRR ${result.irr.toFixed(1)}%`}
           tone={irrTone}
           note={`요구 IRR ${assumptions.equityIRR.toFixed(1)}% · NPV ${won(result.npv)}`}
         />
         <DecisionSignal
           label="토지 매입 여력"
-          title={bidGap >= 0 ? "검토가 이내" : "가격 조정 필요"}
+          title={bidGap >= 0 ? "예비 모델 범위 이내" : "예비 모델 범위 초과"}
           value={bidGap >= 0 ? `여유 ${won(bidGap)}` : `초과 ${won(Math.abs(bidGap))}`}
           tone={bidGap >= 0 ? "positive" : "negative"}
-          note={`목표 IRR 기준 상한 ${won(maxAcquisition.maxLandCost)}`}
+          note={`현재 가정·세전 IRR 기준 역산 ${won(maxAcquisition.maxLandCost)}`}
         />
         <DecisionSignal
           label="부채 지표"
@@ -254,20 +260,20 @@ export default function DashboardPage({
       <section className="dashboard-section land-section" id="land-price">
         <SectionHeader
           eyebrow="LAND PRICE LADDER"
-          title="토지 가격은 세 가지 기준으로 분리합니다"
-          description="시장 추정가는 데이터 기준, 검토 매입가는 사용자 입력, 시행 가능 상한은 대표 계획안과 목표 IRR의 역산 결과입니다."
+          title="토지 가격의 원본·입력·알고리즘 결과를 분리합니다"
+          description="시장 참고 추정가는 실거래·공시지가에 자체 보정 규칙을 적용한 값입니다. 감정평가액이 아니며, 예비 매입 한도는 현재 세전 금융모델을 역산한 값입니다."
         />
         <div className="price-ladder">
           <PricePoint label="공시지가 총액" value={publicValueTotal} note="공시지가 × 필지면적" />
           <PricePoint
-            label="시장 추정가"
+            label="알고리즘 참고 추정가"
             value={marketEstimate}
             note={`${acquisitionMethodLabel(data.parcel.acquisitionEstimate?.method)} · ${confidenceLabel(marketConfidence)}`}
             tone="market"
           />
           <PricePoint label="현재 검토 매입가" value={acquisitionPrice} note={acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"} tone="active" />
           <PricePoint
-            label="시행 가능 상한"
+            label="예비 모델상 매입 한도"
             value={maxAcquisition.maxLandCost}
             note={`요구 IRR ${assumptions.equityIRR.toFixed(1)}% 역산`}
             tone={bidGap >= 0 ? "safe" : "risk"}
@@ -284,23 +290,23 @@ export default function DashboardPage({
       <div className="workspace-grid">
         <main className="stage3-main">
           <section className="dashboard-section">
-            <SectionHeader eyebrow="LIVE PRO FORMA" title="실시간 사업수지" description="현재 검토 매입가와 수정된 가정이 모두 반영된 결과입니다. 총사업비에는 아래 표시한 세금 참고액을 포함하지 않습니다." />
+            <SectionHeader eyebrow="PRELIMINARY PRO FORMA" title="예비 사업수지" description="공사비·금융·매출 가정을 한 원장에서 계산한 세전 결과입니다. 세금은 계산 가능한 항목만 별도 표시하며 미산정 항목이 있습니다." />
             <div className="metric-grid">
-              <MetricCard label="총 사업비" value={won(result.totalCost)} note="세금 참고액 별도" />
-              <MetricCard label="예상 매출·가치" value={won(result.totalRevenue)} />
-              <MetricCard label="예상 손익" value={won(result.profit)} tone={profitTone} />
+              <MetricCard label="세전 총사업비" value={won(result.totalCost)} note="세금·미확정 부대비 일부 별도" />
+              <MetricCard label="가정상 매출·가치" value={won(result.totalRevenue)} />
+              <MetricCard label="세전 예상손익" value={won(result.profit)} tone={profitTone} />
               <MetricCard label="이익률" value={`${result.profitMargin.toFixed(1)}%`} tone={profitTone} />
               <MetricCard label="필요 자기자본" value={won(result.equity)} />
-              <MetricCard label="예상 PF" value={won(result.pfLoan)} note={`실제 LTC ${result.ltc.toFixed(1)}%`} />
-              <MetricCard label="IRR" value={`${result.irr.toFixed(1)}%`} tone={irrTone} />
-              <MetricCard label="NPV" value={won(result.npv)} note={`할인율 ${assumptions.equityIRR.toFixed(1)}%`} tone={result.npv >= 0 ? "positive" : "negative"} />
+              <MetricCard label="예비 PF 최고잔액" value={won(result.pfLoan)} note={`실제 LTC ${result.ltc.toFixed(1)}%`} />
+              <MetricCard label="세전 IRR" value={`${result.irr.toFixed(1)}%`} tone={irrTone} />
+              <MetricCard label="세전 NPV" value={won(result.npv)} note={`할인율 ${assumptions.equityIRR.toFixed(1)}%`} tone={result.npv >= 0 ? "positive" : "negative"} />
             </div>
             <div className="return-strip">
               <ReturnMetric label="Equity Multiple" value={`${result.equityMultiple.toFixed(2)}x`} />
               <ReturnMetric label="최대 자금노출" value={won(Math.abs(result.maxExposure))} />
               <ReturnMetric label="회수 예상" value={`${result.paybackMonths}개월`} />
               <ReturnMetric label="전체 기간" value={`${result.totalMonths}개월`} />
-              <ReturnMetric label="세금 참고액" value={won(taxes.total)} note="총사업비 외 별도 표시" />
+              <ReturnMetric label="세금 부분 추정액" value={won(taxes.total)} note={taxes.complete ? "계산 완료" : "재산세·부가세 등 미산정"} />
             </div>
           </section>
 
@@ -344,7 +350,7 @@ export default function DashboardPage({
           </section>
 
           <section className="dashboard-section" id="cashflow">
-            <SectionHeader eyebrow="CASH FLOW" title="분기 자금흐름" description="현재 수정 가정으로 PF 스케줄을 다시 생성한 값입니다. 누적 현금흐름과 최대 노출 시점을 함께 확인하세요." />
+            <SectionHeader eyebrow="UNIFIED CASH FLOW" title="분기 자금흐름" description="IRR·NPV·PF 이자와 동일한 월별 원장을 분기로 합산합니다. 설계·공사·회수 기간 입력과 공사비 100%가 반영됩니다." />
             <CashflowTable rows={cashflow} />
           </section>
 
@@ -354,7 +360,7 @@ export default function DashboardPage({
               <EvidenceMetric label="현재 적용 단가" value={`${Math.round((assumptions.salePricePerSqM * SQM_PER_PYEONG) / 10_000).toLocaleString()}만원/평`} />
               <EvidenceMetric label="채택 사례 중앙값" value={data.saleEstimate ? `${data.saleEstimate.medianPPP.toLocaleString()}만원/평` : "근거 부족"} />
               <EvidenceMetric label="전체 거래 보수값" value={data.saleEstimate ? `${data.saleEstimate.conservativePPP.toLocaleString()}만원/평` : "근거 부족"} />
-              <EvidenceMetric label="신뢰도" value={confidenceLabel(saleConfidence)} />
+              <EvidenceMetric label="표본 근거 수준" value={confidenceLabel(saleConfidence)} />
             </div>
             <div className="case-list">
               {(data.saleEstimate?.cases ?? []).slice(0, 5).map((item) => (
@@ -418,6 +424,7 @@ export default function DashboardPage({
             <EvidenceRow label="매각 단가" value={data.saleEstimate?.basis ?? "지역 기본 가정"} state={data.saleEstimate ? "검토" : "미확정"} />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "참고 단가"} state="미확정" />
             <EvidenceRow label="PF 조건" value="사용자·금융기관 확인 필요" state="미확정" />
+            <EvidenceRow label="세금" value={`${TAX_MODEL_AS_OF} 기본세율 · 미산정 항목 있음`} state="미확정" />
             <p className="coverage-note">임대 안정화 개월과 월 분양속도는 현재 핵심 손익 엔진에 직접 연결되지 않아 편집 항목에서 제외했습니다. 숫자만 움직이고 결과가 변하지 않는 입력은 제공하지 않습니다.</p>
           </section>
 
@@ -430,7 +437,7 @@ export default function DashboardPage({
 
       <style jsx>{`
         .stage3-page{max-width:1540px;margin:0 auto;padding:26px 28px 54px;color:var(--fg)}
-        .stage3-header{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;margin-bottom:18px}.eyebrow,.section-kicker{font-size:9px;letter-spacing:.18em;font-weight:800;color:var(--fg-muted)}
+        .audit-banner{display:grid;gap:4px;margin-bottom:12px;padding:12px 14px;border:1px solid #d8a92e;border-radius:10px;background:#fff8dc;color:#5f4600}.audit-banner strong{font-size:11.5px}.audit-banner span{font-size:10.5px;line-height:1.5}\n        .stage3-header{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;margin-bottom:18px}.eyebrow,.section-kicker{font-size:9px;letter-spacing:.18em;font-weight:800;color:var(--fg-muted)}
         h1{font-size:28px;letter-spacing:-.04em;margin:7px 0 7px}.stage3-header p{max-width:780px;margin:0;color:var(--fg-muted);font-size:12px;line-height:1.6}.header-actions{display:flex;gap:8px;align-items:center}
         button{font:inherit;cursor:pointer}.secondary-button,.primary-button{min-height:36px;border-radius:8px;padding:0 12px;border:1px solid var(--border);background:var(--bg-elev);color:var(--fg);font-size:11px;font-weight:700}.primary-button{background:var(--fg);color:var(--bg);border-color:var(--fg)}.text-button{border:0;background:transparent;color:var(--accent);font-size:10.5px;padding:0;font-weight:700}
         .source-lock{display:grid;grid-template-columns:minmax(260px,1.5fr) repeat(3,minmax(120px,.65fr));border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);margin-bottom:12px}.source-main,.source-lock>:global(.fact){padding:13px 15px}.source-main{display:grid;gap:4px;border-right:1px solid var(--border-faint)}.source-main strong{font-size:14px}.source-main>span:last-child{font-size:10.5px;color:var(--fg-muted)}
@@ -531,7 +538,7 @@ function acquisitionMethodLabel(method?: "house-comps" | "by-comps" | "by-public
 }
 
 function confidenceLabel(confidence: "high" | "medium" | "low") {
-  return confidence === "high" ? "신뢰도 높음" : confidence === "medium" ? "신뢰도 중간" : "신뢰도 낮음";
+  return confidence === "high" ? "표본 근거 충분" : confidence === "medium" ? "표본 근거 보통" : "표본 근거 부족";
 }
 
 function toneColors(tone: Tone) {
