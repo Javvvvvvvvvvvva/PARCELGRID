@@ -68,7 +68,8 @@ export default function EnvelopePage({
     (state) => state.representativeGeometrySnapshot
   );
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
-  const financeScenarios = useProjectStore((state) => state.data?.scenarios ?? []);
+  const projectData = useProjectStore((state) => state.data);
+  const financeScenarios = projectData?.scenarios ?? [];
   const representativeScenario = planningScenarios.find(
     (scenario) =>
       scenario.id === representativeScenarioId &&
