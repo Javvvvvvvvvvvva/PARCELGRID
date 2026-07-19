@@ -40,11 +40,11 @@ describe("generatePFSchedule", () => {
     expect(schedule.rows[0].outflow).toBeGreaterThanOrEqual(parcel.acquiredPrice);
   });
 
-  it("cumulative balance progresses monotonically through outflow phase", () => {
-    let prev = 0;
-    for (const row of schedule.rows.slice(0, 4)) {
-      expect(row.cumulative).toBeLessThanOrEqual(prev + 1);
-      prev = row.cumulative;
+  it("cumulative balance reconciles every quarter including presales", () => {
+    let cumulative = 0;
+    for (const row of schedule.rows) {
+      cumulative += row.netQuarter;
+      expect(row.cumulative).toBe(cumulative);
     }
   });
 
