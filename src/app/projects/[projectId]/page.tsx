@@ -421,6 +421,7 @@ export default function DashboardPage({
             <h2>계산 반영 범위</h2>
             <EvidenceRow label="대표 계획 매스" value={geometry.geometryHash} state="확정" />
             <EvidenceRow label="토지 검토가" value={acquisitionEdited ? "사용자 수정" : "부지 등록값"} state={acquisitionEdited ? "검토" : "확정"} />
+            <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
             <EvidenceRow label="매각 단가" value={data.saleEstimate?.basis ?? "지역 기본 가정"} state={data.saleEstimate ? "검토" : "미확정"} />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "참고 단가"} state="미확정" />
             <EvidenceRow label="PF 조건" value="사용자·금융기관 확인 필요" state="미확정" />
