@@ -24,6 +24,11 @@ export type AcquisitionEstimateMethod =
   | "hybrid";
 
 export interface AcquisitionEstimateSnapshot {
+  /** 자체 보정 모델 버전. 없으면 구버전 저장 데이터. */
+  modelVersion?: string;
+  /** 외부 감정평가로 검증되지 않은 참고 추정 상태. */
+  modelStatus?: "experimental-unvalidated";
+  warnings?: string[];
   estimatedPriceManwon: ManWon;
   estimatedPricePerPyeong: number;
   method: AcquisitionEstimateMethod;
