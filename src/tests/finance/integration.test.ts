@@ -35,9 +35,9 @@ describe("generatePFSchedule", () => {
     expect(schedule.rows[0].quarter).toBe("2025-Q3");
   });
 
-  it("first quarter shows the land acquisition", () => {
-    expect(schedule.rows[0].phase).toBe("토지비");
-    expect(schedule.rows[0].outflow).toBe(parcel.acquiredPrice);
+  it("first quarter includes land acquisition without dropping other costs", () => {
+    expect(schedule.rows[0].phase).toContain("토지 인수");
+    expect(schedule.rows[0].outflow).toBeGreaterThanOrEqual(parcel.acquiredPrice);
   });
 
   it("cumulative balance progresses monotonically through outflow phase", () => {
@@ -54,8 +54,9 @@ describe("generatePFSchedule", () => {
     expect(maxExposureRow).toBeDefined();
   });
 
-  it("total outflow exceeds 토지 + 공사 minimums", () => {
-    expect(schedule.totalOutflow).toBeGreaterThan(parcel.acquiredPrice);
+  it("quarterly totals reconcile to the scenario ledger", () => {
+    expect(schedule.totalOutflow).toBeCloseTo(result.totalCost, -1);
+    expect(schedule.totalInflow).toBeCloseTo(result.totalRevenue, -1);
   });
 });
 
@@ -84,12 +85,19 @@ describe("calculateTaxes", () => {
   it("corporate tax applies progressive brackets to positive profit", () => {
     const corp = taxes.lines.find((l) => l.tax === "법인세")!;
     const profitWon = Math.max(result.profit, 0) * 10_000;
-    const bracket = TAX_RATES.corporateBracket;
-    const expectedWon =
-      profitWon <= bracket
-        ? profitWon * TAX_RATES.corporateTaxLow
-        : bracket * TAX_RATES.corporateTaxLow +
-          (profitWon - bracket) * TAX_RATES.corporateTaxHigh;
+    let remaining = profitWon;
+    let lower = 0;
+    let expectedWon = 0;
+    for (const bracket of TAX_RATES.corporateBrackets) {
+      if (remaining <= 0) break;
+      const width = Number.isFinite(bracket.upperWon)
+        ? bracket.upperWon - lower
+        : remaining;
+      const taxable = Math.min(remaining, width);
+      expectedWon += taxable * bracket.rate;
+      remaining -= taxable;
+      lower = bracket.upperWon;
+    }
     expect(corp.amount).toBeCloseTo(expectedWon / 10_000, 0);
   });
 
@@ -103,9 +111,13 @@ describe("calculateTaxes", () => {
     expect(corp.amount).toBe(0);
   });
 
-  it("total is the sum of lines", () => {
-    const sum = taxes.lines.reduce((s, l) => s + l.amount, 0);
+  it("total only includes calculated estimates and flags incomplete coverage", () => {
+    const sum = taxes.lines
+      .filter((line) => line.status === "estimated")
+      .reduce((total, line) => total + line.amount, 0);
     expect(taxes.total).toBe(sum);
+    expect(taxes.complete).toBe(false);
+    expect(taxes.lines.some((line) => line.status === "not-calculated")).toBe(true);
   });
 });
 
