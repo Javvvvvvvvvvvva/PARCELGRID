@@ -13,7 +13,8 @@ const ITEMS = [
   { id: "envelope",   icon: Icons.layers, label: "계획 스튜디오",   path: "envelope" },
   { id: "dashboard",  icon: Icons.bar,    label: "사업성 검토",       path: "" },
   { id: "comps",      icon: Icons.table,  label: "실거래 비교",     path: "comps" },
-  { id: "pdf",        icon: Icons.doc,    label: "투자 보고서",     path: "report" },
+  { id: "handoff",    icon: Icons.share,  label: "전문가 검증·인계", path: "handoff" },
+  { id: "pdf",        icon: Icons.doc,    label: "예비 보고서",     path: "report" },
 ];
 
 export function WorkRail({ projectId }: WorkRailProps) {
