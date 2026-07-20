@@ -149,7 +149,8 @@ function makeCrumb(pathname: string, parcelLabel: string): string[] {
     comparison: "시나리오 비교",
     comps: "실거래 비교",
     overrides: "가정 편집",
-    report: "투자 보고서",
+    handoff: "전문가 검증·인계",
+    report: "예비 보고서",
   };
   const tail = pathname.includes("/scenarios/")
     ? ["시나리오 상세"]
