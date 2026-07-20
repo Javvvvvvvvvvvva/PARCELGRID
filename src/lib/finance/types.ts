@@ -223,6 +223,8 @@ export interface ScenarioResult {
   /** 요구수익률(equityIRR)로 할인한 자기자본 현금흐름 NPV */
   npv: ManWon;
   irr: Pct;
+  /** IRR은 단일 부호변화와 수치해가 있을 때만 calculated. */
+  irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   dscr: number;
   paybackMonths: Months;
