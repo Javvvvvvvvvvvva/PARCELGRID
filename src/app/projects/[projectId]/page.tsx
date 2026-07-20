@@ -363,7 +363,7 @@ export default function DashboardPage({
             <div className="evidence-summary">
               <EvidenceMetric label="현재 적용 단가" value={`${Math.round((assumptions.salePricePerSqM * SQM_PER_PYEONG) / 10_000).toLocaleString()}만원/평`} />
               <EvidenceMetric label="채택 사례 중앙값" value={data.saleEstimate ? `${data.saleEstimate.medianPPP.toLocaleString()}만원/평` : "근거 부족"} />
-              <EvidenceMetric label="전체 거래 보수값" value={data.saleEstimate ? `${data.saleEstimate.conservativePPP.toLocaleString()}만원/평` : "근거 부족"} />
+              <EvidenceMetric label="전체 거래 중앙값" value={data.saleEstimate ? `${data.saleEstimate.conservativePPP.toLocaleString()}만원/평` : "근거 부족"} />
               <EvidenceMetric label="표본 근거 수준" value={confidenceLabel(saleConfidence)} />
             </div>
             <div className="case-list">
@@ -426,7 +426,7 @@ export default function DashboardPage({
             <EvidenceRow label="대표 계획 매스" value={geometry.geometryHash} state="확정" />
             <EvidenceRow label="토지 검토가" value={acquisitionEdited ? "사용자 수정" : "부지 등록값"} state={acquisitionEdited ? "검토" : "확정"} />
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
-            <EvidenceRow label="매각 단가" value={data.saleEstimate?.basis ?? "지역 기본 가정"} state={data.saleEstimate ? "검토" : "미확정"} />
+            <EvidenceRow label="매각 단가" value={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis}` : "내부 초기 가정 · 실거래 근거 없음"} state="미확정" />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
             <EvidenceRow label="임대 출구 보정" value={`${(INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount * 100).toFixed(0)}% 자체 가정 · 외부 검증 전`} state="미확정" />
             <EvidenceRow label="근생 임대료 배수" value={`주거 임대료의 ${INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium.toFixed(1)}× 자체 가정`} state="미확정" />
