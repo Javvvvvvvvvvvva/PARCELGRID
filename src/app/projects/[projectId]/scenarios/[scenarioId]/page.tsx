@@ -138,7 +138,7 @@ export default function ScenarioDetailPage({
           <KPI label="Equity Multiple" value={`${scenario.equityMultiple.toFixed(2)}x`} sub={`예비 자본 ${won(scenario.equity)}`} />
           <KPI label="DSCR" value={scenario.dscr > 0 ? scenario.dscr.toFixed(2) : "N/A"} sub={scenario.dscr > 0 ? "임대 NOI 기준 예비값" : "분양형 비적용"} />
           <KPI label="최대 노출" value={won(maxExposure)} sub={pfRows.find((r) => r.cumulative === maxExposure)?.quarter ?? "—"} />
-          <KPI label="회수기간" value={`${scenario.timeline}`} unit="개월" sub="준공 ~ 매각완" />
+          <KPI label="전체 사업기간" value={`${scenario.timeline}`} unit="개월" sub="설계·공사·회수 가정" />
         </div>
 
         {tab === "pf" && (
