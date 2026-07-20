@@ -405,7 +405,7 @@ function RiskView({ risks }: { risks: import("@/lib/adapters/view-model").RiskVM
       <div className="ui-panel__head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span className="ui-panel__title">규제 / 리스크 검토</span>
         <span style={{ fontSize: 11, color: warn > 0 ? "var(--warn-fg, var(--warn))" : "var(--pos-fg, var(--pos))" }}>
-          {risks.length}개 항목 · {warn > 0 ? `${warn}건 요주의` : "전체 정상"}
+          {risks.length}개 항목 · {warn > 0 ? `${warn}건 요주의` : "표시 경고 없음"}
         </span>
       </div>
       <div style={{ padding: 16 }}>
