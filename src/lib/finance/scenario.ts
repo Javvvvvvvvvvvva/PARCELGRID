@@ -165,24 +165,28 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   const monthlyCF: Decimal[] = ledger.equityCashFlows.map(D);
 
   // ─── 8. Metrics ─────────────────────────────────────────────────────
-  // IRR이 수렴 안 하면 (보통 손실 시나리오) — 손실률 기반 음수 IRR 추정.
-  // 손실 시나리오에서 IRR을 0이 아닌 진짜 음수로 표시해야 정직.
-  let monthlyIRR = irr(monthlyCF, 0.01);
-  if (monthlyIRR === null || monthlyIRR === undefined) {
-    // Fallback: equity 회수율로 음수 IRR 추정
-    const totalPositiveFlows = monthlyCF.filter((cf) => cf.gt(0)).reduce((s, cf) => s.plus(cf), ZERO);
-    const recoveryRate = equity.gt(0) ? totalPositiveFlows.div(equity).toNumber() : 0;
-    // recoveryRate < 1 = 손실. 연 IRR 추정: (recoveryRate)^(1/years) - 1
-    const totalMonths = monthlyCF.length;
-    const years = totalMonths / 12;
-    if (recoveryRate > 0 && years > 0) {
-      const annualRate = Math.pow(recoveryRate, 1 / years) - 1;
-      monthlyIRR = D(Math.pow(1 + annualRate, 1 / 12) - 1);
-    } else {
-      monthlyIRR = D(-0.99 / 12); // 거의 -100% (최악)
-    }
-  }
-  const annualIRR = annualizeIRR(monthlyIRR, 12).times(HUNDRED);
+  // Standard IRR is only reported for a conventional cash-flow sign pattern.
+  // Multiple sign changes can create multiple IRR roots; no synthetic fallback
+  // is presented as IRR when the numerical method has no unique solution.
+  const cashflowSigns = monthlyCF
+    .filter((cashflow) => !cashflow.eq(0))
+    .map((cashflow) => (cashflow.gt(0) ? 1 : -1));
+  const signChanges = cashflowSigns.reduce(
+    (count, sign, index) =>
+      index > 0 && sign !== cashflowSigns[index - 1] ? count + 1 : count,
+    0
+  );
+  const monthlyIRR =
+    signChanges === 1 ? irr(monthlyCF, 0.01) : null;
+  const irrStatus: NonNullable<ScenarioResult["irrStatus"]> =
+    signChanges > 1
+      ? "ambiguous"
+      : monthlyIRR
+        ? "calculated"
+        : "not-calculated";
+  const annualIRR = monthlyIRR
+    ? annualizeIRR(monthlyIRR, 12).times(HUNDRED)
+    : ZERO;
   const monthlyHurdleRate = Math.pow(1 + a.equityIRR / 100, 1 / 12) - 1;
   const equityNPV = npv(monthlyHurdleRate, monthlyCF);
 
@@ -254,6 +258,7 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
 
     npv: toManWon(equityNPV),
     irr: toPct(annualIRR),
+    irrStatus,
     equityMultiple: equityMult.toDecimalPlaces(2).toNumber(),
     dscr: dscrValue.toDecimalPlaces(2).toNumber(),
     paybackMonths: breakEvenIdx ?? totalMonths.toNumber(),
