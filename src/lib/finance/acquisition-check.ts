@@ -1,8 +1,9 @@
 /**
- * 부지 인수가 검증 엔진.
+ * 부지 인수가 비교 엔진.
  *
- * UPDATED: jimok 기반 필터링 추가. 부지 지목과 같은 카테고리의 거래만
- * 비교 — "대지인데 임야 거래랑 비교해서 +719% 나오는" 문제 해결.
+ * 공시지가·동일 지목 실거래와 입력 매입가의 차이를 보여준다. 내부 구간
+ * 기준은 외부 통계검증 전 탐색 규칙이므로 적정가 판정이나 감정평가로
+ * 표현하지 않는다.
  */
 
 import type { MolitTransaction } from "@/lib/integrations/molit";
@@ -34,7 +35,12 @@ export interface AxisResult {
   details: Record<string, number | string | undefined>;
 }
 
+export const ACQUISITION_CHECK_MODEL_VERSION = "experimental-2026.1";
+
 export interface AcquisitionCheckResult {
+  modelVersion: typeof ACQUISITION_CHECK_MODEL_VERSION;
+  modelStatus: "experimental-unvalidated";
+  warnings: string[];
   inputs: {
     acquisitionPriceManwon: number;
     acquisitionPricePerPyeong: number;
@@ -198,12 +204,12 @@ export function checkAcquisition(
     const base = {
       "공시지가 총액": `${(landPriceTotal / 10000).toFixed(1)}억`,
       배율: `${landPriceRatio.toFixed(2)}×`,
-      "정상 범위": "1.5-3.5×",
+      "자체 탐색 구간": "1.5-3.5× · 외부 미검증",
     };
     if (landPriceRatio <= 3.5) {
       return {
         status: "ok",
-        label: `공시지가 대비 ${landPriceRatio.toFixed(2)}× — 정상 범위`,
+        label: `공시지가 대비 ${landPriceRatio.toFixed(2)}× — 자체 탐색 구간`,
         value: landPriceRatio,
         details: base,
       };
@@ -218,7 +224,7 @@ export function checkAcquisition(
     }
     return {
       status: "overpaid",
-      label: `공시지가 대비 ${landPriceRatio.toFixed(2)}× — 과도`,
+      label: `공시지가 대비 ${landPriceRatio.toFixed(2)}× — 자체 기준 상단 초과`,
       value: landPriceRatio,
       details: base,
     };
@@ -253,7 +259,7 @@ export function checkAcquisition(
     if (Math.abs(deltaPct) <= 15) {
       return {
         status: "ok",
-        label: `인근 중앙값 대비 ${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}% — 정상`,
+        label: `인근 중앙값 대비 ${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}% — 자체 ±15% 구간`,
         value: deltaPct,
         details: base,
       };
@@ -269,7 +275,7 @@ export function checkAcquisition(
     if (deltaPct > 30) {
       return {
         status: "overpaid",
-        label: `인근 중앙값 대비 +${deltaPct.toFixed(1)}% — 과도`,
+        label: `인근 중앙값 대비 +${deltaPct.toFixed(1)}% — 자체 기준 상단 초과`,
         value: deltaPct,
         details: base,
       };
@@ -341,6 +347,13 @@ export function checkAcquisition(
   );
 
   return {
+    modelVersion: ACQUISITION_CHECK_MODEL_VERSION,
+    modelStatus: "experimental-unvalidated",
+    warnings: [
+      "1.5~3.5배, ±15%, +30% 구간은 외부 통계검증 전 자체 탐색 기준입니다.",
+      "표본의 도로·형상·건물상태·권리관계 차이를 완전히 보정하지 않습니다.",
+      "결과는 가격 차이 탐색용이며 적정 매입가 판정이나 감정평가가 아닙니다.",
+    ],
     inputs: {
       acquisitionPriceManwon,
       acquisitionPricePerPyeong,
@@ -384,7 +397,7 @@ function computeVerdict(
     if (market.status === "overpaid") drivers.push(market.label);
     return {
       status: "overpaid",
-      label: "과도",
+      label: "자체 기준 상단 초과",
       reasoning: drivers.join(" · "),
     };
   }
@@ -405,10 +418,10 @@ function computeVerdict(
   if (market.status === "ok") drivers.push(market.label);
   return {
     status: "fair",
-    label: "적정",
+    label: "자체 기준 범위",
     reasoning:
       drivers.length > 0
         ? drivers.join(" · ")
-        : "주요 비교 지표가 정상 범위 내에 있습니다.",
+        : "주요 비교 지표가 자체 탐색 구간 안에 있습니다. 적정가를 뜻하지 않습니다.",
   };
 }
