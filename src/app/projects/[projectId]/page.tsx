@@ -2,7 +2,11 @@
 
 import { use, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { calculateScenario, ASSUMPTION_META } from "@/lib/finance/scenario";
+import {
+  calculateScenario,
+  ASSUMPTION_META,
+  INTERNAL_REVENUE_ASSUMPTIONS,
+} from "@/lib/finance/scenario";
 import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
@@ -423,7 +427,9 @@ export default function DashboardPage({
             <EvidenceRow label="토지 검토가" value={acquisitionEdited ? "사용자 수정" : "부지 등록값"} state={acquisitionEdited ? "검토" : "확정"} />
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
             <EvidenceRow label="매각 단가" value={data.saleEstimate?.basis ?? "지역 기본 가정"} state={data.saleEstimate ? "검토" : "미확정"} />
-            <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "참고 단가"} state="미확정" />
+            <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
+            <EvidenceRow label="임대 출구 보정" value={`${(INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount * 100).toFixed(0)}% 자체 가정 · 외부 검증 전`} state="미확정" />
+            <EvidenceRow label="근생 임대료 배수" value={`주거 임대료의 ${INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium.toFixed(1)}× 자체 가정`} state="미확정" />
             <EvidenceRow label="PF 조건" value="사용자·금융기관 확인 필요" state="미확정" />
             <EvidenceRow label="세금" value={`${TAX_MODEL_AS_OF} 기본세율 · 미산정 항목 있음`} state="미확정" />
             <p className="coverage-note">임대 안정화 개월과 월 분양속도는 현재 핵심 손익 엔진에 직접 연결되지 않아 편집 항목에서 제외했습니다. 숫자만 움직이고 결과가 변하지 않는 입력은 제공하지 않습니다.</p>
