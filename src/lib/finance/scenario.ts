@@ -261,7 +261,7 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
     irrStatus,
     equityMultiple: equityMult.toDecimalPlaces(2).toNumber(),
     dscr: dscrValue.toDecimalPlaces(2).toNumber(),
-    paybackMonths: breakEvenIdx ?? totalMonths.toNumber(),
+    paybackMonths: breakEvenIdx,
 
     maxExposure: toManWon(maxExposure),
     breakEvenQuarter: null, // set by PF schedule below
