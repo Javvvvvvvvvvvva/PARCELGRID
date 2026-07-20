@@ -227,7 +227,8 @@ export interface ScenarioResult {
   irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   dscr: number;
-  paybackMonths: Months;
+  /** 사업기간 안에 누적 프로젝트 현금흐름이 회복되지 않으면 null. */
+  paybackMonths: Months | null;
 
   // Risk
   maxExposure: ManWon; // most negative cumulative cash position
