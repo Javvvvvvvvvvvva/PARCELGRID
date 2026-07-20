@@ -176,7 +176,34 @@ export default function DashboardPage({
   }
 
   const { planningScenario, geometry, financeScenario } = context;
-  const { assumptions, acquisitionPrice, result, taxes, cashflow, maxAcquisition, sensitivity, breakEven } = calculation;
+  const {
+    assumptions,
+    acquisitionPrice,
+    scenario,
+    result,
+    taxes,
+    cashflow,
+    maxAcquisition,
+    sensitivity,
+    breakEven,
+  } = calculation;
+  const hasSaleRevenue = scenario.program.mix.residentialSale > 0;
+  const hasLeaseRevenue =
+    scenario.program.mix.residentialLease > 0 || scenario.program.mix.retail > 0;
+  const activeAssumptionGroups = ASSUMPTION_GROUPS.map((group) => ({
+    ...group,
+    fields: group.fields.filter(({ field }) => {
+      if (field === "salePricePerSqM") return hasSaleRevenue;
+      if (
+        field === "rentPerSqMMonth" ||
+        field === "vacancyRate" ||
+        field === "capRate"
+      ) {
+        return hasLeaseRevenue;
+      }
+      return true;
+    }),
+  })).filter((group) => group.fields.length > 0);
   const acquisitionEdited = draftAcquisitionPrice != null && draftAcquisitionPrice !== data.parcel.acquiredPrice;
   const editedCount = Object.keys(draft ?? {}).length + (acquisitionEdited ? 1 : 0);
   const marketEstimate = data.parcel.acquisitionEstimate?.estimatedPriceManwon
@@ -325,7 +352,7 @@ export default function DashboardPage({
             <div className="return-strip">
               <ReturnMetric label="Equity Multiple" value={`${result.equityMultiple.toFixed(2)}x`} />
               <ReturnMetric label="최대 자금노출" value={won(Math.abs(result.maxExposure))} />
-              <ReturnMetric label="회수 예상" value={`${result.paybackMonths}개월`} />
+              <ReturnMetric label="회수 예상" value={result.paybackMonths == null ? "N/A" : `${result.paybackMonths}개월`} note={result.paybackMonths == null ? "사업기간 내 미회수" : undefined} />
               <ReturnMetric label="전체 기간" value={`${result.totalMonths}개월`} />
               <ReturnMetric label="세금 부분 추정액" value={won(taxes.total)} note={taxes.complete ? "계산 완료" : "재산세·부가세 등 미산정"} />
             </div>
@@ -420,7 +447,7 @@ export default function DashboardPage({
               source="부지 등록 입력값 · 시장 추정가와 분리"
               onChange={(value) => setDraftAcquisitionPrice(projectId, value)}
             />
-            {ASSUMPTION_GROUPS.map((group) => (
+            {activeAssumptionGroups.map((group) => (
               <details key={group.title} open className="assumption-group">
                 <summary>{group.title}</summary>
                 {group.fields.map((field) => (
@@ -445,11 +472,15 @@ export default function DashboardPage({
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
             <EvidenceRow label="매각 단가" value={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis}` : "내부 초기 가정 · 실거래 근거 없음"} state="미확정" />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
-            <EvidenceRow label="임대 출구 보정" value={`${(INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount * 100).toFixed(0)}% 자체 가정 · 외부 검증 전`} state="미확정" />
-            <EvidenceRow label="근생 임대료 배수" value={`주거 임대료의 ${INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium.toFixed(1)}× 자체 가정`} state="미확정" />
+            {hasLeaseRevenue && (
+              <>
+                <EvidenceRow label="임대 출구 보정" value={`${(INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount * 100).toFixed(0)}% 자체 가정 · 외부 검증 전`} state="미확정" />
+                <EvidenceRow label="근생 임대료 배수" value={`주거 임대료의 ${INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium.toFixed(1)}× 자체 가정`} state="미확정" />
+              </>
+            )}
             <EvidenceRow label="PF 조건" value="사용자·금융기관 확인 필요" state="미확정" />
             <EvidenceRow label="세금" value={`${TAX_MODEL_AS_OF} 기본세율 · 미산정 항목 있음`} state="미확정" />
-            <p className="coverage-note">임대 안정화 개월과 월 분양속도는 현재 핵심 손익 엔진에 직접 연결되지 않아 편집 항목에서 제외했습니다. 숫자만 움직이고 결과가 변하지 않는 입력은 제공하지 않습니다.</p>
+            <p className="coverage-note">현재 대표 계획의 손익에 직접 연결되는 입력만 표시합니다. 임대 안정화 개월과 월 분양속도처럼 아직 핵심 손익 엔진에 연결되지 않은 값도 편집 항목에서 제외했습니다.</p>
           </section>
 
           <section className="next-actions">
