@@ -128,7 +128,7 @@ export function findDealRescuePaths(
     interestRateFloorPct: 0,
     balanced: { ...BALANCED_BOUNDS },
   };
-  const baseResult = {
+  const baseResult: Omit<DealRescueResult, "status" | "paths"> = {
     modelVersion: DEAL_RESCUE_MODEL_VERSION,
     baseline,
     target,
