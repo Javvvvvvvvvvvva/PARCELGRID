@@ -79,7 +79,7 @@ export interface DealRescueResult {
   evidenceStatus: "engine-calculated-external-validation-required";
 }
 
-const BINARY_SEARCH_ITERATIONS = 22;
+const BINARY_SEARCH_ITERATIONS = 18;
 const SINGLE_REVENUE_MULTIPLIER = 3;
 const SINGLE_CONSTRUCTION_COST_FLOOR = 0.4;
 const BALANCED_BOUNDS = {
@@ -89,9 +89,12 @@ const BALANCED_BOUNDS = {
   interestRateReductionPctPoint: 2,
 } as const;
 
-const LAND_REDUCTION_STEPS = [0, 0.1, 0.2, 0.3, 0.4] as const;
-const COST_REDUCTION_STEPS = [0, 0.05, 0.1, 0.15, 0.2] as const;
-const RATE_REDUCTION_STEPS = [0, 0.5, 1, 1.5, 2] as const;
+const BALANCED_PROFILES = [
+  { land: 1, revenue: 1, cost: 1, rate: 1 },
+  { land: 1, revenue: 1, cost: 0.5, rate: 0.5 },
+  { land: 1, revenue: 0.5, cost: 1, rate: 0.5 },
+  { land: 0.5, revenue: 1, cost: 1, rate: 1 },
+] as const;
 
 export function passesDealRescueTarget(
   result: ScenarioResult,
@@ -414,168 +417,162 @@ function findBalancedPath(
     : 0;
   let best:
     | {
-        parcel: Parcel;
-        scenario: Scenario;
         result: ScenarioResult;
         changes: DealRescueChange[];
         score: number;
       }
     | undefined;
 
-  for (const landReduction of LAND_REDUCTION_STEPS) {
-    for (const costReduction of COST_REDUCTION_STEPS) {
-      for (const rateReduction of RATE_REDUCTION_STEPS) {
-        const candidateParcel = {
-          ...parcel,
-          acquiredPrice: parcel.acquiredPrice * (1 - landReduction),
-        };
-        const baseAssumptions = {
+  for (const profile of BALANCED_PROFILES) {
+    const evaluateProfile = (intensity: number) => {
+      const landReduction =
+        (BALANCED_BOUNDS.landPriceReductionPct / 100) *
+        profile.land *
+        intensity;
+      const revenueIncrease =
+        (BALANCED_BOUNDS.revenuePriceIncreasePct / 100) *
+        profile.revenue *
+        intensity;
+      const costReduction =
+        (BALANCED_BOUNDS.constructionCostReductionPct / 100) *
+        profile.cost *
+        intensity;
+      const rateReduction =
+        BALANCED_BOUNDS.interestRateReductionPctPoint *
+        profile.rate *
+        intensity;
+      const candidateParcel: Parcel = {
+        ...parcel,
+        acquiredPrice: Math.max(
+          0,
+          Math.floor(parcel.acquiredPrice * (1 - landReduction))
+        ),
+      };
+      let candidateScenario: Scenario = {
+        ...scenario,
+        assumptions: {
           ...scenario.assumptions,
-          constCostPerSqM:
-            scenario.assumptions.constCostPerSqM * (1 - costReduction),
+          constCostPerSqM: Math.max(
+            0,
+            Math.floor(
+              scenario.assumptions.constCostPerSqM *
+                (1 - costReduction)
+            )
+          ),
           interestRate: Math.max(
             0,
-            scenario.assumptions.interestRate - rateReduction
+            Math.floor(
+              (scenario.assumptions.interestRate - rateReduction) *
+                10_000
+            ) / 10_000
           ),
-        };
-        const candidateScenario = {
-          ...scenario,
-          assumptions: baseAssumptions,
-        };
-
-        let revenueIncrease = 0;
-        let result = calculateScenario({
-          parcel: candidateParcel,
-          scenario: candidateScenario,
-        });
-
-        if (
-          !passesDealRescueTarget(result, targetIRR) &&
-          revenueField &&
-          revenueBase > 0
-        ) {
-          let infeasible = 0;
-          let feasible = BALANCED_BOUNDS.revenuePriceIncreasePct / 100;
-          const maxRevenueScenario = withAssumption(
-            candidateScenario,
-            revenueField.field,
-            revenueBase * (1 + feasible)
-          );
-          const maxRevenueResult = calculateScenario({
-            parcel: candidateParcel,
-            scenario: maxRevenueScenario,
-          });
-          if (!passesDealRescueTarget(maxRevenueResult, targetIRR)) continue;
-
-          for (
-            let index = 0;
-            index < BINARY_SEARCH_ITERATIONS;
-            index += 1
-          ) {
-            const candidate = (infeasible + feasible) / 2;
-            const testScenario = withAssumption(
-              candidateScenario,
-              revenueField.field,
-              revenueBase * (1 + candidate)
-            );
-            const testResult = calculateScenario({
-              parcel: candidateParcel,
-              scenario: testScenario,
-            });
-            if (passesDealRescueTarget(testResult, targetIRR)) {
-              feasible = candidate;
-            } else {
-              infeasible = candidate;
-            }
-          }
-          revenueIncrease = feasible;
-          const revenueValue = Math.ceil(revenueBase * (1 + feasible));
-          const finalScenario = withAssumption(
-            candidateScenario,
-            revenueField.field,
-            revenueValue
-          );
-          result = calculateScenario({
-            parcel: candidateParcel,
-            scenario: finalScenario,
-          });
-          candidateScenario.assumptions = finalScenario.assumptions;
-        }
-
-        if (!passesDealRescueTarget(result, targetIRR)) continue;
-
-        const activeChanges = [
-          landReduction,
-          costReduction,
-          rateReduction > 0 ? 1 : 0,
-          revenueIncrease,
-        ].filter((value) => value > 0).length;
-        if (activeChanges < 2) continue;
-
-        const score =
-          landReduction /
-            (BALANCED_BOUNDS.landPriceReductionPct / 100) +
-          revenueIncrease /
-            (BALANCED_BOUNDS.revenuePriceIncreasePct / 100) +
-          costReduction /
-            (BALANCED_BOUNDS.constructionCostReductionPct / 100) +
-          rateReduction /
-            BALANCED_BOUNDS.interestRateReductionPctPoint;
-        if (best && best.score <= score) continue;
-
-        const changes: DealRescueChange[] = [];
-        if (landReduction > 0) {
-          changes.push(
-            change(
-              "acquiredPrice",
-              "토지 검토 매입가",
-              parcel.acquiredPrice,
-              candidateParcel.acquiredPrice,
-              "만원"
-            )
-          );
-        }
-        if (revenueField && revenueIncrease > 0) {
-          changes.push(
-            change(
-              revenueField.field,
-              revenueField.label,
-              revenueBase,
-              candidateScenario.assumptions[revenueField.field],
-              revenueField.unit
-            )
-          );
-        }
-        if (costReduction > 0) {
-          changes.push(
-            change(
-              "constCostPerSqM",
-              "직접 공사비",
-              scenario.assumptions.constCostPerSqM,
-              candidateScenario.assumptions.constCostPerSqM,
-              "원/㎡"
-            )
-          );
-        }
-        if (rateReduction > 0) {
-          changes.push(
-            change(
-              "interestRate",
-              "PF 금리",
-              scenario.assumptions.interestRate,
-              candidateScenario.assumptions.interestRate,
-              "%"
-            )
-          );
-        }
-        best = {
-          parcel: candidateParcel,
-          scenario: candidateScenario,
-          result,
-          changes,
-          score,
-        };
+        },
+      };
+      if (revenueField && revenueBase > 0) {
+        candidateScenario = withAssumption(
+          candidateScenario,
+          revenueField.field,
+          Math.ceil(revenueBase * (1 + revenueIncrease))
+        );
       }
+      return {
+        parcel: candidateParcel,
+        scenario: candidateScenario,
+        result: calculateScenario({
+          parcel: candidateParcel,
+          scenario: candidateScenario,
+        }),
+        landReduction,
+        revenueIncrease:
+          revenueField && revenueBase > 0 ? revenueIncrease : 0,
+        costReduction,
+        rateReduction,
+      };
+    };
+
+    const upper = evaluateProfile(1);
+    if (!passesDealRescueTarget(upper.result, targetIRR)) continue;
+
+    let infeasible = 0;
+    let feasible = 1;
+    for (let index = 0; index < BINARY_SEARCH_ITERATIONS; index += 1) {
+      const candidate = (infeasible + feasible) / 2;
+      const attempt = evaluateProfile(candidate);
+      if (passesDealRescueTarget(attempt.result, targetIRR)) {
+        feasible = candidate;
+      } else {
+        infeasible = candidate;
+      }
+    }
+
+    const candidate = evaluateProfile(feasible);
+    if (!passesDealRescueTarget(candidate.result, targetIRR)) continue;
+
+    const changes: DealRescueChange[] = [];
+    if (candidate.landReduction > 0) {
+      changes.push(
+        change(
+          "acquiredPrice",
+          "토지 검토 매입가",
+          parcel.acquiredPrice,
+          candidate.parcel.acquiredPrice,
+          "만원"
+        )
+      );
+    }
+    if (
+      revenueField &&
+      candidate.revenueIncrease > 0
+    ) {
+      changes.push(
+        change(
+          revenueField.field,
+          revenueField.label,
+          revenueBase,
+          candidate.scenario.assumptions[revenueField.field],
+          revenueField.unit
+        )
+      );
+    }
+    if (candidate.costReduction > 0) {
+      changes.push(
+        change(
+          "constCostPerSqM",
+          "직접 공사비",
+          scenario.assumptions.constCostPerSqM,
+          candidate.scenario.assumptions.constCostPerSqM,
+          "원/㎡"
+        )
+      );
+    }
+    if (candidate.rateReduction > 0) {
+      changes.push(
+        change(
+          "interestRate",
+          "PF 금리",
+          scenario.assumptions.interestRate,
+          candidate.scenario.assumptions.interestRate,
+          "%"
+        )
+      );
+    }
+    if (changes.length < 2) continue;
+
+    const score =
+      candidate.landReduction /
+        (BALANCED_BOUNDS.landPriceReductionPct / 100) +
+      candidate.revenueIncrease /
+        (BALANCED_BOUNDS.revenuePriceIncreasePct / 100) +
+      candidate.costReduction /
+        (BALANCED_BOUNDS.constructionCostReductionPct / 100) +
+      candidate.rateReduction /
+        BALANCED_BOUNDS.interestRateReductionPctPoint;
+    if (!best || score < best.score) {
+      best = {
+        result: candidate.result,
+        changes,
+        score,
+      };
     }
   }
 
@@ -584,7 +581,7 @@ function findBalancedPath(
       "balanced",
       "균형 조정안",
       "unreachable",
-      `토지가 -${BALANCED_BOUNDS.landPriceReductionPct}%, 매출 단가 +${BALANCED_BOUNDS.revenuePriceIncreasePct}%, 공사비 -${BALANCED_BOUNDS.constructionCostReductionPct}%, 금리 -${BALANCED_BOUNDS.interestRateReductionPctPoint}%p 범위의 조합에서도 목표를 충족하지 못했습니다.`
+      `토지가 -${BALANCED_BOUNDS.landPriceReductionPct}%, 매출 단가 +${BALANCED_BOUNDS.revenuePriceIncreasePct}%, 공사비 -${BALANCED_BOUNDS.constructionCostReductionPct}%, 금리 -${BALANCED_BOUNDS.interestRateReductionPctPoint}%p 범위의 공개 조합 프로필에서도 목표를 충족하지 못했습니다.`
     );
   }
 
@@ -594,12 +591,11 @@ function findBalancedPath(
       "균형 조정안",
       best.changes,
       best.result,
-      "공개된 탐색 범위 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다."
+      "공개된 4개 조합 프로필 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다."
     ),
     burdenScore: Number(best.score.toFixed(4)),
   };
 }
-
 function evaluate(
   parcel: Parcel,
   scenario: Scenario,
