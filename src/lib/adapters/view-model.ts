@@ -90,6 +90,7 @@ export interface ScenarioVM {
   dscr: number;
   npv: number;
   irr: number;
+  irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   taxBurden: number;
   maxExposure: number;
@@ -164,6 +165,7 @@ export function toScenarioVM(
     dscr: result.dscr,
     npv: result.npv,
     irr: result.irr,
+    irrStatus: result.irrStatus,
     equityMultiple: equityMult,
     taxBurden: taxes.total,
     maxExposure: result.maxExposure,
