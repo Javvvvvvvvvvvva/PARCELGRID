@@ -24,7 +24,7 @@ const parcel: Parcel = {
   landPrice: 3_000_000,
   estMarketPrice: 8_000_000,
   acquired: "2026-01-01",
-  acquiredPrice: 80_000,
+  acquiredPrice: 150_000,
 };
 
 function makeScenario(
@@ -41,7 +41,7 @@ function makeScenario(
     ),
     assumptions: {
       ...defaultAssumptions(),
-      salePricePerSqM: 8_000_000,
+      salePricePerSqM: 4_000_000,
       ...overrides,
     },
   };
