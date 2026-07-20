@@ -11,7 +11,7 @@
  *   결합 로직 (이전과 동일):
  *     - 같은 지목 거래 5건 미만 → 추정 A만 (low)
  *     - 두 추정 비율 0.3~3.0 밖 → 추정 A (medium)
- *     - 정상 범위 → 큰 값 (high if 20+, else medium)
+ *     - 내부 비교 허용범위 → 가중 결합 (표본 20건 이상이면 표본 근거 충분)
  *
  * 한계:
  *   1. 시군구·부지 크기 배율은 외부 통계모형으로 검증되지 않은 자체 규칙이다.
@@ -249,7 +249,7 @@ export function estimateMarketPrice(
       method = "by-publicvalue";
       confidence = "medium";
     } else {
-      // 정상: 가중평균 (거래 많을수록 comps 가중치 높임)
+      // 내부 비교 허용범위: 가중평균 (거래 많을수록 comps 가중치 높임)
       const compsWeight = Math.min(0.7, sameJimokTxns.length / 30);
       const pubWeight = 1 - compsWeight;
       estimatedPriceManwon = Math.round(
