@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo } from "react";
+import { use, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   calculateScenario,
@@ -11,6 +11,11 @@ import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
+import {
+  findDealRescuePaths,
+  type DealRescueChange,
+  type DealRescueResult,
+} from "@/lib/finance/deal-rescue";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -92,6 +97,11 @@ export default function DashboardPage({
   const draftAcquisitionPrices = useProjectStore((state) => state.draftAcquisitionPrices);
   const setDraftAcquisitionPrice = useProjectStore((state) => state.setDraftAcquisitionPrice);
   const resetDraftAcquisitionPrice = useProjectStore((state) => state.resetDraftAcquisitionPrice);
+  const [rescueRun, setRescueRun] = useState<{
+    key: string;
+    result: DealRescueResult;
+  } | null>(null);
+  const [rescueRunning, setRescueRunning] = useState(false);
 
   const projectPlanningScenarios = useMemo(
     () => planningScenarios.filter(
@@ -224,10 +234,28 @@ export default function DashboardPage({
   const saleConfidence = data.saleEstimate?.confidence ?? "low";
   const aboveFloors = geometry.building.aboveGroundFloors.length;
   const basementFloors = geometry.building.basementFloors.length;
+  const rescueKey = JSON.stringify({
+    projectId,
+    geometryHash: geometry.geometryHash,
+    scenarioId: scenario.id,
+    acquisitionPrice,
+    assumptions,
+  });
+  const visibleRescue =
+    rescueRun?.key === rescueKey ? rescueRun.result : null;
 
   const resetAll = () => {
     resetDraftAssumptions(financeScenario.id);
     resetDraftAcquisitionPrice(projectId);
+  };
+
+  const runDealRescue = () => {
+    setRescueRunning(true);
+    window.setTimeout(() => {
+      const rescue = findDealRescuePaths(calculation.parcel, scenario);
+      setRescueRun({ key: rescueKey, result: rescue });
+      setRescueRunning(false);
+    }, 0);
   };
 
   return (
@@ -356,6 +384,16 @@ export default function DashboardPage({
               <ReturnMetric label="전체 기간" value={`${result.totalMonths}개월`} />
               <ReturnMetric label="세금 부분 추정액" value={won(taxes.total)} note={taxes.complete ? "계산 완료" : "재산세·부가세 등 미산정"} />
             </div>
+          </section>
+
+          <section className="dashboard-section" id="deal-rescue">
+            <DealRescuePanel
+              rescue={visibleRescue}
+              baseline={result}
+              targetIRR={assumptions.equityIRR}
+              running={rescueRunning}
+              onRun={runDealRescue}
+            />
           </section>
 
           <section className="dashboard-section split-section">
@@ -509,6 +547,360 @@ export default function DashboardPage({
       `}</style>
     </div>
   );
+}
+
+function DealRescuePanel({
+  rescue,
+  baseline,
+  targetIRR,
+  running,
+  onRun,
+}: {
+  rescue: DealRescueResult | null;
+  baseline: DealRescueResult["baseline"];
+  targetIRR: number;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const baselinePasses =
+    baseline.viable &&
+    baseline.profit >= 0 &&
+    baseline.npv >= 0 &&
+    baseline.irrStatus === "calculated" &&
+    baseline.irr >= targetIRR;
+  const statusLabel =
+    rescue?.status === "already-viable"
+      ? "현재안 목표 통과"
+      : rescue?.status === "rescue-found"
+        ? "검증 경로 발견"
+        : rescue?.status === "geometry-blocked"
+          ? "매스 재검토 필요"
+          : rescue?.status === "no-bounded-solution"
+            ? "탐색 범위 내 해결안 없음"
+            : baselinePasses
+              ? "현재안 목표 통과"
+              : "분석 전";
+  const statusTone: Tone =
+    rescue?.status === "rescue-found" || baselinePasses
+      ? "positive"
+      : rescue
+        ? "negative"
+        : "review";
+  const statusColors = toneColors(statusTone);
+
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 18,
+          alignItems: "flex-start",
+        }}
+      >
+        <SectionHeader
+          eyebrow="DEAL RESCUE"
+          title="이 사업을 살리는 최소 변경점을 역산합니다"
+          description={`현재 계획 매스를 고정하고 토지가·매출 단가·직접 공사비·PF 금리를 다시 계산합니다. 흑자, NPV 0 이상, IRR ${targetIRR.toFixed(1)}% 이상을 모두 통과한 경로만 해결안으로 표시합니다.`}
+        />
+        <div
+          style={{
+            display: "grid",
+            justifyItems: "end",
+            gap: 8,
+            flex: "0 0 auto",
+          }}
+        >
+          <span
+            style={{
+              padding: "6px 9px",
+              borderRadius: 999,
+              background: statusColors.bg,
+              color: statusColors.fg,
+              fontSize: 9.5,
+              fontWeight: 800,
+            }}
+          >
+            {statusLabel}
+          </span>
+          <button
+            disabled={running}
+            onClick={onRun}
+            style={{
+              minHeight: 36,
+              padding: "0 12px",
+              border: "1px solid var(--fg)",
+              borderRadius: 8,
+              background: "var(--fg)",
+              color: "var(--bg)",
+              font: "inherit",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: running ? "wait" : "pointer",
+              opacity: running ? 0.65 : 1,
+            }}
+          >
+            {running
+              ? "목표 통과 여부 계산 중…"
+              : rescue
+                ? "현재 입력으로 다시 계산"
+                : "최소 변경 찾기"}
+          </button>
+        </div>
+      </div>
+
+      {!rescue && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 8,
+            marginTop: 15,
+          }}
+        >
+          <RescueGate
+            label="손익"
+            value={won(baseline.profit)}
+            pass={baseline.profit >= 0}
+          />
+          <RescueGate
+            label="NPV"
+            value={won(baseline.npv)}
+            pass={baseline.npv >= 0}
+          />
+          <RescueGate
+            label="IRR"
+            value={
+              baseline.irrStatus === "calculated"
+                ? `${baseline.irr.toFixed(1)}%`
+                : "N/A"
+            }
+            pass={
+              baseline.irrStatus === "calculated" &&
+              baseline.irr >= targetIRR
+            }
+          />
+        </div>
+      )}
+
+      {rescue?.status === "already-viable" && (
+        <p
+          style={{
+            margin: "15px 0 0",
+            padding: 12,
+            borderRadius: 8,
+            background: "var(--pos-soft)",
+            color: "var(--pos-fg)",
+            fontSize: 10.5,
+            lineHeight: 1.55,
+          }}
+        >
+          현재 입력이 네 가지 게이트를 모두 통과합니다. 불필요한 낙관 가정을
+          추가하지 않았습니다.
+        </p>
+      )}
+
+      {rescue && rescue.paths.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+            gap: 9,
+            marginTop: 15,
+          }}
+        >
+          {rescue.paths.map((path) => {
+            const reachable = path.status === "reachable";
+            return (
+              <article
+                key={path.id}
+                style={{
+                  display: "grid",
+                  alignContent: "start",
+                  gap: 9,
+                  minHeight: 178,
+                  padding: 13,
+                  border: `1px solid ${
+                    reachable ? "var(--pos-fg)" : "var(--border-faint)"
+                  }`,
+                  borderRadius: 9,
+                  background: reachable
+                    ? "var(--pos-soft)"
+                    : "var(--bg-soft)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <strong style={{ fontSize: 12 }}>{path.title}</strong>
+                  <small
+                    style={{
+                      color: reachable
+                        ? "var(--pos-fg)"
+                        : "var(--fg-muted)",
+                      fontWeight: 800,
+                    }}
+                  >
+                    {reachable
+                      ? "목표 통과"
+                      : path.status === "not-applicable"
+                        ? "해당 없음"
+                        : "범위 내 불가"}
+                  </small>
+                </div>
+                {reachable &&
+                  path.changes.map((item) => (
+                    <div
+                      key={item.field}
+                      style={{
+                        paddingBottom: 7,
+                        borderBottom: "1px solid var(--border-faint)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: 8.5,
+                          color: "var(--fg-muted)",
+                        }}
+                      >
+                        {item.label}
+                      </span>
+                      <strong
+                        style={{
+                          display: "block",
+                          marginTop: 4,
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {formatRescueValue(item, item.from)} →{" "}
+                        {formatRescueValue(item, item.to)}
+                      </strong>
+                      <small
+                        style={{
+                          display: "block",
+                          marginTop: 2,
+                          color: "var(--pos-fg)",
+                        }}
+                      >
+                        {item.pctChange == null
+                          ? "변화율 N/A"
+                          : `${item.pctChange > 0 ? "+" : ""}${item.pctChange.toFixed(1)}%`}
+                      </small>
+                    </div>
+                  ))}
+                {reachable && path.result && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, 1fr)",
+                      gap: 6,
+                      fontSize: 8.5,
+                    }}
+                  >
+                    <span>
+                      손익
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(path.result.profit)}
+                      </b>
+                    </span>
+                    <span>
+                      NPV
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(path.result.npv)}
+                      </b>
+                    </span>
+                    <span>
+                      IRR
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {path.result.irr.toFixed(1)}%
+                      </b>
+                    </span>
+                  </div>
+                )}
+                <p
+                  style={{
+                    margin: 0,
+                    color: "var(--fg-muted)",
+                    fontSize: 8.5,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {path.reason}
+                </p>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {rescue && (
+        <p
+          style={{
+            margin: "12px 0 0",
+            paddingTop: 10,
+            borderTop: "1px solid var(--border-faint)",
+            color: "var(--fg-muted)",
+            fontSize: 9,
+            lineHeight: 1.55,
+          }}
+        >
+          {rescue.modelVersion} · 엔진 재계산 결과이며 시세 예측이나 견적 확정이
+          아닙니다. 기존 계획과 입력값은 자동 변경하지 않습니다. 도달 경로는
+          실거래·시공사 견적·금융기관 조건으로 외부 검증한 뒤 별도 버전으로
+          확정해야 합니다.
+        </p>
+      )}
+    </>
+  );
+}
+
+function RescueGate({
+  label,
+  value,
+  pass,
+}: {
+  label: string;
+  value: string;
+  pass: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: "10px 11px",
+        borderRadius: 8,
+        background: pass ? "var(--pos-soft)" : "var(--neg-soft)",
+      }}
+    >
+      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>{label}</span>
+      <strong
+        style={{
+          display: "block",
+          marginTop: 4,
+          color: pass ? "var(--pos-fg)" : "var(--neg-fg)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+        }}
+      >
+        {value} · {pass ? "통과" : "미달"}
+      </strong>
+    </div>
+  );
+}
+
+function formatRescueValue(change: DealRescueChange, value: number) {
+  if (change.unit === "만원") return won(value);
+  if (change.unit === "%") return `${value.toFixed(2)}%`;
+  if (change.unit === "원/㎡·월") {
+    return `${Math.round(value).toLocaleString()}원/㎡·월`;
+  }
+  return `${Math.round(value).toLocaleString()}원/㎡`;
 }
 
 function formatRevenuePrice(value: number, kind: "sale" | "rent") {
