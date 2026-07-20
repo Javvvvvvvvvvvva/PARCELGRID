@@ -12,6 +12,12 @@ import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
 import {
+  acquisitionPricePerPyeong,
+  acquisitionPriceTotal,
+  assessAcquisitionPrice,
+  type AcquisitionPriceMode,
+} from "@/lib/finance/acquisition-price";
+import {
   findDealRescuePaths,
   type DealRescueChange,
   type DealRescueResult,
@@ -220,6 +226,12 @@ export default function DashboardPage({
     ?? (data.parcel.estMarketPrice
       ? Math.round((data.parcel.estMarketPrice * data.parcel.lotArea) / 10_000)
       : Math.round((data.parcel.landPrice * data.parcel.lotArea) / 10_000));
+  const marketMedianTotal = data.parcel.acquisitionEstimate?.marketMedianManwon ?? 0;
+  const houseProxy = data.parcel.acquisitionEstimate?.houseProxy;
+  const acquisitionPerPyeong = acquisitionPricePerPyeong(
+    acquisitionPrice,
+    data.parcel.lotArea
+  );
   const publicValueTotal = Math.round((data.parcel.landPrice * data.parcel.lotArea) / 10_000);
   const bidGap = maxAcquisition.maxLandCost - acquisitionPrice;
   const dscrApplicable = result.revenueLease + result.revenueRetail > 0;
@@ -341,13 +353,25 @@ export default function DashboardPage({
         />
         <div className="price-ladder">
           <PricePoint label="공시지가 총액" value={publicValueTotal} note="공시지가 × 필지면적" />
+          {marketMedianTotal > 0 && (
+            <PricePoint
+              label="토지 실거래 중앙값"
+              value={marketMedianTotal}
+              note={`${Math.round(data.parcel.acquisitionEstimate?.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평 · 토지 분포 참고`}
+            />
+          )}
           <PricePoint
             label="알고리즘 참고 추정가"
             value={marketEstimate}
-            note={`${acquisitionMethodLabel(data.parcel.acquisitionEstimate?.method)} · ${confidenceLabel(marketConfidence)}`}
+            note={`${acquisitionMethodLabel(data.parcel.acquisitionEstimate?.method)}${houseProxy ? ` ${houseProxy.sampleSize}건` : ""} · ${confidenceLabel(marketConfidence)}`}
             tone="market"
           />
-          <PricePoint label="현재 검토 매입가" value={acquisitionPrice} note={acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"} tone="active" />
+          <PricePoint
+            label="현재 검토 매입가 총액"
+            value={acquisitionPrice}
+            note={`${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평 · ${acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"}`}
+            tone="active"
+          />
           <PricePoint
             label="예비 모델상 매입 한도"
             value={maxAcquisition.maxLandCost}
@@ -356,7 +380,16 @@ export default function DashboardPage({
           />
         </div>
         <div className="method-strip">
-          <span>토지 추정 표본 <b>{data.parcel.acquisitionEstimate?.transactionCount ?? "미보존"}</b></span>
+          <span>
+            활성 추정 표본 <b>
+              {data.parcel.acquisitionEstimate?.method === "house-comps"
+                ? houseProxy
+                  ? `구축 주택 ${houseProxy.sampleSize}건`
+                  : "구축 주택 · 구버전 표본 미보존"
+                : `${data.parcel.acquisitionEstimate?.details?.sampleSize ?? "미보존"}건`}
+            </b>
+          </span>
+          <span>토지 분포 표본 <b>{data.parcel.acquisitionEstimate?.transactionCount ?? "미보존"}건</b></span>
           <span>동일 지목 표본 <b>{data.parcel.acquisitionEstimate?.details?.sampleSize ?? "미보존"}</b></span>
           <span>입지 티어 <b>{data.parcel.acquisitionEstimate?.details?.locationTier ?? "이전 프로젝트"}</b></span>
           <button className="text-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>실거래 근거 열기</button>
@@ -475,12 +508,10 @@ export default function DashboardPage({
               <div><span className="section-kicker">LIVE INPUTS</span><h2>계산 조정</h2></div>
               {editedCount > 0 && <button className="text-button" onClick={resetAll}>{editedCount}건 초기화</button>}
             </div>
-            <NumericEditor
-              label="토지 검토 매입가"
-              value={acquisitionPrice}
-              divisor={1}
-              suffix="만원"
-              step={1000}
+            <AcquisitionPriceEditor
+              totalManwon={acquisitionPrice}
+              lotAreaSqm={data.parcel.lotArea}
+              referenceManwon={marketEstimate}
               edited={acquisitionEdited}
               source="부지 등록 입력값 · 시장 추정가와 분리"
               onChange={(value) => setDraftAcquisitionPrice(projectId, value)}
@@ -506,7 +537,11 @@ export default function DashboardPage({
             <span className="section-kicker">MODEL COVERAGE</span>
             <h2>계산 반영 범위</h2>
             <EvidenceRow label="대표 계획 매스" value={geometry.geometryHash} state="확정" />
-            <EvidenceRow label="토지 검토가" value={acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} state="검토" />
+            <EvidenceRow
+              label="토지 검토가"
+              value={`${acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} · ${won(acquisitionPrice)} 총액 · ${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평`}
+              state="검토"
+            />
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
             <EvidenceRow label="매각 단가" value={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis}` : "내부 초기 가정 · 실거래 근거 없음"} state="미확정" />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
@@ -536,7 +571,7 @@ export default function DashboardPage({
         .source-lock{display:grid;grid-template-columns:minmax(260px,1.5fr) repeat(3,minmax(120px,.65fr));border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);margin-bottom:12px}.source-main,.source-lock>:global(.fact){padding:13px 15px}.source-main{display:grid;gap:4px;border-right:1px solid var(--border-faint)}.source-main strong{font-size:14px}.source-main>span:last-child{font-size:10.5px;color:var(--fg-muted)}
         .decision-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
         .dashboard-section,.assumption-panel,.evidence-panel{border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);padding:17px}.dashboard-section{margin-bottom:12px}.land-section{padding:18px 19px}
-        .price-ladder{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:15px}.method-strip{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:11px;padding-top:10px;border-top:1px solid var(--border-faint);font-size:10px;color:var(--fg-muted)}.method-strip b{color:var(--fg)}.method-strip button{margin-left:auto}
+        .price-ladder{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:15px}.method-strip{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:11px;padding-top:10px;border-top:1px solid var(--border-faint);font-size:10px;color:var(--fg-muted)}.method-strip b{color:var(--fg)}.method-strip button{margin-left:auto}
         .workspace-grid{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:12px;align-items:start}.stage3-main{min-width:0}.stage3-sidebar{display:grid;gap:12px;position:sticky;top:16px}.assumption-heading{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--border-faint);padding-bottom:10px}.assumption-heading h2,.evidence-panel h2{font-size:16px;margin:5px 0 0}
         .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}.return-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:9px;border:1px solid var(--border-faint);border-radius:9px;overflow:hidden}.return-strip>:global(div)+:global(div){border-left:1px solid var(--border-faint)}
         .split-section{display:grid;grid-template-columns:1fr 1fr;gap:28px}.break-even-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.break-even-strip>div{padding:11px 12px;border-radius:8px;background:var(--bg-soft);display:grid;gap:4px}.break-even-strip span{font-size:9.5px;color:var(--fg-muted)}.break-even-strip strong{font-size:13px;font-family:var(--font-mono)}
@@ -961,6 +996,109 @@ function CashflowTable({ rows }: { rows: ReturnType<typeof toCashflowVM> }) {
 
 function EvidenceMetric({ label, value }: { label: string; value: string }) {
   return <div style={{ padding: "11px 12px", borderRadius: 8, background: "var(--bg-soft)" }}><span style={{ display: "block", fontSize: 9, color: "var(--fg-muted)" }}>{label}</span><strong style={{ display: "block", marginTop: 5, fontSize: 12 }}>{value}</strong></div>;
+}
+
+function AcquisitionPriceEditor({
+  totalManwon,
+  lotAreaSqm,
+  referenceManwon,
+  edited,
+  source,
+  onChange,
+}: {
+  totalManwon: number;
+  lotAreaSqm: number;
+  referenceManwon: number;
+  edited: boolean;
+  source: string;
+  onChange: (value: number) => void;
+}) {
+  const [mode, setMode] = useState<AcquisitionPriceMode>("total");
+  const perPyeong = acquisitionPricePerPyeong(totalManwon, lotAreaSqm);
+  const assessment = assessAcquisitionPrice(totalManwon, referenceManwon);
+  const displayedValue = mode === "total" ? totalManwon : perPyeong;
+  const warning =
+    assessment.status === "extreme-low"
+      ? `알고리즘 참고 추정의 ${assessment.ratioPct.toFixed(1)}%입니다. 총액과 평당가 단위를 다시 확인하세요.`
+      : assessment.status === "extreme-high"
+        ? `알고리즘 참고 추정의 ${assessment.ratioPct.toFixed(0)}%입니다. 총액과 평당가 단위를 다시 확인하세요.`
+        : null;
+
+  return (
+    <div style={{ padding: "10px 0 12px", borderBottom: "1px solid var(--border-faint)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>토지 검토 매입가</span>
+        <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+          {(["total", "per-pyeong"] as AcquisitionPriceMode[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setMode(item)}
+              style={{
+                minHeight: 25,
+                padding: "0 7px",
+                border: 0,
+                background: mode === item ? "var(--fg)" : "var(--bg)",
+                color: mode === item ? "var(--bg)" : "var(--fg-muted)",
+                fontSize: 8.5,
+                fontWeight: 700,
+              }}
+            >
+              {item === "total" ? "총액" : "평당가"}
+            </button>
+          ))}
+        </span>
+      </div>
+      <label style={{ display: "flex", justifyContent: "flex-end", gap: 5, alignItems: "center", marginTop: 7 }}>
+        <input
+          aria-label={mode === "total" ? "토지 검토 매입가 총액" : "토지 검토 매입가 평당가"}
+          type="number"
+          min={0}
+          step={mode === "total" ? 1000 : 50}
+          value={Number(displayedValue.toFixed(0))}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (!Number.isFinite(next) || next < 0) return;
+            onChange(
+              mode === "total"
+                ? next
+                : acquisitionPriceTotal(next, lotAreaSqm)
+            );
+          }}
+          style={{
+            width: 110,
+            height: 29,
+            padding: "0 7px",
+            borderRadius: 6,
+            border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`,
+            background: "var(--bg)",
+            color: edited ? "var(--accent)" : "var(--fg)",
+            textAlign: "right",
+            font: "inherit",
+            fontSize: 10.5,
+            fontWeight: 700,
+          }}
+        />
+        <small style={{ minWidth: 54, color: "var(--fg-faint)", fontSize: 8.5 }}>
+          {mode === "total" ? "만원 총액" : "만원/평"}
+        </small>
+      </label>
+      <div style={{ marginTop: 6, padding: "7px 8px", borderRadius: 6, background: "var(--bg-soft)", fontSize: 9, lineHeight: 1.5 }}>
+        <strong>{won(totalManwon)} 총액</strong>
+        <span style={{ marginLeft: 6, color: "var(--fg-muted)" }}>
+          {Math.round(perPyeong).toLocaleString()}만원/평
+        </span>
+      </div>
+      {warning && (
+        <div role="alert" style={{ marginTop: 6, padding: "7px 8px", borderRadius: 6, background: "var(--neg-soft)", color: "var(--neg-fg)", fontSize: 8.8, lineHeight: 1.5 }}>
+          {warning}
+        </div>
+      )}
+      <small title={source} style={{ display: "block", marginTop: 4, color: edited ? "var(--accent)" : "var(--fg-faint)", fontSize: 8.5 }}>
+        {edited ? "사용자 수정 · 실시간 재계산" : source}
+      </small>
+    </div>
+  );
 }
 
 function NumericEditor({ label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {
