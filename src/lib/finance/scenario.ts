@@ -96,10 +96,11 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
 
   // Lease revenue: capitalized annual NOI via cap rate.
   // Annual NOI = monthly rent × 12 × (1 − vacancy) for the residential lease pool.
-  // We apply a 15% ground-up risk discount to account for the difference
-  // between stabilized-asset cap rates (what JLL publishes) and development
-  // exit cap rates a buyer would actually pay for a fresh asset.
-  const STABILIZATION_DISCOUNT = D(0.85);
+  // These internal revenue adjustments are explicit and shown in the UI.
+  // They are not externally validated market coefficients.
+  const stabilizationDiscount = D(
+    INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount
+  );
   const annualRentResidential = gfaLease
     .times(D(a.rentPerSqMMonth))
     .times(12)
@@ -107,18 +108,21 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   const valueResidentialLease = annualRentResidential
     .div(D(a.capRate).div(HUNDRED))
     .div(WON_TO_MANWON)
-    .times(STABILIZATION_DISCOUNT);
+    .times(stabilizationDiscount);
 
-  // Retail leased at premium — 1.2× residential rent (was 1.3, tuned down
-  // after sensitivity testing showed it dominated mixed-use scenarios).
+  // Retail rent premium is an explicit internal assumption pending local comps.
   const annualRentRetail = gfaRetail
-    .times(D(a.rentPerSqMMonth).times(D(1.2)))
+    .times(
+      D(a.rentPerSqMMonth).times(
+        D(INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium)
+      )
+    )
     .times(12)
     .times(ONE.minus(D(a.vacancyRate).div(HUNDRED)));
   const valueRetail = annualRentRetail
     .div(D(a.capRate).div(HUNDRED))
     .div(WON_TO_MANWON)
-    .times(STABILIZATION_DISCOUNT);
+    .times(stabilizationDiscount);
 
   const totalRevenue = revenueSale.plus(valueResidentialLease).plus(valueRetail);
 
@@ -359,18 +363,17 @@ export function defaultProgram(
 }
 
 /**
- * Default assumptions for a Seoul Gangnam-area project, March 2025.
- *
- * In production these come from external feeds:
- *   - rent / sale → 국토교통부 실거래가 API, weighted by recency × distance
- *   - cap rate → JLL / Savills quarterly
- *   - PF rate → main bank indication
- *   - const cost → 건설기술연구원 quarterly + RFQ
+ * External validation pending. These non-editable revenue adjustments are
+ * exposed in the dashboard rather than hidden as magic constants.
  */
+export const INTERNAL_REVENUE_ASSUMPTIONS = {
+  stabilizationDiscount: 0.85,
+  retailRentPremium: 1.2,
+} as const;
+
 /**
- * 공사비 범위 계수 (C 실무 기준: Low -15% / High +20%).
- * 비대칭 — 마감·지하·흙막이·인건비·민원·현장 접근성으로 상방 리스크가 더 큼.
- * softCost·contingency는 hardCost 비율이라 자동 연동. 금융비 2차 효과는 미반영(근사).
+ * Unvalidated construction-cost stress range. It is a comparison band, not a
+ * statistical confidence interval. Financing second-order effects are omitted.
  */
 export const CONST_COST_RANGE = { low: 0.85, high: 1.2 } as const;
 
@@ -381,18 +384,15 @@ export const CONST_COST_RANGE = { low: 0.85, high: 1.2 } as const;
  */
 export function defaultAssumptions(): AssumptionSet {
   return {
-    // 임대료: 서울 외곽 소형주택 월세 수준 (33㎡ 원룸 월 약 70만) — 지역 시세로 조정 필요
+    // 내부 초기값. 대상지 임대사례로 교체해야 한다.
     rentPerSqMMonth: 21_000,
-    // 매각 단가(통매각 기준): 다가구는 구분분양 불가 — 건물 전체 통매각 평단가.
-    // 도봉 쌍문동 다가구 매매 사례 평당 약 1,050~1,621만 참고한 보수값 (평당 약 1,490만).
-    // 주변 신축 실거래 기반 자동 보정 예정 (C단계).
+    // 통매각 연면적 단가 내부 초기값. 대상지 실거래 사례로 교체해야 한다.
     salePricePerSqM: 4_500_000,
     vacancyRate: 4.5,
     // Cap rate: 서울 주거 수익률 수준
     capRate: 4.5,
 
-    // 공사비: 한국부동산원 건물신축단가표 주거용 RC 평균 + 2026 자재·인건비 상승 반영
-    // (평당 약 760만). 구조·마감·지하·ELV로 달라짐 — 견적 아님, 범위 산정 참고값.
+    // 내부 초기값. 구조·마감·지하·현장조건을 반영한 시공사 견적으로 교체해야 한다.
     constCostPerSqM: 2_300_000,
     softCostRate: 12, // 설계·감리·인허가 등 — 공사비 대비 비율 (공공 요율 참고)
     contingencyRate: 5, // 예비비 5~10% 범위의 하단
@@ -424,22 +424,22 @@ export const ASSUMPTION_META: Partial<Record<keyof AssumptionSet, AssumptionMeta
   constCostPerSqM: {
     label: "공사비",
     unit: "원/㎡",
-    kind: "참고 단가",
+    kind: "가정값",
     basis:
-      "한국부동산원 건물신축단가표(주거용 RC 평균) + 2026 자재·인건비 상승 반영. 구조·마감·지하 여부에 따라 달라지는 개략값 — 시공사 견적 아님.",
+      "2,300,000원/㎡ 내부 초기값. 공공 단가표의 특정 연도·유형 보정으로 검증되지 않았으며 시공사 견적으로 교체해야 함.",
   },
   salePricePerSqM: {
     label: "매각 단가 (통매각)",
     unit: "원/㎡",
     kind: "시장값 권장",
     basis:
-      "다가구주택은 단독주택 분류로 구분분양 불가 — 건물 전체 통매각 기준 연면적 평단가. 도봉 쌍문동 다가구 매매 사례(평당 약 1,050~1,621만)를 참고한 보수값. 주변 신축 실거래 기반 자동 보정 예정.",
+      "통매각 연면적 단가 4,500,000원/㎡ 내부 초기값. 대상지·유사 건물 실거래 사례로 교체해야 하며 감정평가액이 아님.",
   },
   rentPerSqMMonth: {
     label: "임대료",
     unit: "원/㎡·월",
     kind: "시장값 권장",
-    basis: "서울 외곽 소형주택 월세 수준 가정. 지역 시세 기준으로 조정 필요.",
+    basis: "21,000원/㎡·월 내부 초기값. 대상지 임대사례로 교체 필요.",
   },
   vacancyRate: {
     label: "공실률",
