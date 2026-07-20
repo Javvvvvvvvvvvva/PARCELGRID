@@ -94,7 +94,7 @@ export interface ScenarioVM {
   equityMultiple: number;
   taxBurden: number;
   maxExposure: number;
-  paybackMonths: number;
+  paybackMonths: number | null;
   timeline: number;
   regulatory: number;
 
