@@ -187,7 +187,12 @@ export default function DashboardPage({
   const bidGap = maxAcquisition.maxLandCost - acquisitionPrice;
   const dscrApplicable = result.revenueLease + result.revenueRetail > 0;
   const profitTone: Tone = result.profit > 0 ? "positive" : result.profit < 0 ? "negative" : "review";
-  const irrTone: Tone = result.irr >= assumptions.equityIRR ? "positive" : "negative";
+  const irrAvailable = result.irrStatus === "calculated";
+  const irrTone: Tone = !irrAvailable
+    ? "review"
+    : result.irr >= assumptions.equityIRR
+      ? "positive"
+      : "negative";
   const marketConfidence = data.parcel.acquisitionEstimate?.confidence ?? "low";
   const saleConfidence = data.saleEstimate?.confidence ?? "low";
   const aboveFloors = geometry.building.aboveGroundFloors.length;
@@ -240,10 +245,22 @@ export default function DashboardPage({
         />
         <DecisionSignal
           label="요구수익률"
-          title={result.irr >= assumptions.equityIRR ? "현재 가정상 목표 충족" : "현재 가정상 목표 미달"}
-          value={`IRR ${result.irr.toFixed(1)}%`}
+          title={
+            !irrAvailable
+              ? result.irrStatus === "ambiguous"
+                ? "IRR 복수해 가능"
+                : "IRR 산정 불가"
+              : result.irr >= assumptions.equityIRR
+                ? "현재 가정상 목표 충족"
+                : "현재 가정상 목표 미달"
+          }
+          value={irrAvailable ? `IRR ${result.irr.toFixed(1)}%` : "IRR N/A"}
           tone={irrTone}
-          note={`요구 IRR ${assumptions.equityIRR.toFixed(1)}% · NPV ${won(result.npv)}`}
+          note={
+            irrAvailable
+              ? `요구 IRR ${assumptions.equityIRR.toFixed(1)}% · NPV ${won(result.npv)}`
+              : `IRR 대신 NPV ${won(result.npv)} 확인 · 현금흐름 부호 패턴 검토 필요`
+          }
         />
         <DecisionSignal
           label="토지 매입 여력"
@@ -302,7 +319,7 @@ export default function DashboardPage({
               <MetricCard label="이익률" value={`${result.profitMargin.toFixed(1)}%`} tone={profitTone} />
               <MetricCard label="필요 자기자본" value={won(result.equity)} />
               <MetricCard label="예비 PF 최고잔액" value={won(result.pfLoan)} note={`실제 LTC ${result.ltc.toFixed(1)}%`} />
-              <MetricCard label="세전 IRR" value={`${result.irr.toFixed(1)}%`} tone={irrTone} />
+              <MetricCard label="세전 IRR" value={irrAvailable ? `${result.irr.toFixed(1)}%` : "N/A"} note={irrAvailable ? undefined : "유일한 IRR을 산정할 수 없음"} tone={irrTone} />
               <MetricCard label="세전 NPV" value={won(result.npv)} note={`할인율 ${assumptions.equityIRR.toFixed(1)}%`} tone={result.npv >= 0 ? "positive" : "negative"} />
             </div>
             <div className="return-strip">
@@ -533,7 +550,7 @@ function EvidenceRow({ label, value, state }: { label: string; value: string; st
 }
 
 function ScenarioTable({ scenarios, representativeId, onOpen }: { scenarios: ScenarioVM[]; representativeId: string; onOpen: (id: string) => void }) {
-  return <div style={{ overflowX: "auto", marginTop: 13 }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}><thead><tr style={{ color: "var(--fg-muted)", textAlign: "right" }}><th style={{ textAlign: "left", padding: 8 }}>계획안</th><th style={{ padding: 8 }}>총사업비</th><th style={{ padding: 8 }}>손익</th><th style={{ padding: 8 }}>IRR</th><th style={{ padding: 8 }}>NPV</th></tr></thead><tbody>{scenarios.map((scenario) => { const representative = scenario.id === representativeId; return <tr key={scenario.id} onClick={() => onOpen(scenario.id)} style={{ borderTop: "1px solid var(--border-faint)", background: representative ? "var(--accent-soft)" : "transparent", cursor: "pointer", textAlign: "right" }}><td style={{ textAlign: "left", padding: 9 }}><strong>{scenario.name}</strong>{representative && <small style={{ marginLeft: 6, color: "var(--accent)" }}>대표안</small>}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{won(scenario.cost)}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)", color: scenario.profit >= 0 ? "var(--pos-fg)" : "var(--neg-fg)" }}>{won(scenario.profit)}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{scenario.irr.toFixed(1)}%</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{won(scenario.npv)}</td></tr>; })}</tbody></table></div>;
+  return <div style={{ overflowX: "auto", marginTop: 13 }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}><thead><tr style={{ color: "var(--fg-muted)", textAlign: "right" }}><th style={{ textAlign: "left", padding: 8 }}>계획안</th><th style={{ padding: 8 }}>총사업비</th><th style={{ padding: 8 }}>손익</th><th style={{ padding: 8 }}>IRR</th><th style={{ padding: 8 }}>NPV</th></tr></thead><tbody>{scenarios.map((scenario) => { const representative = scenario.id === representativeId; return <tr key={scenario.id} onClick={() => onOpen(scenario.id)} style={{ borderTop: "1px solid var(--border-faint)", background: representative ? "var(--accent-soft)" : "transparent", cursor: "pointer", textAlign: "right" }}><td style={{ textAlign: "left", padding: 9 }}><strong>{scenario.name}</strong>{representative && <small style={{ marginLeft: 6, color: "var(--accent)" }}>대표안</small>}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{won(scenario.cost)}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)", color: scenario.profit >= 0 ? "var(--pos-fg)" : "var(--neg-fg)" }}>{won(scenario.profit)}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{scenario.irrStatus === "calculated" ? `${scenario.irr.toFixed(1)}%` : "N/A"}</td><td style={{ padding: 9, fontFamily: "var(--font-mono)" }}>{won(scenario.npv)}</td></tr>; })}</tbody></table></div>;
 }
 
 function acquisitionMethodLabel(method?: "house-comps" | "by-comps" | "by-publicvalue" | "hybrid") {
