@@ -485,7 +485,7 @@ export default function DashboardPage({
 
           <section className="next-actions">
             <button className="secondary-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>가격 근거</button>
-            <button className="primary-button" onClick={() => router.push(`/projects/${projectId}/report`)}>보고서</button>
+            <button className="primary-button" onClick={() => router.push(`/projects/${projectId}/handoff`)}>전문가 검증·인계</button>
           </section>
         </aside>
       </div>
