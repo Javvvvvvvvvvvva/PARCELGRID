@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * 투자 타당성 보고서 (PDF p7) — 시행사 제출용 한 장 요약.
+ * 예비 사업성 검토서 — 전문가 검토 전 한 장 요약.
  *
- * 지금까지의 모든 분석(부지·시나리오·실거래·가정)을 한 페이지로 묶음.
- * 인쇄/PDF 친화 레이아웃. viable=false 시나리오는 "시행 불가"로 정직하게 표시.
+ * 저장된 분석 결과를 비교용으로 묶는다. 금융기관 약정, 시공사 견적,
+ * 세무조정과 외부 가격검증 전에는 투자 타당성 확정 보고서로 사용하지 않는다.
  */
 
 import { use, useMemo } from "react";
@@ -61,26 +61,43 @@ export default function ReportPage({
             </div>
           </div>
           <div className="rpt-meta">
-            투자 타당성 보고서<br />분석일 {analysisDate}
+            예비 사업성 검토서<br />분석 기준일 {analysisDate}
           </div>
         </div>
 
         <div className="rpt-title">{parcel.address}</div>
         <div className="rpt-sub">
-          {parcel.zoning} · 대지 {num(Math.round(parcel.lotArea * 100) / 100)}㎡ ({pyeong.toFixed(1)}평) · 인수가 {won(parcel.acquiredPrice)}
+          {parcel.zoning} · 대지 {num(Math.round(parcel.lotArea * 100) / 100)}㎡ ({pyeong.toFixed(1)}평) · 검토 인수가 {won(parcel.acquiredPrice)}
         </div>
 
-        {/* 권장 시나리오 */}
+        <div
+          role="status"
+          style={{
+            margin: "12px 0",
+            padding: "10px 12px",
+            border: "1px solid #d8a92e",
+            borderRadius: 8,
+            background: "#fff8dc",
+            color: "#5f4600",
+            fontSize: 11,
+            lineHeight: 1.55,
+          }}
+        >
+          <strong>예비 모델 · 전문가 검토 전</strong><br />
+          아래 값은 저장 시점의 세전 비교값입니다. 금융기관 약정·시공사 견적·감정평가·세무 검토 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.
+        </div>
+
+        {/* 대표 비교 시나리오 */}
         <div className="rpt-reco">
           <div className="rpt-reco-top">
-            <span className="rpt-reco-name">권장 — {recommended.shortName} {recommended.name}</span>
-            <span className="rpt-reco-badge">★ 권장</span>
+            <span className="rpt-reco-name">대표 비교안 — {recommended.shortName} {recommended.name}</span>
+            <span className="rpt-reco-badge">예비 비교안</span>
           </div>
           <div className="rpt-reco-kpis">
-            <div className="rpt-reco-kpi"><div className="l">예상 순이익</div><div className="v">{won(recommended.profit)}</div></div>
-            <div className="rpt-reco-kpi"><div className="l">IRR</div><div className="v">{recommended.irr.toFixed(1)}%</div></div>
-            <div className="rpt-reco-kpi"><div className="l">DSCR</div><div className="v">{recommended.dscr.toFixed(2)}</div></div>
-            <div className="rpt-reco-kpi"><div className="l">필요 자본</div><div className="v">{won(recommended.equity)}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">저장된 세전 손익</div><div className="v">{won(recommended.profit)}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">저장된 세전 IRR</div><div className="v">{recommended.irr.toFixed(1)}%</div></div>
+            <div className="rpt-reco-kpi"><div className="l">DSCR</div><div className="v">{recommended.dscr > 0 ? recommended.dscr.toFixed(2) : "N/A"}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">예비 필요 자본</div><div className="v">{won(recommended.equity)}</div></div>
           </div>
         </div>
 
@@ -92,8 +109,8 @@ export default function ReportPage({
             <OvItem l="용도지역" v={parcel.zoning} />
             <OvItem l="용적률 상한" v={`${parcel.maxFAR}%`} />
             <OvItem l="건폐율 상한" v={`${parcel.maxBCR}%`} />
-            <OvItem l="인수가" v={won(parcel.acquiredPrice)} />
-            <OvItem l="평당 인수가" v={`${num(Math.round(parcel.acquiredPrice / pyeong))}만`} />
+            <OvItem l="검토 인수가" v={won(parcel.acquiredPrice)} />
+            <OvItem l="평당 검토 인수가" v={`${num(Math.round(parcel.acquiredPrice / pyeong))}만`} />
           </div>
         </div>
 
@@ -104,9 +121,9 @@ export default function ReportPage({
             <thead>
               <tr>
                 <th>시나리오</th>
-                <th className="num">순이익</th>
+                <th className="num">세전 손익</th>
                 <th className="num">이익률</th>
-                <th className="num">IRR</th>
+                <th className="num">세전 IRR</th>
                 <th className="num">DSCR</th>
                 <th>판정</th>
               </tr>
@@ -124,10 +141,10 @@ export default function ReportPage({
                         <td className="num">{won(s.profit)}</td>
                         <td className="num">{s.profitMargin.toFixed(1)}%</td>
                         <td className="num">{s.irr.toFixed(1)}%</td>
-                        <td className="num">{s.dscr.toFixed(2)}</td>
+                        <td className="num">{s.dscr > 0 ? s.dscr.toFixed(2) : "N/A"}</td>
                       </>
                     )}
-                    <td>{unfit ? "—" : s.recommended ? "권장" : "검토"}</td>
+                    <td>{unfit ? "—" : s.recommended ? "비교 우선" : "비교"}</td>
                   </tr>
                 );
               })}
@@ -137,7 +154,7 @@ export default function ReportPage({
 
         {/* 실거래 근거 + 데이터 출처 */}
         <div className="rpt-sec">
-          <div className="rpt-sec-h">실거래 근거 · 데이터 출처</div>
+          <div className="rpt-sec-h">관측자료 · 참고 출처</div>
           <div className="rpt-src">
             {compsMedian != null && (
               <span className="rpt-src-item">국토교통부 실거래가 ({comps.length}건, 중앙값 평당 {num(compsMedian)}만)</span>
@@ -150,7 +167,7 @@ export default function ReportPage({
 
         <div className="rpt-foot">
           <span>Double Edge · ParcelGrid v2.4</span>
-          <span>정직한 답 — 추정값은 가정에 근거하며 실제와 다를 수 있습니다</span>
+          <span>예비 비교용 — 매입·대출·세무 의사결정 전 전문가 검토 필수</span>
         </div>
       </div>
 
