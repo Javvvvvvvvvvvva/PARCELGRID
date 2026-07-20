@@ -212,6 +212,14 @@ export default function NewParcelPage() {
             confidence: estimate.confidence,
             marketMedianPerPyeong: estimate.marketMedianPerPyeong,
             marketMedianManwon: estimate.marketMedianManwon,
+            houseProxy: estimate.houseEstimate
+              ? {
+                  sampleSize: estimate.houseEstimate.count,
+                  medianPricePerPyeong: estimate.houseEstimate.medianPPPLand,
+                  estimatedPriceManwon: estimate.houseEstimate.estimateManwon,
+                  basis: estimate.houseEstimate.basis,
+                }
+              : undefined,
             transactionCount: estimate.transactionCount,
             details: estimate.details,
           }
@@ -423,6 +431,49 @@ export default function NewParcelPage() {
                     estimate ? estimate.estimatedPriceManwon * 10_000 : null
                   }
                 />
+                {estimate?.marketMedianManwon != null && estimate.marketMedianManwon > 0 && (
+                  <div
+                    style={{
+                      marginTop: "var(--s3)",
+                      padding: "10px 12px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "var(--bg-sunken)",
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      gap: 10,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <strong style={{ display: "block", fontSize: 11.5 }}>토지 실거래 중앙값 참고</strong>
+                      <span style={{ display: "block", marginTop: 3, color: "var(--fg-muted)", fontSize: 10.5 }}>
+                        {(estimate.marketMedianManwon / 10_000).toFixed(1)}억 · {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
+                      </span>
+                      <small style={{ color: "var(--fg-faint)", fontSize: 9 }}>
+                        토지 분포 중앙값 × 대상 부지 {sqmToPyeong(parcel.lotArea).toFixed(1)}평
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAcquiredPrice(estimate.marketMedianManwon ?? 0)}
+                      style={{
+                        minHeight: 32,
+                        padding: "0 10px",
+                        border: "1px solid var(--fg)",
+                        borderRadius: 7,
+                        background: "var(--bg)",
+                        color: "var(--fg)",
+                        font: "inherit",
+                        fontSize: 10,
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      중앙값 총액 적용
+                    </button>
+                  </div>
+                )}
                 {estimate && (
                   <div
                     role="note"
@@ -442,7 +493,12 @@ export default function NewParcelPage() {
                       시군구·부지 크기 보정계수는 자체 규칙입니다. 감정평가액이나 매입 확정가로 사용하지 마세요.
                     </div>
                     <div className="mono" style={{ marginTop: 3 }}>
-                      {estimate.modelVersion ?? "legacy-unversioned"} · 표본 {estimate.details?.sampleSize ?? 0}건
+                      {estimate.method === "house-comps" && estimate.houseEstimate
+                        ? `활성 추정 · 구축 단독/다가구 ${estimate.houseEstimate.count}건 · ${estimate.houseEstimate.medianPPPLand.toLocaleString()}만원/평`
+                        : `활성 추정 · 동일 지목 ${estimate.details?.sampleSize ?? 0}건`}
+                    </div>
+                    <div className="mono" style={{ marginTop: 2 }}>
+                      토지 분포 {estimate.transactionCount ?? 0}건 · 중앙값 {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
                     </div>
                   </div>
                 )}
