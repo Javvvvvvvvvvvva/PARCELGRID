@@ -1,8 +1,8 @@
 /**
- * 주변 단독/다가구 매매 실거래 → 통매각 단가 추정.
- * v2: 가중치 기반 Comparable Scoring (C 설계 — 감정평가 실무 Comps 방식).
+ * 주변 단독/다가구 매매 실거래 → 통매각 단가 참고 추정.
  *
- * 각 후보 거래에 점수를 부여하고 상위 사례(최대 8건)의 중앙값 사용:
+ * 동일 동·건물 연식에 자체 점수를 부여하고 상위 사례(최대 8건)의
+ * 중앙값을 사용한다. 외부 통계검증 또는 감정평가를 거친 모형이 아니다:
  *   같은 동 +40 / 같은 구 +20(수집 범위 기본)
  *   준공 15년 이내 +30 / 20년 이내 +15
  *   용도(단독/다가구)는 전제 필터
@@ -35,7 +35,13 @@ export interface ComparableCase {
   score: number;
 }
 
+export const SALE_PRICE_MODEL_VERSION = "experimental-2026.1";
+
 export interface SalePriceEstimate {
+  modelVersion: typeof SALE_PRICE_MODEL_VERSION;
+  modelStatus: "experimental-unvalidated";
+  asOfYear: number;
+  warnings: string[];
   /** 채택된 매각 단가 (원/㎡) */
   salePricePerSqM: number;
   /** 채택 사례 평당 중앙값 (만원/평) */
@@ -46,9 +52,9 @@ export interface SalePriceEstimate {
   basis: string;
   /** 참고한 유사 사례 (점수 내림차순, 화면 표시용) */
   cases: ComparableCase[];
-  /** 신뢰도: 같은동·신축 사례 비중 기반 */
+  /** 표본 근거 수준: 같은동·신축 사례 비중 기반. 정확도 등급이 아니다. */
   confidence: "high" | "medium" | "low";
-  /** 보수 기준: 전체 거래 중앙값 (만원/평) */
+  /** 비교 기준: 필터 전 전체 단독·다가구 거래 중앙값 (만원/평) */
   conservativePPP: number;
   conservativeCount: number;
 }
@@ -130,10 +136,19 @@ export function estimateSalePriceFromComps(
   if (nNew > 0) parts.push(`준공 15년 이내 ${nNew}건`);
 
   return {
+    modelVersion: SALE_PRICE_MODEL_VERSION,
+    modelStatus: "experimental-unvalidated",
+    asOfYear: currentYear,
+    warnings: [
+      "동일 동·건물 연식 점수는 외부 통계검증 전 자체 사례선정 규칙입니다.",
+      "대지·연면적 유사도, 도로, 상태, 권리관계와 거래조건을 보정하지 않습니다.",
+      "전체 거래 중앙값은 비교 기준일 뿐 항상 보수적인 하한값이 아닙니다.",
+      "감정평가액이나 확정 매각가가 아닌 민감도 검토용 참고값입니다.",
+    ],
     salePricePerSqM: Math.round((medianPPP * 10_000) / SQM_PER_PYEONG),
     medianPPP: Math.round(medianPPP),
     count: picked.length,
-    basis: `유사 사례 ${picked.length}건 중앙값 (${parts.join(" · ")}) — 알고리즘 분석`,
+    basis: `자체 점수 상위 사례 ${picked.length}건 중앙값 (${parts.join(" · ")}) — 외부 검증 전`,
     cases,
     confidence,
     conservativePPP: Math.round(conservativePPP),

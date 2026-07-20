@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2.5 매각 단가 실거래 보정 (recompute와 동일 유틸 — 신축 우선)
+    // 2.5 매각 단가 실거래 참고 보정 (recompute와 동일 유틸 — 신축 우선)
     const saleEst = estimateSalePriceFromComps(
       transactions
         .filter((t) => t.exclusiveArea > 0 && t.priceManwon > 0)
@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
         sc.assumptions = { ...sc.assumptions, salePricePerSqM: saleEst.salePricePerSqM };
       }
       console.log(
-        `매각 단가 실거래 보정(dynamic): ${saleEst.basis} 평당 ${saleEst.medianPPP.toLocaleString()}만 → ${saleEst.salePricePerSqM.toLocaleString()}원/㎡ (보수: 전체 ${saleEst.conservativeCount}건 평당 ${saleEst.conservativePPP.toLocaleString()}만)`
+        `매각 단가 실거래 참고 보정(dynamic): ${saleEst.basis} 평당 ${saleEst.medianPPP.toLocaleString()}만 → ${saleEst.salePricePerSqM.toLocaleString()}원/㎡ (전체 거래 중앙값: ${saleEst.conservativeCount}건 평당 ${saleEst.conservativePPP.toLocaleString()}만)`
       );
     }
 

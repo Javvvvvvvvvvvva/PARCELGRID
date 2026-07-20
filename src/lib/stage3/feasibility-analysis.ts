@@ -7,6 +7,7 @@ export const STAGE3_COST_STEPS = [-10, -5, 0, 10, 20] as const;
 export interface Stage3SensitivityCell {
   profit: number;
   irr: number;
+  irrStatus?: "calculated" | "not-calculated" | "ambiguous";
 }
 
 export interface Stage3Sensitivity {
@@ -51,7 +52,11 @@ export function buildStage3Sensitivity(
         parcel,
         scenario: { ...scenario, assumptions },
       });
-      return { profit: result.profit, irr: result.irr };
+      return {
+        profit: result.profit,
+        irr: result.irr,
+        irrStatus: result.irrStatus,
+      };
     })
   );
 

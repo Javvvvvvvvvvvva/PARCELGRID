@@ -203,6 +203,9 @@ export default function NewParcelPage() {
         : parcel.landPrice * 2,
       acquisitionEstimate: estimate
         ? {
+            modelVersion: estimate.modelVersion,
+            modelStatus: estimate.modelStatus,
+            warnings: estimate.warnings,
             estimatedPriceManwon: estimate.estimatedPriceManwon,
             estimatedPricePerPyeong: estimate.estimatedPricePerPyeong,
             method: estimate.method,
@@ -396,8 +399,8 @@ export default function NewParcelPage() {
                 source={
                   estimate
                     ? estimate.method === "house-comps"
-                      ? "구축 다가구 실거래 토지 proxy · 알고리즘 분석"
-                      : `시군구별 시장 추정 · ${estimate.method}`
+                      ? "구축 다가구 사례 · 자체 알고리즘 참고"
+                      : `실거래·공시지가 자체 알고리즘 참고 · ${estimate.method}`
                     : "수동 입력"
                 }
               >
@@ -420,6 +423,29 @@ export default function NewParcelPage() {
                     estimate ? estimate.estimatedPriceManwon * 10_000 : null
                   }
                 />
+                {estimate && (
+                  <div
+                    role="note"
+                    style={{
+                      marginTop: "var(--s3)",
+                      padding: "10px 12px",
+                      border: "1px solid #d8a92e",
+                      borderRadius: 8,
+                      background: "#fff8dc",
+                      color: "#5f4600",
+                      fontSize: 11,
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    <strong>외부 검증 전 참고 추정</strong>
+                    <div>
+                      시군구·부지 크기 보정계수는 자체 규칙입니다. 감정평가액이나 매입 확정가로 사용하지 마세요.
+                    </div>
+                    <div className="mono" style={{ marginTop: 3 }}>
+                      {estimate.modelVersion ?? "legacy-unversioned"} · 표본 {estimate.details?.sampleSize ?? 0}건
+                    </div>
+                  </div>
+                )}
                 <LandProxyNote
                   est={estimate?.houseEstimate}
                   onApply={(manwon) => setAcquiredPrice(manwon)}
@@ -550,13 +576,16 @@ function CurrentBuildingBox({
 /* ─────────────────────────── 헬퍼 함수 ─────────────────────────── */
 
 function confidenceLabel(c: "high" | "medium" | "low"): string {
-  if (c === "high") return "신뢰도 높음";
-  if (c === "medium") return "신뢰도 중간";
-  return "신뢰도 낮음 (참고용)";
+  if (c === "high") return "표본 근거 충분";
+  if (c === "medium") return "표본 근거 보통";
+  return "표본 근거 부족";
 }
 
-function methodLabel(m: "by-comps" | "by-publicvalue" | "hybrid"): string {
-  if (m === "by-comps") return "실거래 중앙값 기반";
-  if (m === "by-publicvalue") return "공시지가 × 시군구 배율";
-  return "실거래 + 공시지가 혼합";
+function methodLabel(
+  m: "house-comps" | "by-comps" | "by-publicvalue" | "hybrid"
+): string {
+  if (m === "house-comps") return "구축 단독·다가구 사례 기반 참고";
+  if (m === "by-comps") return "토지 실거래 기반 참고";
+  if (m === "by-publicvalue") return "공시지가 자체 보정 참고";
+  return "실거래·공시지가 혼합 참고";
 }

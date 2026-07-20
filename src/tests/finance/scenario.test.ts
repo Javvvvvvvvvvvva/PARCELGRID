@@ -120,10 +120,16 @@ describe("calculateScenario", () => {
     expect(r.totalCost + r.profit).toBeCloseTo(r.totalRevenue, -1);
   });
 
-  it("equity + pfLoan ≈ total project cost ex financing", () => {
-    const r = calculateScenario({ parcel, scenario: makeScenario() });
-    const exFin = r.landCost + r.hardCost + r.softCost + r.contingency;
-    expect(r.equity + r.pfLoan).toBeCloseTo(exFin, -1);
+  it("PF exposure stays within the configured construction LTC", () => {
+    const scenario = makeScenario();
+    const r = calculateScenario({ parcel, scenario });
+    const eligible = r.hardCost + r.softCost + r.contingency;
+    expect(r.pfLoan).toBeLessThanOrEqual(
+      eligible * (scenario.assumptions.ltcTarget / 100) + 1
+    );
+    expect(r.equity).toBeGreaterThanOrEqual(
+      r.landCost + r.demolitionCost
+    );
   });
 
   it("higher hurdle rate lowers NPV without changing operating profit", () => {

@@ -40,8 +40,8 @@ const BUILDING_TYPE_KR: Record<BuildingType, string> = {
 };
 
 const RISK_LABEL_KR = {
-  ok: "정상",
-  low: "정상",
+  ok: "표시 경고 없음",
+  low: "표시 경고 없음",
   med: "주의",
   high: "협의",
 } as const;
@@ -90,10 +90,11 @@ export interface ScenarioVM {
   dscr: number;
   npv: number;
   irr: number;
+  irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   taxBurden: number;
   maxExposure: number;
-  paybackMonths: number;
+  paybackMonths: number | null;
   timeline: number;
   regulatory: number;
 
@@ -164,6 +165,7 @@ export function toScenarioVM(
     dscr: result.dscr,
     npv: result.npv,
     irr: result.irr,
+    irrStatus: result.irrStatus,
     equityMultiple: equityMult,
     taxBurden: taxes.total,
     maxExposure: result.maxExposure,

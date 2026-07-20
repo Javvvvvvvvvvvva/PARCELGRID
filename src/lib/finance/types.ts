@@ -24,6 +24,11 @@ export type AcquisitionEstimateMethod =
   | "hybrid";
 
 export interface AcquisitionEstimateSnapshot {
+  /** 자체 보정 모델 버전. 없으면 구버전 저장 데이터. */
+  modelVersion?: string;
+  /** 외부 감정평가로 검증되지 않은 참고 추정 상태. */
+  modelStatus?: "experimental-unvalidated";
+  warnings?: string[];
   estimatedPriceManwon: ManWon;
   estimatedPricePerPyeong: number;
   method: AcquisitionEstimateMethod;
@@ -218,9 +223,12 @@ export interface ScenarioResult {
   /** 요구수익률(equityIRR)로 할인한 자기자본 현금흐름 NPV */
   npv: ManWon;
   irr: Pct;
+  /** IRR은 단일 부호변화와 수치해가 있을 때만 calculated. */
+  irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   dscr: number;
-  paybackMonths: Months;
+  /** 사업기간 안에 누적 프로젝트 현금흐름이 회복되지 않으면 null. */
+  paybackMonths: Months | null;
 
   // Risk
   maxExposure: ManWon; // most negative cumulative cash position
@@ -260,11 +268,17 @@ export interface TaxLine {
   rate: string; // "4.6%"
   amount: ManWon;
   note: string;
+  status?: "estimated" | "not-calculated";
+  source?: string;
 }
 
 export interface TaxBreakdown {
   lines: TaxLine[];
+  /** 계산 가능한 항목만 합산한 부분 추정액. 완결된 세후 세액이 아니다. */
   total: ManWon;
+  asOf?: string;
+  complete?: boolean;
+  warnings?: string[];
 }
 
 // ─────────────────────────── Sensitivity ───────────────────────────

@@ -63,6 +63,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (scope === "radius") {
+    return NextResponse.json(
+      {
+        error: "반경 비교 미지원",
+        detail:
+          "현재 국토부 토지 실거래 응답에는 거래별 좌표가 없어 실제 반경 필터를 검증할 수 없습니다. 동 또는 시군구 비교를 사용하세요.",
+      },
+      { status: 422 }
+    );
+  }
+
   try {
     // 최근 12개월 토지 실거래
     const start = recentYearMonth(12);
