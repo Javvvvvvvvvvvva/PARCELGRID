@@ -44,5 +44,6 @@ describe("IRR audit status", () => {
     expect(result.irrStatus).toBe("not-calculated");
     expect(result.irr).toBe(0);
     expect(result.npv).toBeLessThan(0);
+    expect(result.paybackMonths).toBeNull();
   });
 });
