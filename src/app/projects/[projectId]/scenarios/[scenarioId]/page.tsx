@@ -43,7 +43,7 @@ export default function ScenarioDetailPage({
   // schedule cached in projectStore; otherwise call the per-scenario API.
   // For now we render the recommended-cached one and note non-recommended
   // shows aggregate fields only (the API endpoint exists to fill this in).
-  const pfRows = data.pfSchedule;
+  const pfRows = scenario.recommended ? data.pfSchedule : [];
   const maxExposure = pfRows.reduce(
     (acc, r) => (r.cumulative < acc ? r.cumulative : acc),
     0
@@ -76,9 +76,9 @@ export default function ScenarioDetailPage({
           {scenario.id}
         </span>
         <span style={{ fontSize: 16, fontWeight: 600 }}>{scenario.name}</span>
-        {scenario.recommended && <Tag kind="solid">권장</Tag>}
+        {scenario.recommended && <Tag kind="solid">비교 우선</Tag>}
         <span style={{ marginLeft: 12, fontSize: 11.5, color: "var(--fg-muted)" }}>
-          마지막 계산 14분 전
+          저장 시점 예비값
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
           <Link
@@ -94,9 +94,25 @@ export default function ScenarioDetailPage({
             className="ui-btn ui-btn--sm ui-btn--primary"
             style={{ textDecoration: "none" }}
           >
-            {Icons.doc()} 보고서
+            {Icons.doc()} 예비 보고서
           </Link>
         </div>
+      </div>
+
+      <div
+        role="status"
+        style={{
+          margin: "12px 20px 0",
+          padding: "10px 12px",
+          border: "1px solid #d8a92e",
+          borderRadius: 8,
+          background: "#fff8dc",
+          color: "#5f4600",
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}
+      >
+        예비 사업성 모델 · 전문가 검토 전. 저장된 비교값이며 매입·대출·세무 의사결정용 확정값이 아닙니다.
       </div>
 
       {/* Tabs */}
@@ -117,16 +133,22 @@ export default function ScenarioDetailPage({
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
         {/* KPI strip */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
-          <KPI label="순이익" value={won(scenario.profit)} delta="+8.2%" deltaKind="pos" sub="기준안 대비" />
-          <KPI label="IRR" value={scenario.irr.toFixed(1)} unit="%" sub="달성 목표 15%" />
-          <KPI label="Equity Multiple" value={`${scenario.equityMultiple.toFixed(2)}x`} sub={`자본 ${won(scenario.equity)}`} />
-          <KPI label="DSCR" value={scenario.dscr.toFixed(2)} delta={scenario.dscr >= 1.3 ? "안정" : "주의"} deltaKind={scenario.dscr >= 1.3 ? "pos" : "warn"} sub="최소 1.20" />
+          <KPI label="저장된 세전 손익" value={won(scenario.profit)} sub="세금·미산정 항목 별도" />
+          <KPI label="세전 IRR" value={scenario.irrStatus === "calculated" ? scenario.irr.toFixed(1) : "N/A"} unit={scenario.irrStatus === "calculated" ? "%" : undefined} sub="유일한 해가 있을 때만 표시" />
+          <KPI label="Equity Multiple" value={`${scenario.equityMultiple.toFixed(2)}x`} sub={`예비 자본 ${won(scenario.equity)}`} />
+          <KPI label="DSCR" value={scenario.dscr > 0 ? scenario.dscr.toFixed(2) : "N/A"} sub={scenario.dscr > 0 ? "임대 NOI 기준 예비값" : "분양형 비적용"} />
           <KPI label="최대 노출" value={won(maxExposure)} sub={pfRows.find((r) => r.cumulative === maxExposure)?.quarter ?? "—"} />
           <KPI label="회수기간" value={`${scenario.timeline}`} unit="개월" sub="준공 ~ 매각완" />
         </div>
 
         {tab === "pf" && (
-          <PFView pfRows={pfRows} scenario={scenario} maxExposure={maxExposure} breakEven={breakEven?.quarter} />
+          scenario.recommended ? (
+            <PFView pfRows={pfRows} scenario={scenario} maxExposure={maxExposure} breakEven={breakEven?.quarter} />
+          ) : (
+            <div style={{ padding: 24, border: "1px solid var(--border)", borderRadius: 8, color: "var(--fg-muted)" }}>
+              이 비교안의 개별 현금흐름은 저장되어 있지 않습니다. 다른 계획안의 PF 표를 대신 표시하지 않습니다.
+            </div>
+          )
         )}
         {tab === "risk" && <RiskView risks={data.parcelRisks} />}
         {tab === "massing" && (
@@ -143,7 +165,7 @@ export default function ScenarioDetailPage({
             <div style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: 8, display: "flex", gap: 16 }}>
               <span>정북일조 계단식 매스 · 층 클릭 시 세대 정보 · 마우스로 회전·줌</span>
               <span style={{ color: scenario.profit >= 0 ? "var(--pos-fg, #3f6b4d)" : "var(--neg-fg)" }}>
-                {scenario.profit >= 0 ? "● 흑자 — 사업성 있음" : "● 손실 — 사업성 부족"}
+                {scenario.profit >= 0 ? "● 현재 가정상 세전 흑자" : "● 현재 가정상 세전 손실"}
               </span>
             </div>
           </div>

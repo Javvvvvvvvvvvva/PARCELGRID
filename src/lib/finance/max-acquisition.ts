@@ -1,5 +1,5 @@
 /**
- * 최대 시행 가능 인수가 역산 엔진.
+ * 예비 모델상 최대 인수가 역산 엔진.
  *
  * 본인 도구의 진짜 차별화 가치:
  *   "시장가 8.4억" ≠ "시행 가능 인수가"
@@ -26,7 +26,7 @@ import type { Parcel, Scenario, ManWon, Pct } from "./types";
 export interface MaxAcquisitionResult {
   scenarioId: string;
   targetIRR: Pct;          // 목표 IRR (10, 15, 20)
-  maxLandCost: ManWon;     // 시행 가능 최대 인수가
+  maxLandCost: ManWon;     // 예비 모델상 최대 인수가
   achievedIRR: Pct;        // 그 인수가에서 실제 IRR
   /** 시장가와의 차이 (음수 = 시장가가 더 비쌈 = 시행 부적합) */
   marketGap: ManWon;
@@ -73,7 +73,10 @@ export function findMaxLandCostForIRR(
       parcel: { ...parcel, acquiredPrice: hi },
       scenario,
     });
-    if (hiResult.irr >= targetIRR) {
+    if (
+      hiResult.irrStatus === "calculated" &&
+      hiResult.irr >= targetIRR
+    ) {
       hi *= 2;
     } else {
       break;
@@ -86,7 +89,10 @@ export function findMaxLandCostForIRR(
     const testParcel = { ...parcel, acquiredPrice: mid };
     const result = calculateScenario({ parcel: testParcel, scenario });
 
-    if (result.irr >= targetIRR) {
+    if (
+      result.irrStatus === "calculated" &&
+      result.irr >= targetIRR
+    ) {
       // 이 가격에서 IRR 달성. 더 비싸게 살 수 있는지 시도
       bestFeasibleLandCost = mid;
       bestIRR = result.irr;
@@ -101,7 +107,9 @@ export function findMaxLandCostForIRR(
 
   // 시장가에서도 목표 달성 가능?
   const marketResult = calculateScenario({ parcel, scenario });
-  const feasible = marketResult.irr >= targetIRR;
+  const feasible =
+    marketResult.irrStatus === "calculated" &&
+    marketResult.irr >= targetIRR;
 
   return {
     scenarioId: scenario.id,

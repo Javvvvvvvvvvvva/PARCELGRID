@@ -95,7 +95,7 @@ export default function ReportPage({
           </div>
           <div className="rpt-reco-kpis">
             <div className="rpt-reco-kpi"><div className="l">저장된 세전 손익</div><div className="v">{won(recommended.profit)}</div></div>
-            <div className="rpt-reco-kpi"><div className="l">저장된 세전 IRR</div><div className="v">{recommended.irr.toFixed(1)}%</div></div>
+            <div className="rpt-reco-kpi"><div className="l">저장된 세전 IRR</div><div className="v">{recommended.irrStatus === "calculated" ? `${recommended.irr.toFixed(1)}%` : "N/A"}</div></div>
             <div className="rpt-reco-kpi"><div className="l">DSCR</div><div className="v">{recommended.dscr > 0 ? recommended.dscr.toFixed(2) : "N/A"}</div></div>
             <div className="rpt-reco-kpi"><div className="l">예비 필요 자본</div><div className="v">{won(recommended.equity)}</div></div>
           </div>
@@ -140,7 +140,7 @@ export default function ReportPage({
                       <>
                         <td className="num">{won(s.profit)}</td>
                         <td className="num">{s.profitMargin.toFixed(1)}%</td>
-                        <td className="num">{s.irr.toFixed(1)}%</td>
+                        <td className="num">{s.irrStatus === "calculated" ? `${s.irr.toFixed(1)}%` : "N/A"}</td>
                         <td className="num">{s.dscr > 0 ? s.dscr.toFixed(2) : "N/A"}</td>
                       </>
                     )}
