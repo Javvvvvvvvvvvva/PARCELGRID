@@ -29,17 +29,13 @@ const parcel: Parcel = {
 };
 
 function makeScenario(
-  overrides: Partial<Scenario["assumptions"]> = {}
+  overrides: Partial<Scenario["assumptions"]> = {},
 ): Scenario {
   return {
     id: "DEAL-STRESS-SCENARIO",
     name: "다가구 통매각",
     shortName: "스트레스 검증",
-    program: defaultProgram(
-      "multi-family",
-      parcel.maxFAR,
-      parcel.maxBCR
-    ),
+    program: defaultProgram("multi-family", parcel.maxFAR, parcel.maxBCR),
     assumptions: {
       ...defaultAssumptions(),
       salePricePerSqM: 4_000_000,
@@ -64,7 +60,7 @@ describe("Deal stress test", () => {
     const stress = buildDealStressTest(parcel, scenario);
     const land = stress.thresholds.find((row) => row.id === "land-price")!;
     const revenue = stress.thresholds.find(
-      (row) => row.id === "revenue-price"
+      (row) => row.id === "revenue-price",
     )!;
 
     expect(land.threshold).not.toBeNull();
@@ -115,7 +111,7 @@ describe("Deal stress test", () => {
     expect(stress.baselinePasses).toBe(true);
     expect(stress.stressCases).toHaveLength(5);
     expect(stress.stressCases.every((row) => row.result.totalMonths > 0)).toBe(
-      true
+      true,
     );
     expect(JSON.stringify(healthyParcel)).toBe(beforeParcel);
     expect(JSON.stringify(scenario)).toBe(beforeScenario);
@@ -128,12 +124,12 @@ describe("Deal stress test", () => {
     });
     const stress = buildDealStressTest(
       { ...parcel, acquiredPrice: 1_000_000 },
-      impossible
+      impossible,
     );
 
     expect(stress.baselinePasses).toBe(false);
     expect(stress.thresholds.some((row) => row.status === "unreachable")).toBe(
-      true
+      true,
     );
     expect(stress.geometryPolicy).toContain("저장된 법규·배치 검증 계획안");
   });
