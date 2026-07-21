@@ -8,8 +8,11 @@
  */
 
 import { use, useMemo } from "react";
+import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { won, num, scenarioViable } from "@/lib/utils/format";
+import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
+import { buildEvidenceGate } from "@/lib/handoff/evidence-gate";
 
 const SQM_PER_PYEONG = 3.305785;
 
@@ -18,12 +21,35 @@ export default function ReportPage({
 }: {
   params: Promise<{ projectId: string }>;
 }) {
-  use(params);
+  const { projectId } = use(params);
   const data = useProjectStore((s) => s.data);
+  const representativeGeometry = useProjectStore(
+    (state) => state.representativeGeometrySnapshot
+  );
 
   const scenarios = data?.scenarios ?? [];
   const parcel = data?.parcel;
   const comps = data?.comps ?? [];
+
+  const evidenceGate = useMemo(() => {
+    if (!data) return null;
+    const geometry =
+      representativeGeometry?.projectId === projectId
+        ? representativeGeometry
+        : null;
+    return buildEvidenceGate({
+      projectId,
+      address: data.parcel.address,
+      geometryHash: geometry?.geometryHash ?? null,
+      roadReferenceCount: data.parcel.roads?.length ?? 0,
+      saleCompCount: comps.length,
+      saleEstimateVersion: data.saleEstimate?.modelVersion ?? null,
+      acquisitionEstimateVersion:
+        data.parcel.acquisitionEstimate?.modelVersion ?? null,
+      financeModelVersion: PROJECT_LEDGER_MODEL_VERSION,
+      taxComplete: false,
+    });
+  }, [comps.length, data, projectId, representativeGeometry]);
 
   const recommended = useMemo(
     () => scenarios.find((s) => s.recommended) ?? scenarios[0],
@@ -36,7 +62,7 @@ export default function ReportPage({
     return sorted[Math.floor(sorted.length / 2)];
   }, [comps]);
 
-  if (!data || !parcel || !recommended) {
+  if (!data || !parcel || !recommended || !evidenceGate) {
     return <div style={{ padding: 40, color: "var(--fg-muted)" }}>보고서를 생성할 데이터가 없습니다.</div>;
   }
 
@@ -83,8 +109,11 @@ export default function ReportPage({
             lineHeight: 1.55,
           }}
         >
-          <strong>예비 모델 · 전문가 검토 전</strong><br />
-          아래 값은 저장 시점의 세전 비교값입니다. 금융기관 약정·시공사 견적·감정평가·세무 검토 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.
+          <strong>Stage 5 예비 모델 · 전문가 검토 전</strong><br />
+          아래 값은 저장 시점의 세전 비교값입니다. Stage 4 Evidence Gate 필수 미확인 {evidenceGate.criticalBlockerCount}건이 남아 있습니다. 금융기관 약정·시공사 견적·감정평가·세무 검토 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.{" "}
+          <Link href={`/projects/${projectId}/handoff`} style={{ color: "inherit", fontWeight: 700 }}>
+            검증·인계 보드 확인
+          </Link>
         </div>
 
         {/* 대표 비교 시나리오 */}

@@ -35,6 +35,13 @@ export interface AcquisitionEstimateSnapshot {
   confidence: "high" | "medium" | "low";
   marketMedianPerPyeong?: number;
   marketMedianManwon?: ManWon;
+  /** Active 구축 단독·다가구 proxy evidence, separate from the land distribution. */
+  houseProxy?: {
+    sampleSize: number;
+    medianPricePerPyeong: number;
+    estimatedPriceManwon: ManWon;
+    basis: string;
+  };
   transactionCount?: number;
   details?: {
     fromPublicValue: ManWon;

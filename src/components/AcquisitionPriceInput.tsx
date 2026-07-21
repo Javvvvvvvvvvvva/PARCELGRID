@@ -96,7 +96,7 @@ export default function AcquisitionPriceInput({
     <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* 헤더 + 토글 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>인수가</label>
+        <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>인수가 직접 입력</label>
         <div style={{ display: 'inline-flex', border: '1px solid var(--pg-border, #e5e7eb)', borderRadius: 8, overflow: 'hidden' }}>
           {(['total', 'perPyeong'] as Mode[]).map((m) => (
             <button
@@ -112,7 +112,7 @@ export default function AcquisitionPriceInput({
                 color: mode === m ? '#fff' : 'var(--pg-muted, #6b7280)',
               }}
             >
-              {m === 'total' ? '총액(억)' : '평당가(만원)'}
+              {m === 'total' ? '총액(억원)' : '평당가(만원/평)'}
             </button>
           ))}
         </div>
@@ -139,7 +139,7 @@ export default function AcquisitionPriceInput({
           }}
         />
         <span style={{ fontSize: 14, color: 'var(--pg-muted, #6b7280)', minWidth: 56 }}>
-          {mode === 'total' ? '억원' : '만원/평'}
+          {mode === 'total' ? '억원 총액' : '만원/평'}
         </span>
       </div>
 
@@ -157,7 +157,7 @@ export default function AcquisitionPriceInput({
             style={{ fontSize: 12, color: 'var(--pg-muted, #6b7280)' }}
             title="참고 추정값 — 적용은 아래 '이 값으로 입력'"
           >
-            참고 추정 {formatEok(estimatedTotalWon)}
+            알고리즘 참고 추정 {formatEok(estimatedTotalWon)}
             {estPerPyeong ? ` · ${formatManwonPerPyeong(estPerPyeong)}` : ''}
           </span>
         )}

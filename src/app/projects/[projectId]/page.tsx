@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo } from "react";
+import { use, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   calculateScenario,
@@ -11,6 +11,17 @@ import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
+import {
+  acquisitionPricePerPyeong,
+  acquisitionPriceTotal,
+  assessAcquisitionPrice,
+  type AcquisitionPriceMode,
+} from "@/lib/finance/acquisition-price";
+import {
+  findDealRescuePaths,
+  type DealRescueChange,
+  type DealRescueResult,
+} from "@/lib/finance/deal-rescue";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -92,6 +103,11 @@ export default function DashboardPage({
   const draftAcquisitionPrices = useProjectStore((state) => state.draftAcquisitionPrices);
   const setDraftAcquisitionPrice = useProjectStore((state) => state.setDraftAcquisitionPrice);
   const resetDraftAcquisitionPrice = useProjectStore((state) => state.resetDraftAcquisitionPrice);
+  const [rescueRun, setRescueRun] = useState<{
+    key: string;
+    result: DealRescueResult;
+  } | null>(null);
+  const [rescueRunning, setRescueRunning] = useState(false);
 
   const projectPlanningScenarios = useMemo(
     () => planningScenarios.filter(
@@ -210,6 +226,12 @@ export default function DashboardPage({
     ?? (data.parcel.estMarketPrice
       ? Math.round((data.parcel.estMarketPrice * data.parcel.lotArea) / 10_000)
       : Math.round((data.parcel.landPrice * data.parcel.lotArea) / 10_000));
+  const marketMedianTotal = data.parcel.acquisitionEstimate?.marketMedianManwon ?? 0;
+  const houseProxy = data.parcel.acquisitionEstimate?.houseProxy;
+  const acquisitionPerPyeong = acquisitionPricePerPyeong(
+    acquisitionPrice,
+    data.parcel.lotArea
+  );
   const publicValueTotal = Math.round((data.parcel.landPrice * data.parcel.lotArea) / 10_000);
   const bidGap = maxAcquisition.maxLandCost - acquisitionPrice;
   const dscrApplicable = result.revenueLease + result.revenueRetail > 0;
@@ -224,10 +246,28 @@ export default function DashboardPage({
   const saleConfidence = data.saleEstimate?.confidence ?? "low";
   const aboveFloors = geometry.building.aboveGroundFloors.length;
   const basementFloors = geometry.building.basementFloors.length;
+  const rescueKey = JSON.stringify({
+    projectId,
+    geometryHash: geometry.geometryHash,
+    scenarioId: scenario.id,
+    acquisitionPrice,
+    assumptions,
+  });
+  const visibleRescue =
+    rescueRun?.key === rescueKey ? rescueRun.result : null;
 
   const resetAll = () => {
     resetDraftAssumptions(financeScenario.id);
     resetDraftAcquisitionPrice(projectId);
+  };
+
+  const runDealRescue = () => {
+    setRescueRunning(true);
+    window.setTimeout(() => {
+      const rescue = findDealRescuePaths(calculation.parcel, scenario);
+      setRescueRun({ key: rescueKey, result: rescue });
+      setRescueRunning(false);
+    }, 0);
   };
 
   return (
@@ -313,13 +353,25 @@ export default function DashboardPage({
         />
         <div className="price-ladder">
           <PricePoint label="공시지가 총액" value={publicValueTotal} note="공시지가 × 필지면적" />
+          {marketMedianTotal > 0 && (
+            <PricePoint
+              label="토지 실거래 중앙값"
+              value={marketMedianTotal}
+              note={`${Math.round(data.parcel.acquisitionEstimate?.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평 · 토지 분포 참고`}
+            />
+          )}
           <PricePoint
             label="알고리즘 참고 추정가"
             value={marketEstimate}
-            note={`${acquisitionMethodLabel(data.parcel.acquisitionEstimate?.method)} · ${confidenceLabel(marketConfidence)}`}
+            note={`${acquisitionMethodLabel(data.parcel.acquisitionEstimate?.method)}${houseProxy ? ` ${houseProxy.sampleSize}건` : ""} · ${confidenceLabel(marketConfidence)}`}
             tone="market"
           />
-          <PricePoint label="현재 검토 매입가" value={acquisitionPrice} note={acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"} tone="active" />
+          <PricePoint
+            label="현재 검토 매입가 총액"
+            value={acquisitionPrice}
+            note={`${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평 · ${acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"}`}
+            tone="active"
+          />
           <PricePoint
             label="예비 모델상 매입 한도"
             value={maxAcquisition.maxLandCost}
@@ -328,7 +380,16 @@ export default function DashboardPage({
           />
         </div>
         <div className="method-strip">
-          <span>토지 추정 표본 <b>{data.parcel.acquisitionEstimate?.transactionCount ?? "미보존"}</b></span>
+          <span>
+            활성 추정 표본 <b>
+              {data.parcel.acquisitionEstimate?.method === "house-comps"
+                ? houseProxy
+                  ? `구축 주택 ${houseProxy.sampleSize}건`
+                  : "구축 주택 · 구버전 표본 미보존"
+                : `${data.parcel.acquisitionEstimate?.details?.sampleSize ?? "미보존"}건`}
+            </b>
+          </span>
+          <span>토지 분포 표본 <b>{data.parcel.acquisitionEstimate?.transactionCount ?? "미보존"}건</b></span>
           <span>동일 지목 표본 <b>{data.parcel.acquisitionEstimate?.details?.sampleSize ?? "미보존"}</b></span>
           <span>입지 티어 <b>{data.parcel.acquisitionEstimate?.details?.locationTier ?? "이전 프로젝트"}</b></span>
           <button className="text-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>실거래 근거 열기</button>
@@ -356,6 +417,16 @@ export default function DashboardPage({
               <ReturnMetric label="전체 기간" value={`${result.totalMonths}개월`} />
               <ReturnMetric label="세금 부분 추정액" value={won(taxes.total)} note={taxes.complete ? "계산 완료" : "재산세·부가세 등 미산정"} />
             </div>
+          </section>
+
+          <section className="dashboard-section" id="deal-rescue">
+            <DealRescuePanel
+              rescue={visibleRescue}
+              baseline={result}
+              targetIRR={assumptions.equityIRR}
+              running={rescueRunning}
+              onRun={runDealRescue}
+            />
           </section>
 
           <section className="dashboard-section split-section">
@@ -437,12 +508,10 @@ export default function DashboardPage({
               <div><span className="section-kicker">LIVE INPUTS</span><h2>계산 조정</h2></div>
               {editedCount > 0 && <button className="text-button" onClick={resetAll}>{editedCount}건 초기화</button>}
             </div>
-            <NumericEditor
-              label="토지 검토 매입가"
-              value={acquisitionPrice}
-              divisor={1}
-              suffix="만원"
-              step={1000}
+            <AcquisitionPriceEditor
+              totalManwon={acquisitionPrice}
+              lotAreaSqm={data.parcel.lotArea}
+              referenceManwon={marketEstimate}
               edited={acquisitionEdited}
               source="부지 등록 입력값 · 시장 추정가와 분리"
               onChange={(value) => setDraftAcquisitionPrice(projectId, value)}
@@ -468,7 +537,11 @@ export default function DashboardPage({
             <span className="section-kicker">MODEL COVERAGE</span>
             <h2>계산 반영 범위</h2>
             <EvidenceRow label="대표 계획 매스" value={geometry.geometryHash} state="확정" />
-            <EvidenceRow label="토지 검토가" value={acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} state="검토" />
+            <EvidenceRow
+              label="토지 검토가"
+              value={`${acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} · ${won(acquisitionPrice)} 총액 · ${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평`}
+              state="검토"
+            />
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
             <EvidenceRow label="매각 단가" value={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis}` : "내부 초기 가정 · 실거래 근거 없음"} state="미확정" />
             <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
@@ -485,7 +558,7 @@ export default function DashboardPage({
 
           <section className="next-actions">
             <button className="secondary-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>가격 근거</button>
-            <button className="primary-button" onClick={() => router.push(`/projects/${projectId}/report`)}>보고서</button>
+            <button className="primary-button" onClick={() => router.push(`/projects/${projectId}/handoff`)}>전문가 검증·인계</button>
           </section>
         </aside>
       </div>
@@ -498,7 +571,7 @@ export default function DashboardPage({
         .source-lock{display:grid;grid-template-columns:minmax(260px,1.5fr) repeat(3,minmax(120px,.65fr));border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);margin-bottom:12px}.source-main,.source-lock>:global(.fact){padding:13px 15px}.source-main{display:grid;gap:4px;border-right:1px solid var(--border-faint)}.source-main strong{font-size:14px}.source-main>span:last-child{font-size:10.5px;color:var(--fg-muted)}
         .decision-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
         .dashboard-section,.assumption-panel,.evidence-panel{border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);padding:17px}.dashboard-section{margin-bottom:12px}.land-section{padding:18px 19px}
-        .price-ladder{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:15px}.method-strip{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:11px;padding-top:10px;border-top:1px solid var(--border-faint);font-size:10px;color:var(--fg-muted)}.method-strip b{color:var(--fg)}.method-strip button{margin-left:auto}
+        .price-ladder{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:15px}.method-strip{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:11px;padding-top:10px;border-top:1px solid var(--border-faint);font-size:10px;color:var(--fg-muted)}.method-strip b{color:var(--fg)}.method-strip button{margin-left:auto}
         .workspace-grid{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:12px;align-items:start}.stage3-main{min-width:0}.stage3-sidebar{display:grid;gap:12px;position:sticky;top:16px}.assumption-heading{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--border-faint);padding-bottom:10px}.assumption-heading h2,.evidence-panel h2{font-size:16px;margin:5px 0 0}
         .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}.return-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:9px;border:1px solid var(--border-faint);border-radius:9px;overflow:hidden}.return-strip>:global(div)+:global(div){border-left:1px solid var(--border-faint)}
         .split-section{display:grid;grid-template-columns:1fr 1fr;gap:28px}.break-even-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.break-even-strip>div{padding:11px 12px;border-radius:8px;background:var(--bg-soft);display:grid;gap:4px}.break-even-strip span{font-size:9.5px;color:var(--fg-muted)}.break-even-strip strong{font-size:13px;font-family:var(--font-mono)}
@@ -509,6 +582,360 @@ export default function DashboardPage({
       `}</style>
     </div>
   );
+}
+
+function DealRescuePanel({
+  rescue,
+  baseline,
+  targetIRR,
+  running,
+  onRun,
+}: {
+  rescue: DealRescueResult | null;
+  baseline: DealRescueResult["baseline"];
+  targetIRR: number;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const baselinePasses =
+    baseline.viable &&
+    baseline.profit >= 0 &&
+    baseline.npv >= 0 &&
+    baseline.irrStatus === "calculated" &&
+    baseline.irr >= targetIRR;
+  const statusLabel =
+    rescue?.status === "already-viable"
+      ? "현재안 목표 통과"
+      : rescue?.status === "rescue-found"
+        ? "검증 경로 발견"
+        : rescue?.status === "geometry-blocked"
+          ? "매스 재검토 필요"
+          : rescue?.status === "no-bounded-solution"
+            ? "탐색 범위 내 해결안 없음"
+            : baselinePasses
+              ? "현재안 목표 통과"
+              : "분석 전";
+  const statusTone: Tone =
+    rescue?.status === "rescue-found" || baselinePasses
+      ? "positive"
+      : rescue
+        ? "negative"
+        : "review";
+  const statusColors = toneColors(statusTone);
+
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 18,
+          alignItems: "flex-start",
+        }}
+      >
+        <SectionHeader
+          eyebrow="DEAL RESCUE"
+          title="이 사업을 살리는 최소 변경점을 역산합니다"
+          description={`현재 계획 매스를 고정하고 토지가·매출 단가·직접 공사비·PF 금리를 다시 계산합니다. 흑자, NPV 0 이상, IRR ${targetIRR.toFixed(1)}% 이상을 모두 통과한 경로만 해결안으로 표시합니다.`}
+        />
+        <div
+          style={{
+            display: "grid",
+            justifyItems: "end",
+            gap: 8,
+            flex: "0 0 auto",
+          }}
+        >
+          <span
+            style={{
+              padding: "6px 9px",
+              borderRadius: 999,
+              background: statusColors.bg,
+              color: statusColors.fg,
+              fontSize: 9.5,
+              fontWeight: 800,
+            }}
+          >
+            {statusLabel}
+          </span>
+          <button
+            disabled={running}
+            onClick={onRun}
+            style={{
+              minHeight: 36,
+              padding: "0 12px",
+              border: "1px solid var(--fg)",
+              borderRadius: 8,
+              background: "var(--fg)",
+              color: "var(--bg)",
+              font: "inherit",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: running ? "wait" : "pointer",
+              opacity: running ? 0.65 : 1,
+            }}
+          >
+            {running
+              ? "목표 통과 여부 계산 중…"
+              : rescue
+                ? "현재 입력으로 다시 계산"
+                : "최소 변경 찾기"}
+          </button>
+        </div>
+      </div>
+
+      {!rescue && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 8,
+            marginTop: 15,
+          }}
+        >
+          <RescueGate
+            label="손익"
+            value={won(baseline.profit)}
+            pass={baseline.profit >= 0}
+          />
+          <RescueGate
+            label="NPV"
+            value={won(baseline.npv)}
+            pass={baseline.npv >= 0}
+          />
+          <RescueGate
+            label="IRR"
+            value={
+              baseline.irrStatus === "calculated"
+                ? `${baseline.irr.toFixed(1)}%`
+                : "N/A"
+            }
+            pass={
+              baseline.irrStatus === "calculated" &&
+              baseline.irr >= targetIRR
+            }
+          />
+        </div>
+      )}
+
+      {rescue?.status === "already-viable" && (
+        <p
+          style={{
+            margin: "15px 0 0",
+            padding: 12,
+            borderRadius: 8,
+            background: "var(--pos-soft)",
+            color: "var(--pos-fg)",
+            fontSize: 10.5,
+            lineHeight: 1.55,
+          }}
+        >
+          현재 입력이 네 가지 게이트를 모두 통과합니다. 불필요한 낙관 가정을
+          추가하지 않았습니다.
+        </p>
+      )}
+
+      {rescue && rescue.paths.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+            gap: 9,
+            marginTop: 15,
+          }}
+        >
+          {rescue.paths.map((path) => {
+            const reachable = path.status === "reachable";
+            return (
+              <article
+                key={path.id}
+                style={{
+                  display: "grid",
+                  alignContent: "start",
+                  gap: 9,
+                  minHeight: 178,
+                  padding: 13,
+                  border: `1px solid ${
+                    reachable ? "var(--pos-fg)" : "var(--border-faint)"
+                  }`,
+                  borderRadius: 9,
+                  background: reachable
+                    ? "var(--pos-soft)"
+                    : "var(--bg-soft)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <strong style={{ fontSize: 12 }}>{path.title}</strong>
+                  <small
+                    style={{
+                      color: reachable
+                        ? "var(--pos-fg)"
+                        : "var(--fg-muted)",
+                      fontWeight: 800,
+                    }}
+                  >
+                    {reachable
+                      ? "목표 통과"
+                      : path.status === "not-applicable"
+                        ? "해당 없음"
+                        : "범위 내 불가"}
+                  </small>
+                </div>
+                {reachable &&
+                  path.changes.map((item) => (
+                    <div
+                      key={item.field}
+                      style={{
+                        paddingBottom: 7,
+                        borderBottom: "1px solid var(--border-faint)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: 8.5,
+                          color: "var(--fg-muted)",
+                        }}
+                      >
+                        {item.label}
+                      </span>
+                      <strong
+                        style={{
+                          display: "block",
+                          marginTop: 4,
+                          fontSize: 11,
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {formatRescueValue(item, item.from)} →{" "}
+                        {formatRescueValue(item, item.to)}
+                      </strong>
+                      <small
+                        style={{
+                          display: "block",
+                          marginTop: 2,
+                          color: "var(--pos-fg)",
+                        }}
+                      >
+                        {item.pctChange == null
+                          ? "변화율 N/A"
+                          : `${item.pctChange > 0 ? "+" : ""}${item.pctChange.toFixed(1)}%`}
+                      </small>
+                    </div>
+                  ))}
+                {reachable && path.result && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, 1fr)",
+                      gap: 6,
+                      fontSize: 8.5,
+                    }}
+                  >
+                    <span>
+                      손익
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(path.result.profit)}
+                      </b>
+                    </span>
+                    <span>
+                      NPV
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(path.result.npv)}
+                      </b>
+                    </span>
+                    <span>
+                      IRR
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {path.result.irr.toFixed(1)}%
+                      </b>
+                    </span>
+                  </div>
+                )}
+                <p
+                  style={{
+                    margin: 0,
+                    color: "var(--fg-muted)",
+                    fontSize: 8.5,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {path.reason}
+                </p>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {rescue && (
+        <p
+          style={{
+            margin: "12px 0 0",
+            paddingTop: 10,
+            borderTop: "1px solid var(--border-faint)",
+            color: "var(--fg-muted)",
+            fontSize: 9,
+            lineHeight: 1.55,
+          }}
+        >
+          {rescue.modelVersion} · 엔진 재계산 결과이며 시세 예측이나 견적 확정이
+          아닙니다. 기존 계획과 입력값은 자동 변경하지 않습니다. 도달 경로는
+          실거래·시공사 견적·금융기관 조건으로 외부 검증한 뒤 별도 버전으로
+          확정해야 합니다.
+        </p>
+      )}
+    </>
+  );
+}
+
+function RescueGate({
+  label,
+  value,
+  pass,
+}: {
+  label: string;
+  value: string;
+  pass: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: "10px 11px",
+        borderRadius: 8,
+        background: pass ? "var(--pos-soft)" : "var(--neg-soft)",
+      }}
+    >
+      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>{label}</span>
+      <strong
+        style={{
+          display: "block",
+          marginTop: 4,
+          color: pass ? "var(--pos-fg)" : "var(--neg-fg)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 12,
+        }}
+      >
+        {value} · {pass ? "통과" : "미달"}
+      </strong>
+    </div>
+  );
+}
+
+function formatRescueValue(change: DealRescueChange, value: number) {
+  if (change.unit === "만원") return won(value);
+  if (change.unit === "%") return `${value.toFixed(2)}%`;
+  if (change.unit === "원/㎡·월") {
+    return `${Math.round(value).toLocaleString()}원/㎡·월`;
+  }
+  return `${Math.round(value).toLocaleString()}원/㎡`;
 }
 
 function formatRevenuePrice(value: number, kind: "sale" | "rent") {
@@ -569,6 +996,109 @@ function CashflowTable({ rows }: { rows: ReturnType<typeof toCashflowVM> }) {
 
 function EvidenceMetric({ label, value }: { label: string; value: string }) {
   return <div style={{ padding: "11px 12px", borderRadius: 8, background: "var(--bg-soft)" }}><span style={{ display: "block", fontSize: 9, color: "var(--fg-muted)" }}>{label}</span><strong style={{ display: "block", marginTop: 5, fontSize: 12 }}>{value}</strong></div>;
+}
+
+function AcquisitionPriceEditor({
+  totalManwon,
+  lotAreaSqm,
+  referenceManwon,
+  edited,
+  source,
+  onChange,
+}: {
+  totalManwon: number;
+  lotAreaSqm: number;
+  referenceManwon: number;
+  edited: boolean;
+  source: string;
+  onChange: (value: number) => void;
+}) {
+  const [mode, setMode] = useState<AcquisitionPriceMode>("total");
+  const perPyeong = acquisitionPricePerPyeong(totalManwon, lotAreaSqm);
+  const assessment = assessAcquisitionPrice(totalManwon, referenceManwon);
+  const displayedValue = mode === "total" ? totalManwon : perPyeong;
+  const warning =
+    assessment.status === "extreme-low"
+      ? `알고리즘 참고 추정의 ${assessment.ratioPct.toFixed(1)}%입니다. 총액과 평당가 단위를 다시 확인하세요.`
+      : assessment.status === "extreme-high"
+        ? `알고리즘 참고 추정의 ${assessment.ratioPct.toFixed(0)}%입니다. 총액과 평당가 단위를 다시 확인하세요.`
+        : null;
+
+  return (
+    <div style={{ padding: "10px 0 12px", borderBottom: "1px solid var(--border-faint)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>토지 검토 매입가</span>
+        <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+          {(["total", "per-pyeong"] as AcquisitionPriceMode[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setMode(item)}
+              style={{
+                minHeight: 25,
+                padding: "0 7px",
+                border: 0,
+                background: mode === item ? "var(--fg)" : "var(--bg)",
+                color: mode === item ? "var(--bg)" : "var(--fg-muted)",
+                fontSize: 8.5,
+                fontWeight: 700,
+              }}
+            >
+              {item === "total" ? "총액" : "평당가"}
+            </button>
+          ))}
+        </span>
+      </div>
+      <label style={{ display: "flex", justifyContent: "flex-end", gap: 5, alignItems: "center", marginTop: 7 }}>
+        <input
+          aria-label={mode === "total" ? "토지 검토 매입가 총액" : "토지 검토 매입가 평당가"}
+          type="number"
+          min={0}
+          step={mode === "total" ? 1000 : 50}
+          value={Number(displayedValue.toFixed(0))}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (!Number.isFinite(next) || next < 0) return;
+            onChange(
+              mode === "total"
+                ? next
+                : acquisitionPriceTotal(next, lotAreaSqm)
+            );
+          }}
+          style={{
+            width: 110,
+            height: 29,
+            padding: "0 7px",
+            borderRadius: 6,
+            border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`,
+            background: "var(--bg)",
+            color: edited ? "var(--accent)" : "var(--fg)",
+            textAlign: "right",
+            font: "inherit",
+            fontSize: 10.5,
+            fontWeight: 700,
+          }}
+        />
+        <small style={{ minWidth: 54, color: "var(--fg-faint)", fontSize: 8.5 }}>
+          {mode === "total" ? "만원 총액" : "만원/평"}
+        </small>
+      </label>
+      <div style={{ marginTop: 6, padding: "7px 8px", borderRadius: 6, background: "var(--bg-soft)", fontSize: 9, lineHeight: 1.5 }}>
+        <strong>{won(totalManwon)} 총액</strong>
+        <span style={{ marginLeft: 6, color: "var(--fg-muted)" }}>
+          {Math.round(perPyeong).toLocaleString()}만원/평
+        </span>
+      </div>
+      {warning && (
+        <div role="alert" style={{ marginTop: 6, padding: "7px 8px", borderRadius: 6, background: "var(--neg-soft)", color: "var(--neg-fg)", fontSize: 8.8, lineHeight: 1.5 }}>
+          {warning}
+        </div>
+      )}
+      <small title={source} style={{ display: "block", marginTop: 4, color: edited ? "var(--accent)" : "var(--fg-faint)", fontSize: 8.5 }}>
+        {edited ? "사용자 수정 · 실시간 재계산" : source}
+      </small>
+    </div>
+  );
 }
 
 function NumericEditor({ label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {
