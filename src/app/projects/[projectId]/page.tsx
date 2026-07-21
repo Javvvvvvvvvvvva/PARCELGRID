@@ -27,6 +27,17 @@ import {
   type DealStressResult,
   type DealStressThreshold,
 } from "@/lib/finance/deal-stress-test";
+import {
+  applyFinancialSources,
+  buildSourceDataGate,
+  FINANCIAL_SOURCE_FIELD_META,
+  validateFinancialSource,
+  type FinancialSourceField,
+  type FinancialSourceKind,
+  type FinancialSourceMap,
+  type FinancialSourceRecord,
+  type SourceDataGateResult,
+} from "@/lib/finance/source-data-gate";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -39,6 +50,7 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { won } from "@/lib/utils/format";
 
 const SQM_PER_PYEONG = 3.305785;
+const EMPTY_FINANCIAL_SOURCES: FinancialSourceMap = {};
 
 type Tone = "positive" | "review" | "negative" | "neutral";
 
@@ -108,6 +120,9 @@ export default function DashboardPage({
   const draftAcquisitionPrices = useProjectStore((state) => state.draftAcquisitionPrices);
   const setDraftAcquisitionPrice = useProjectStore((state) => state.setDraftAcquisitionPrice);
   const resetDraftAcquisitionPrice = useProjectStore((state) => state.resetDraftAcquisitionPrice);
+  const financialSources = useProjectStore((state) => state.financialSources);
+  const setFinancialSource = useProjectStore((state) => state.setFinancialSource);
+  const removeFinancialSource = useProjectStore((state) => state.removeFinancialSource);
   const [rescueRun, setRescueRun] = useState<{
     key: string;
     result: DealRescueResult;
@@ -140,16 +155,32 @@ export default function DashboardPage({
   const activeScenarioId = context.ready ? context.financeScenario.id : representativeScenarioId;
   const draft = activeScenarioId ? draftAssumptions[activeScenarioId] : undefined;
   const draftAcquisitionPrice = draftAcquisitionPrices[projectId];
+  const projectFinancialSources =
+    financialSources[projectId] ?? EMPTY_FINANCIAL_SOURCES;
 
   const calculation = useMemo(() => {
     if (!context.ready || !data?.parcel) return null;
-    const assumptions: AssumptionSet = {
+    const draftScenario = {
+      ...context.financeScenario._raw,
+      assumptions: {
       ...context.financeScenario._raw.assumptions,
       ...(draft ?? {}),
+      } as AssumptionSet,
     };
-    const acquisitionPrice = draftAcquisitionPrice ?? data.parcel.acquiredPrice;
-    const parcel = { ...data.parcel, acquiredPrice: acquisitionPrice };
-    const scenario = { ...context.financeScenario._raw, assumptions };
+    const draftParcel = {
+      ...data.parcel,
+      acquiredPrice: draftAcquisitionPrice ?? data.parcel.acquiredPrice,
+    };
+    const sourced = applyFinancialSources(
+      draftParcel,
+      draftScenario,
+      projectFinancialSources
+    );
+    const parcel = sourced.parcel;
+    const scenario = sourced.scenario;
+    const assumptions = scenario.assumptions;
+    const acquisitionPrice = parcel.acquiredPrice;
+    const sourceGate = buildSourceDataGate(scenario, projectFinancialSources);
     const result = calculateScenario({ parcel, scenario });
     const taxes = calculateTaxes({
       parcel,
@@ -180,8 +211,9 @@ export default function DashboardPage({
       maxAcquisition,
       sensitivity,
       breakEven,
+      sourceGate,
     };
-  }, [context, data?.parcel, draft, draftAcquisitionPrice]);
+  }, [context, data?.parcel, draft, draftAcquisitionPrice, projectFinancialSources]);
 
   if (!data) return null;
   if (!context.ready || !calculation) {
@@ -212,6 +244,7 @@ export default function DashboardPage({
     maxAcquisition,
     sensitivity,
     breakEven,
+    sourceGate,
   } = calculation;
   const hasSaleRevenue = scenario.program.mix.residentialSale > 0;
   const hasLeaseRevenue =
@@ -230,7 +263,10 @@ export default function DashboardPage({
       return true;
     }),
   })).filter((group) => group.fields.length > 0);
-  const acquisitionEdited = draftAcquisitionPrice != null && draftAcquisitionPrice !== data.parcel.acquiredPrice;
+  const acquisitionEdited =
+    projectFinancialSources.acquisitionPrice != null ||
+    (draftAcquisitionPrice != null &&
+      draftAcquisitionPrice !== data.parcel.acquiredPrice);
   const editedCount = Object.keys(draft ?? {}).length + (acquisitionEdited ? 1 : 0);
   const marketEstimate = data.parcel.acquisitionEstimate?.estimatedPriceManwon
     ?? (data.parcel.estMarketPrice
@@ -307,9 +343,9 @@ export default function DashboardPage({
         </div>
       </header>
 
-      <section className="audit-banner" role="status">
-        <strong>예비 사업성 모델 · 전문가 검토 전</strong>
-        <span>실거래 원본, 사용자 입력, 알고리즘 추정과 미산정 항목을 분리합니다. 현재 결과는 비교·민감도 검토용이며 매입가 확정, 대출 심사 또는 세무신고용이 아닙니다.</span>
+      <section className="audit-banner" role="status" style={sourceGate.status === "source-backed" ? { borderColor: "var(--pos-fg)", background: "var(--pos-soft)", color: "var(--pos-fg)" } : undefined}>
+        <strong>{sourceGate.status === "source-backed" ? "소스 데이터 게이트 통과" : "소스 데이터 미완료 · 확정 판단 차단"}</strong>
+        <span>{sourceGate.status === "source-backed" ? `필수 입력 ${sourceGate.validRecords.length}건이 원문·발급기관·기준일·확인자와 함께 등록되어 계산에 반영됐습니다.` : `필수 입력 ${sourceGate.requiredFields.length}건 중 ${sourceGate.validRecords.length}건만 검증됐습니다. 현재 숫자는 탐색용이며 보고서 확정에 사용할 수 없습니다.`}</span>
       </section>
 
       <section className="source-lock">
@@ -544,7 +580,7 @@ export default function DashboardPage({
               lotAreaSqm={data.parcel.lotArea}
               referenceManwon={marketEstimate}
               edited={acquisitionEdited}
-              source="부지 등록 입력값 · 시장 추정가와 분리"
+              source={projectFinancialSources.acquisitionPrice ? `${projectFinancialSources.acquisitionPrice.sourceName} · ${projectFinancialSources.acquisitionPrice.asOf} · 소스 값 적용` : "부지 등록 입력값 · 시장 추정가와 분리"}
               onChange={(value) => setDraftAcquisitionPrice(projectId, value)}
             />
             {activeAssumptionGroups.map((group) => (
@@ -555,13 +591,22 @@ export default function DashboardPage({
                     key={field.field}
                     {...field}
                     value={assumptions[field.field]}
-                    edited={draft?.[field.field] != null}
-                    source={ASSUMPTION_META[field.field]?.basis ?? "사용자 확인 필요"}
+                    edited={projectFinancialSources[field.field] != null || draft?.[field.field] != null}
+                    source={projectFinancialSources[field.field] ? `${projectFinancialSources[field.field]!.sourceName} · ${projectFinancialSources[field.field]!.asOf} · 소스 값 적용` : ASSUMPTION_META[field.field]?.basis ?? "사용자 확인 필요"}
                     onChange={(value) => setDraftAssumption(financeScenario.id, field.field, value)}
                   />
                 ))}
               </details>
             ))}
+          </section>
+
+          <section className="evidence-panel">
+            <SourceDataPanel
+              records={projectFinancialSources}
+              gate={sourceGate}
+              onSave={(record) => setFinancialSource(projectId, record)}
+              onRemove={(field) => removeFinancialSource(projectId, field)}
+            />
           </section>
 
           <section className="evidence-panel">
@@ -589,7 +634,7 @@ export default function DashboardPage({
 
           <section className="next-actions">
             <button className="secondary-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>가격 근거</button>
-            <button className="primary-button" onClick={() => router.push(`/projects/${projectId}/handoff`)}>전문가 검증·인계</button>
+            <button className="primary-button" disabled={sourceGate.status !== "source-backed"} title={sourceGate.status === "source-backed" ? "전문가 검증·인계" : "필수 소스 데이터를 모두 등록해야 합니다."} onClick={() => router.push(`/projects/${projectId}/handoff`)}>전문가 검증·인계</button>
           </section>
         </aside>
       </div>
@@ -1594,6 +1639,313 @@ function AcquisitionPriceEditor({
       </small>
     </div>
   );
+}
+
+const SOURCE_KIND_LABELS: Record<FinancialSourceKind, string> = {
+  "official-api": "공식 API 원문",
+  "signed-contract": "서명 계약서",
+  "professional-quote": "전문가·시공사 견적",
+  "lender-term-sheet": "금융기관 Term Sheet",
+  appraisal: "감정평가·시장보고서",
+  "approved-policy": "승인된 내부 기준",
+};
+
+function SourceDataPanel({
+  records,
+  gate,
+  onSave,
+  onRemove,
+}: {
+  records: FinancialSourceMap;
+  gate: SourceDataGateResult;
+  onSave: (record: FinancialSourceRecord) => void;
+  onRemove: (field: FinancialSourceField) => void;
+}) {
+  const initialField =
+    gate.missingFields[0] ?? gate.requiredFields[0] ?? "acquisitionPrice";
+  const initialRecord = records[initialField];
+  const [field, setField] = useState<FinancialSourceField>(initialField);
+  const [value, setValue] = useState(
+    initialRecord ? String(initialRecord.value) : ""
+  );
+  const [sourceKind, setSourceKind] = useState<FinancialSourceKind>(
+    initialRecord?.sourceKind ??
+      FINANCIAL_SOURCE_FIELD_META[initialField].allowedKinds[0]
+  );
+  const [sourceName, setSourceName] = useState(
+    initialRecord?.sourceName ?? ""
+  );
+  const [documentRef, setDocumentRef] = useState(
+    initialRecord?.documentRef ?? ""
+  );
+  const [asOf, setAsOf] = useState(initialRecord?.asOf ?? "");
+  const [verifiedBy, setVerifiedBy] = useState(
+    initialRecord?.verifiedBy ?? ""
+  );
+  const [error, setError] = useState<string | null>(null);
+  const meta = FINANCIAL_SOURCE_FIELD_META[field];
+
+  const selectField = (nextField: FinancialSourceField) => {
+    const existing = records[nextField];
+    const nextMeta = FINANCIAL_SOURCE_FIELD_META[nextField];
+    setField(nextField);
+    setValue(existing ? String(existing.value) : "");
+    setSourceKind(existing?.sourceKind ?? nextMeta.allowedKinds[0]);
+    setSourceName(existing?.sourceName ?? "");
+    setDocumentRef(existing?.documentRef ?? "");
+    setAsOf(existing?.asOf ?? "");
+    setVerifiedBy(existing?.verifiedBy ?? "");
+    setError(null);
+  };
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const record: FinancialSourceRecord = {
+      field,
+      value: Number(value),
+      sourceKind,
+      sourceName: sourceName.trim(),
+      documentRef: documentRef.trim(),
+      asOf,
+      verifiedBy: verifiedBy.trim(),
+      recordedAt: new Date().toISOString().slice(0, 10),
+    };
+    const validation = validateFinancialSource(record);
+    if (!validation.valid) {
+      setError(validation.errors.join(" "));
+      return;
+    }
+    onSave(record);
+    setError(null);
+  };
+
+  return (
+    <>
+      <span className="section-kicker">SOURCE DATA ROOM</span>
+      <h2 style={{ fontSize: 16, margin: "5px 0 4px" }}>
+        원문 기반 계산 입력
+      </h2>
+      <p
+        style={{
+          margin: "0 0 10px",
+          color: "var(--fg-muted)",
+          fontSize: 9.5,
+          lineHeight: 1.5,
+        }}
+      >
+        등록 즉시 해당 값이 예비 가정을 덮어쓰고 전체 사업성 원장을 다시
+        계산합니다.
+      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 8,
+          alignItems: "center",
+          padding: "9px 10px",
+          borderRadius: 8,
+          background:
+            gate.status === "source-backed"
+              ? "var(--pos-soft)"
+              : "var(--neg-soft)",
+          color:
+            gate.status === "source-backed"
+              ? "var(--pos-fg)"
+              : "var(--neg-fg)",
+          fontSize: 9.5,
+          fontWeight: 800,
+        }}
+      >
+        <span>
+          {gate.validRecords.length}/{gate.requiredFields.length}건 검증
+        </span>
+        <span>{gate.coveragePct.toFixed(0)}%</span>
+      </div>
+
+      <form onSubmit={submit} style={{ display: "grid", gap: 8, marginTop: 11 }}>
+        <label style={sourceLabelStyle}>
+          계산 항목
+          <select
+            value={field}
+            onChange={(event) =>
+              selectField(event.target.value as FinancialSourceField)
+            }
+            style={sourceInputStyle}
+          >
+            {gate.requiredFields.map((item) => (
+              <option key={item} value={item}>
+                {FINANCIAL_SOURCE_FIELD_META[item].label}
+                {records[item] ? " · 등록됨" : " · 필요"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={sourceLabelStyle}>
+          원문 값 ({meta.unit})
+          <input
+            type="number"
+            min="0"
+            step="any"
+            required
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            style={sourceInputStyle}
+          />
+        </label>
+        <label style={sourceLabelStyle}>
+          출처 유형
+          <select
+            value={sourceKind}
+            onChange={(event) =>
+              setSourceKind(event.target.value as FinancialSourceKind)
+            }
+            style={sourceInputStyle}
+          >
+            {meta.allowedKinds.map((kind) => (
+              <option key={kind} value={kind}>
+                {SOURCE_KIND_LABELS[kind]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={sourceLabelStyle}>
+          발급기관·출처명
+          <input
+            required
+            value={sourceName}
+            placeholder="예: ○○건설 / ○○은행"
+            onChange={(event) => setSourceName(event.target.value)}
+            style={sourceInputStyle}
+          />
+        </label>
+        <label style={sourceLabelStyle}>
+          문서번호·URL·파일 참조
+          <input
+            required
+            value={documentRef}
+            placeholder="예: 견적서 2026-07-A / 원문 URL"
+            onChange={(event) => setDocumentRef(event.target.value)}
+            style={sourceInputStyle}
+          />
+        </label>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
+          <label style={sourceLabelStyle}>
+            기준일
+            <input
+              type="date"
+              required
+              value={asOf}
+              onChange={(event) => setAsOf(event.target.value)}
+              style={sourceInputStyle}
+            />
+          </label>
+          <label style={sourceLabelStyle}>
+            확인자
+            <input
+              required
+              value={verifiedBy}
+              placeholder="이름"
+              onChange={(event) => setVerifiedBy(event.target.value)}
+              style={sourceInputStyle}
+            />
+          </label>
+        </div>
+        {error && (
+          <p
+            role="alert"
+            style={{
+              margin: 0,
+              padding: 8,
+              borderRadius: 7,
+              background: "var(--neg-soft)",
+              color: "var(--neg-fg)",
+              fontSize: 9,
+              lineHeight: 1.45,
+            }}
+          >
+            {error}
+          </p>
+        )}
+        <button className="primary-button" type="submit">
+          {records[field] ? "소스 값 갱신" : "소스 값 적용"}
+        </button>
+      </form>
+
+      <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+        {gate.requiredFields.map((item) => {
+          const record = records[item];
+          if (!record) return null;
+          const validation = validateFinancialSource(record);
+          return (
+            <div
+              key={item}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: 8,
+                padding: "8px 0",
+                borderTop: "1px solid var(--border-faint)",
+              }}
+            >
+              <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                <b style={{ fontSize: 9.5 }}>
+                  {FINANCIAL_SOURCE_FIELD_META[item].label} ·{" "}
+                  {formatSourceValue(record)}
+                </b>
+                <small
+                  style={{
+                    color: validation.valid
+                      ? "var(--pos-fg)"
+                      : "var(--neg-fg)",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {record.sourceName} · {record.asOf} · {record.documentRef}
+                </small>
+              </span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onRemove(item)}
+              >
+                제거
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+const sourceLabelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 4,
+  color: "var(--fg-muted)",
+  fontSize: 8.5,
+  fontWeight: 700,
+};
+
+const sourceInputStyle: React.CSSProperties = {
+  width: "100%",
+  minHeight: 34,
+  boxSizing: "border-box",
+  border: "1px solid var(--border)",
+  borderRadius: 7,
+  background: "var(--bg-elev)",
+  color: "var(--fg)",
+  padding: "0 8px",
+  font: "inherit",
+  fontSize: 10,
+};
+
+function formatSourceValue(record: FinancialSourceRecord) {
+  const unit = FINANCIAL_SOURCE_FIELD_META[record.field].unit;
+  if (unit === "만원") return won(record.value);
+  if (unit === "%" || unit === "%/월") {
+    return `${record.value.toLocaleString()}${unit}`;
+  }
+  return `${record.value.toLocaleString()}${unit}`;
 }
 
 function NumericEditor({ label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {

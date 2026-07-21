@@ -11,6 +11,10 @@
 import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import type { AssumptionSet } from "@/lib/finance/types";
+import type {
+  FinancialSourceMap,
+  FinancialSourceRecord,
+} from "@/lib/finance/source-data-gate";
 import type { ProjectComputed } from "@/lib/services/compute-project";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
@@ -66,6 +70,17 @@ interface ProjectStore {
   draftAcquisitionPrices: Record<string, number>;
   setDraftAcquisitionPrice: (projectId: string, value: number) => void;
   resetDraftAcquisitionPrice: (projectId: string) => void;
+
+  /** 프로젝트별 전문가·공식 원문 기반 금융 입력. 유효한 기록은 Stage 3 계산을 덮어쓴다. */
+  financialSources: Record<string, FinancialSourceMap>;
+  setFinancialSource: (
+    projectId: string,
+    record: FinancialSourceRecord
+  ) => void;
+  removeFinancialSource: (
+    projectId: string,
+    field: FinancialSourceRecord["field"]
+  ) => void;
 
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
@@ -184,6 +199,31 @@ export const useProjectStore = create<ProjectStore>()(
             const next = { ...state.draftAcquisitionPrices };
             delete next[projectId];
             return { draftAcquisitionPrices: next };
+          }),
+
+        financialSources: {},
+        setFinancialSource: (projectId, record) =>
+          set((state) => ({
+            financialSources: {
+              ...state.financialSources,
+              [projectId]: {
+                ...(state.financialSources[projectId] ?? {}),
+                [record.field]: record,
+              },
+            },
+          })),
+        removeFinancialSource: (projectId, field) =>
+          set((state) => {
+            const projectRecords = {
+              ...(state.financialSources[projectId] ?? {}),
+            };
+            delete projectRecords[field];
+            return {
+              financialSources: {
+                ...state.financialSources,
+                [projectId]: projectRecords,
+              },
+            };
           }),
 
         envelopePlan: null,
@@ -406,6 +446,7 @@ export const useProjectStore = create<ProjectStore>()(
           activeScenarioId: state.activeScenarioId,
           draftAssumptions: state.draftAssumptions,
           draftAcquisitionPrices: state.draftAcquisitionPrices,
+          financialSources: state.financialSources,
         }),
       }
     )
