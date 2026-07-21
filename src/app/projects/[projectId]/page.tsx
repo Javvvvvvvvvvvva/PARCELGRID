@@ -22,6 +22,11 @@ import {
   type DealRescueChange,
   type DealRescueResult,
 } from "@/lib/finance/deal-rescue";
+import {
+  buildDealStressTest,
+  type DealStressResult,
+  type DealStressThreshold,
+} from "@/lib/finance/deal-stress-test";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -108,6 +113,11 @@ export default function DashboardPage({
     result: DealRescueResult;
   } | null>(null);
   const [rescueRunning, setRescueRunning] = useState(false);
+  const [stressRun, setStressRun] = useState<{
+    key: string;
+    result: DealStressResult;
+  } | null>(null);
+  const [stressRunning, setStressRunning] = useState(false);
 
   const projectPlanningScenarios = useMemo(
     () => planningScenarios.filter(
@@ -255,6 +265,8 @@ export default function DashboardPage({
   });
   const visibleRescue =
     rescueRun?.key === rescueKey ? rescueRun.result : null;
+  const visibleStress =
+    stressRun?.key === rescueKey ? stressRun.result : null;
 
   const resetAll = () => {
     resetDraftAssumptions(financeScenario.id);
@@ -267,6 +279,15 @@ export default function DashboardPage({
       const rescue = findDealRescuePaths(calculation.parcel, scenario);
       setRescueRun({ key: rescueKey, result: rescue });
       setRescueRunning(false);
+    }, 0);
+  };
+
+  const runDealStress = () => {
+    setStressRunning(true);
+    window.setTimeout(() => {
+      const stress = buildDealStressTest(calculation.parcel, scenario);
+      setStressRun({ key: rescueKey, result: stress });
+      setStressRunning(false);
     }, 0);
   };
 
@@ -429,6 +450,16 @@ export default function DashboardPage({
             />
           </section>
 
+          <section className="dashboard-section" id="deal-stress-lab">
+            <DealStressLabPanel
+              stress={visibleStress}
+              baseline={result}
+              targetIRR={assumptions.equityIRR}
+              running={stressRunning}
+              onRun={runDealStress}
+            />
+          </section>
+
           <section className="dashboard-section split-section">
             <BreakdownPanel
               title="사업비 구성"
@@ -582,6 +613,470 @@ export default function DashboardPage({
       `}</style>
     </div>
   );
+}
+
+function DealStressLabPanel({
+  stress,
+  baseline,
+  targetIRR,
+  running,
+  onRun,
+}: {
+  stress: DealStressResult | null;
+  baseline: DealStressResult["baseline"];
+  targetIRR: number;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const baselinePasses =
+    baseline.viable &&
+    baseline.profit >= 0 &&
+    baseline.npv >= 0 &&
+    baseline.irrStatus === "calculated" &&
+    baseline.irr >= targetIRR;
+  const passCount =
+    stress?.stressCases.filter((row) => row.passesTarget).length ?? 0;
+  const maxCostShare = stress
+    ? Math.max(...stress.costDna.map((row) => row.shareOfTotalCost), 1)
+    : 1;
+
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 18,
+          alignItems: "flex-start",
+        }}
+      >
+        <SectionHeader
+          eyebrow="DEAL STRESS LAB"
+          title="손실 원인과 사업 생존선을 한 번에 검증합니다"
+          description={`동일 금융 원장에서 비용 구성, 현재값 대비 통과 경계, 다섯 가지 하방 상황을 다시 계산합니다. 손익·NPV·IRR ${targetIRR.toFixed(1)}%를 동시에 만족해야 통과입니다.`}
+        />
+        <div
+          style={{
+            display: "grid",
+            justifyItems: "end",
+            gap: 8,
+            flex: "0 0 auto",
+          }}
+        >
+          <span
+            style={{
+              padding: "6px 9px",
+              borderRadius: 999,
+              background: baselinePasses
+                ? "var(--pos-soft)"
+                : "var(--neg-soft)",
+              color: baselinePasses ? "var(--pos-fg)" : "var(--neg-fg)",
+              fontSize: 9.5,
+              fontWeight: 800,
+            }}
+          >
+            {stress
+              ? `하방 ${passCount}/5 통과`
+              : baselinePasses
+                ? "현재안 통과 · 하방 미검증"
+                : "현재안 미달 · 원인 미검증"}
+          </span>
+          <button
+            disabled={running}
+            onClick={onRun}
+            style={{
+              minHeight: 36,
+              padding: "0 12px",
+              border: "1px solid var(--fg)",
+              borderRadius: 8,
+              background: "var(--fg)",
+              color: "var(--bg)",
+              font: "inherit",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: running ? "wait" : "pointer",
+              opacity: running ? 0.65 : 1,
+            }}
+          >
+            {running
+              ? "경계값 재계산 중…"
+              : stress
+                ? "현재 입력으로 다시 검증"
+                : "사업성 검증 실행"}
+          </button>
+        </div>
+      </div>
+
+      {!stress && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 8,
+            marginTop: 15,
+          }}
+        >
+          <RescueGate
+            label="손익"
+            value={won(baseline.profit)}
+            pass={baseline.profit >= 0}
+          />
+          <RescueGate
+            label="NPV"
+            value={won(baseline.npv)}
+            pass={baseline.npv >= 0}
+          />
+          <RescueGate
+            label="IRR"
+            value={
+              baseline.irrStatus === "calculated"
+                ? `${baseline.irr.toFixed(1)}%`
+                : "N/A"
+            }
+            pass={
+              baseline.irrStatus === "calculated" && baseline.irr >= targetIRR
+            }
+          />
+        </div>
+      )}
+
+      {stress && (
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, .9fr) minmax(0, 1.35fr)",
+              gap: 12,
+              marginTop: 15,
+            }}
+          >
+            <article
+              style={{
+                padding: 13,
+                border: "1px solid var(--border-faint)",
+                borderRadius: 9,
+                background: "var(--bg-soft)",
+              }}
+            >
+              <div style={{ display: "grid", gap: 3, marginBottom: 12 }}>
+                <span className="section-kicker">LOSS DNA · LEDGER</span>
+                <strong style={{ fontSize: 13 }}>비용 원장 구성</strong>
+                <small style={{ color: "var(--fg-muted)", lineHeight: 1.45 }}>
+                  비용 항목의 정확한 구성비입니다. 항목별 인과효과를 임의
+                  추정하지 않습니다.
+                </small>
+              </div>
+              <div style={{ display: "grid", gap: 9 }}>
+                {stress.costDna.map((row) => (
+                  <div key={row.id} style={{ display: "grid", gap: 4 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        fontSize: 9.5,
+                      }}
+                    >
+                      <span>{row.label}</span>
+                      <strong style={{ fontFamily: "var(--font-mono)" }}>
+                        {won(row.amount)} · {row.shareOfTotalCost.toFixed(1)}%
+                      </strong>
+                    </div>
+                    <div
+                      style={{
+                        height: 5,
+                        borderRadius: 999,
+                        background: "var(--border-faint)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          width: `${Math.max(1, (Math.abs(row.shareOfTotalCost) / maxCostShare) * 100)}%`,
+                          height: "100%",
+                          borderRadius: 999,
+                          background: "var(--fg-muted)",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 6,
+                  marginTop: 13,
+                  paddingTop: 10,
+                  borderTop: "1px solid var(--border-faint)",
+                }}
+              >
+                <StressGap
+                  label="손익 부족"
+                  value={
+                    stress.gateGap.profit ? won(stress.gateGap.profit) : "없음"
+                  }
+                />
+                <StressGap
+                  label="NPV 부족"
+                  value={stress.gateGap.npv ? won(stress.gateGap.npv) : "없음"}
+                />
+                <StressGap
+                  label="IRR 부족"
+                  value={
+                    stress.gateGap.irrPctPoint == null
+                      ? "산정 불가"
+                      : `${stress.gateGap.irrPctPoint.toFixed(1)}%p`
+                  }
+                />
+              </div>
+            </article>
+
+            <article
+              style={{
+                padding: 13,
+                border: "1px solid var(--border-faint)",
+                borderRadius: 9,
+              }}
+            >
+              <div style={{ display: "grid", gap: 3, marginBottom: 11 }}>
+                <span className="section-kicker">SURVIVAL LINES</span>
+                <strong style={{ fontSize: 13 }}>
+                  현재값 대비 사업 생존선
+                </strong>
+                <small style={{ color: "var(--fg-muted)", lineHeight: 1.45 }}>
+                  각 행은 다른 조건을 고정한 단일 변수 경계입니다.
+                  시장가격·견적·대출 약정이 아닙니다.
+                </small>
+              </div>
+              <div style={{ display: "grid", gap: 7 }}>
+                {stress.thresholds.map((row) => (
+                  <StressThresholdRow
+                    key={row.id}
+                    row={row}
+                    baselinePasses={stress.baselinePasses}
+                  />
+                ))}
+              </div>
+            </article>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={{ display: "grid", gap: 3, marginBottom: 9 }}>
+              <span className="section-kicker">DOWNSIDE CASES</span>
+              <strong style={{ fontSize: 13 }}>표준 하방 시나리오</strong>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))",
+                gap: 8,
+              }}
+            >
+              {stress.stressCases.map((row) => (
+                <article
+                  key={row.id}
+                  style={{
+                    display: "grid",
+                    gap: 8,
+                    padding: 11,
+                    border: `1px solid ${row.passesTarget ? "var(--pos-fg)" : "var(--neg-fg)"}`,
+                    borderRadius: 8,
+                    background: row.passesTarget
+                      ? "var(--pos-soft)"
+                      : "var(--neg-soft)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                  >
+                    <strong style={{ fontSize: 10.5 }}>{row.label}</strong>
+                    <b
+                      style={{
+                        fontSize: 8.5,
+                        color: row.passesTarget
+                          ? "var(--pos-fg)"
+                          : "var(--neg-fg)",
+                      }}
+                    >
+                      {row.passesTarget ? "통과" : "붕괴"}
+                    </b>
+                  </div>
+                  <small
+                    style={{
+                      minHeight: 28,
+                      color: "var(--fg-muted)",
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {row.changes.join(" · ")}
+                  </small>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, 1fr)",
+                      gap: 4,
+                      fontSize: 8.5,
+                    }}
+                  >
+                    <span>
+                      손익
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(row.result.profit)}
+                      </b>
+                    </span>
+                    <span>
+                      NPV
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {won(row.result.npv)}
+                      </b>
+                    </span>
+                    <span>
+                      IRR
+                      <b style={{ display: "block", marginTop: 2 }}>
+                        {row.result.irrStatus === "calculated"
+                          ? `${row.result.irr.toFixed(1)}%`
+                          : "N/A"}
+                      </b>
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+
+          <p
+            style={{
+              margin: "12px 0 0",
+              paddingTop: 10,
+              borderTop: "1px solid var(--border-faint)",
+              color: "var(--fg-muted)",
+              fontSize: 9,
+              lineHeight: 1.55,
+            }}
+          >
+            {stress.modelVersion} · 원장 대사 오차{" "}
+            {Math.abs(stress.reconciliationError).toExponential(1)}만원 ·{" "}
+            {stress.geometryPolicy} 탐색 한계: {stress.bounds.join(" / ")}.
+          </p>
+        </>
+      )}
+    </>
+  );
+}
+
+function StressGap({ label, value }: { label: string; value: string }) {
+  return (
+    <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+      {label}
+      <b
+        style={{
+          display: "block",
+          marginTop: 3,
+          color: "var(--fg)",
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        {value}
+      </b>
+    </span>
+  );
+}
+
+function StressThresholdRow({
+  row,
+  baselinePasses,
+}: {
+  row: DealStressThreshold;
+  baselinePasses: boolean;
+}) {
+  const available = row.threshold != null;
+  const delta = row.deltaFromCurrentPct;
+  let status = "범위 내 해 없음";
+  if (available && row.status === "at-bound") status = "탐색 한계까지 통과";
+  else if (available && baselinePasses && row.direction === "maximum") {
+    status = `상승 여유 ${Math.abs(delta ?? 0).toFixed(1)}%`;
+  } else if (available && baselinePasses) {
+    status = `하락 여유 ${Math.abs(delta ?? 0).toFixed(1)}%`;
+  } else if (available) {
+    status = `필요 조정 ${delta != null && delta > 0 ? "+" : ""}${(delta ?? 0).toFixed(1)}%`;
+  }
+  const positive = available && baselinePasses;
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns:
+          "minmax(110px, 1fr) minmax(95px, .8fr) 18px minmax(95px, .8fr)",
+        gap: 8,
+        alignItems: "center",
+        padding: "9px 10px",
+        borderRadius: 8,
+        background: available ? "var(--bg-soft)" : "var(--neg-soft)",
+      }}
+    >
+      <span style={{ display: "grid", gap: 3, minWidth: 0 }}>
+        <b style={{ fontSize: 10 }}>{row.label}</b>
+        <small
+          style={{
+            color: positive
+              ? "var(--pos-fg)"
+              : available
+                ? "var(--warn-fg)"
+                : "var(--neg-fg)",
+            fontWeight: 700,
+          }}
+        >
+          {status}
+        </small>
+      </span>
+      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+        현재
+        <b
+          style={{
+            display: "block",
+            marginTop: 2,
+            color: "var(--fg)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {formatStressThreshold(row.current, row.unit)}
+        </b>
+      </span>
+      <b style={{ color: "var(--fg-muted)" }}>→</b>
+      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+        {row.direction === "maximum" ? "최대" : "최소"}
+        <b
+          style={{
+            display: "block",
+            marginTop: 2,
+            color: "var(--fg)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {available ? formatStressThreshold(row.threshold!, row.unit) : "N/A"}
+        </b>
+      </span>
+    </div>
+  );
+}
+
+function formatStressThreshold(
+  value: number,
+  unit: DealStressThreshold["unit"],
+) {
+  if (unit === "만원") return won(value);
+  if (unit === "%") return `${value.toFixed(2)}%`;
+  if (unit === "원/㎡·월")
+    return `${Math.round(value).toLocaleString()}원/㎡·월`;
+  return `${Math.round(value).toLocaleString()}원/㎡`;
 }
 
 function DealRescuePanel({
