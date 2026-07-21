@@ -24,7 +24,8 @@ export interface DealStressCostItem {
     | "hard-cost"
     | "soft-cost"
     | "financing"
-    | "contingency";
+    | "contingency"
+    | "rounding";
   label: string;
   amount: number;
   shareOfTotalCost: number;
@@ -154,6 +155,15 @@ function buildCostDna(result: ScenarioResult): DealStressCostItem[] {
     { id: "financing", label: "금융비", amount: result.financingCost },
     { id: "contingency", label: "예비비", amount: result.contingency },
   ];
+  const componentTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+  const roundingAdjustment = result.totalCost - componentTotal;
+  if (Math.abs(roundingAdjustment) > 1e-9) {
+    rows.push({
+      id: "rounding",
+      label: "원장 반올림 조정",
+      amount: roundingAdjustment,
+    });
+  }
   return rows
     .map((row) => ({
       ...row,
