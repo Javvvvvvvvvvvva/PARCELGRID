@@ -3,6 +3,7 @@ import { calculateScenario } from "./scenario";
 import type { Parcel, Scenario, ScenarioResult } from "./types";
 
 export const DEAL_STRESS_MODEL_VERSION = "deal-stress-2026.1";
+const BINARY_SEARCH_ITERATIONS = 20;
 
 export type DealStressThresholdId =
   | "land-price"
@@ -104,7 +105,7 @@ function findHighestPassing(
 
   let passing = low;
   let failing = high;
-  for (let i = 0; i < 48; i += 1) {
+  for (let i = 0; i < BINARY_SEARCH_ITERATIONS; i += 1) {
     const candidate = (passing + failing) / 2;
     if (evaluate(candidate)) passing = candidate;
     else failing = candidate;
@@ -122,7 +123,7 @@ function findLowestPassing(
 
   let failing = low;
   let passing = high;
-  for (let i = 0; i < 48; i += 1) {
+  for (let i = 0; i < BINARY_SEARCH_ITERATIONS; i += 1) {
     const candidate = (failing + passing) / 2;
     if (evaluate(candidate)) passing = candidate;
     else failing = candidate;
