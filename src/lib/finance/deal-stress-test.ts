@@ -79,7 +79,7 @@ type ThresholdSearch = {
 
 function cloneScenario(
   scenario: Scenario,
-  assumptions: Partial<Scenario["assumptions"]>
+  assumptions: Partial<Scenario["assumptions"]>,
 ): Scenario {
   return {
     ...scenario,
@@ -87,21 +87,17 @@ function cloneScenario(
   };
 }
 
-function pass(
-  parcel: Parcel,
-  scenario: Scenario,
-  targetIRR: number
-): boolean {
+function pass(parcel: Parcel, scenario: Scenario, targetIRR: number): boolean {
   return passesDealRescueTarget(
     calculateScenario({ parcel, scenario }),
-    targetIRR
+    targetIRR,
   );
 }
 
 function findHighestPassing(
   low: number,
   high: number,
-  evaluate: (value: number) => boolean
+  evaluate: (value: number) => boolean,
 ): ThresholdSearch {
   if (!evaluate(low)) return { value: null, hitBound: false };
   if (evaluate(high)) return { value: high, hitBound: true };
@@ -119,7 +115,7 @@ function findHighestPassing(
 function findLowestPassing(
   low: number,
   high: number,
-  evaluate: (value: number) => boolean
+  evaluate: (value: number) => boolean,
 ): ThresholdSearch {
   if (!evaluate(high)) return { value: null, hitBound: false };
   if (evaluate(low)) return { value: low, hitBound: true };
@@ -136,7 +132,7 @@ function findLowestPassing(
 
 function thresholdStatus(
   baselinePasses: boolean,
-  search: ThresholdSearch
+  search: ThresholdSearch,
 ): DealStressThresholdStatus {
   if (search.value === null) return "unreachable";
   if (search.hitBound) return "at-bound";
@@ -172,7 +168,7 @@ function stressCase(
   changes: string[],
   parcel: Parcel,
   scenario: Scenario,
-  targetIRR: number
+  targetIRR: number,
 ): DealStressCase {
   const result = calculateScenario({ parcel, scenario });
   return {
@@ -191,7 +187,7 @@ function stressCase(
  */
 export function buildDealStressTest(
   parcel: Parcel,
-  scenario: Scenario
+  scenario: Scenario,
 ): DealStressResult {
   const targetIRR = scenario.assumptions.equityIRR;
   const baseline = calculateScenario({ parcel, scenario });
@@ -205,19 +201,15 @@ export function buildDealStressTest(
   const landHigh = Math.max(
     parcel.acquiredPrice * 4,
     baseline.totalRevenue * 2,
-    10_000
+    10_000,
   );
   const land = findHighestPassing(0, landHigh, (value) =>
-    pass({ ...parcel, acquiredPrice: value }, scenario, targetIRR)
+    pass({ ...parcel, acquiredPrice: value }, scenario, targetIRR),
   );
 
   const revenueHigh = Math.max(revenueCurrent * 4, 1);
   const revenue = findLowestPassing(0, revenueHigh, (value) =>
-    pass(
-      parcel,
-      cloneScenario(scenario, { [revenueField]: value }),
-      targetIRR
-    )
+    pass(parcel, cloneScenario(scenario, { [revenueField]: value }), targetIRR),
   );
 
   const constructionCurrent = scenario.assumptions.constCostPerSqM;
@@ -226,17 +218,13 @@ export function buildDealStressTest(
     pass(
       parcel,
       cloneScenario(scenario, { constCostPerSqM: value }),
-      targetIRR
-    )
+      targetIRR,
+    ),
   );
 
   const rateCurrent = scenario.assumptions.interestRate;
   const rate = findHighestPassing(0, 25, (value) =>
-    pass(
-      parcel,
-      cloneScenario(scenario, { interestRate: value }),
-      targetIRR
-    )
+    pass(parcel, cloneScenario(scenario, { interestRate: value }), targetIRR),
   );
 
   const thresholds: DealStressThreshold[] = [
@@ -254,9 +242,7 @@ export function buildDealStressTest(
     {
       id: "revenue-price",
       label:
-        revenueField === "salePricePerSqM"
-          ? "매각·분양 단가"
-          : "월 임대 단가",
+        revenueField === "salePricePerSqM" ? "매각·분양 단가" : "월 임대 단가",
       direction: "minimum",
       status: thresholdStatus(baselinePasses, revenue),
       current: revenueCurrent,
@@ -273,10 +259,7 @@ export function buildDealStressTest(
       current: constructionCurrent,
       threshold: construction.value,
       unit: "원/㎡",
-      deltaFromCurrentPct: pctDelta(
-        constructionCurrent,
-        construction.value
-      ),
+      deltaFromCurrentPct: pctDelta(constructionCurrent, construction.value),
       note: "설계·간접비와 예비비의 연동을 포함한 최대 통과값",
     },
     {
@@ -318,7 +301,7 @@ export function buildDealStressTest(
       ["매각·분양 또는 임대 단가 -10%"],
       parcel,
       revenueDown,
-      targetIRR
+      targetIRR,
     ),
     stressCase(
       "cost-up-10",
@@ -326,7 +309,7 @@ export function buildDealStressTest(
       ["직접 공사비 단가 +10%", "연동 간접비·예비비 재계산"],
       parcel,
       costUp,
-      targetIRR
+      targetIRR,
     ),
     stressCase(
       "rate-up-1_5",
@@ -334,7 +317,7 @@ export function buildDealStressTest(
       ["PF 금리 +1.5%p"],
       parcel,
       rateUp,
-      targetIRR
+      targetIRR,
     ),
     stressCase(
       "delay-3",
@@ -342,7 +325,7 @@ export function buildDealStressTest(
       ["공사기간 +3개월", "금융비·현금흐름 재계산"],
       parcel,
       delay,
-      targetIRR
+      targetIRR,
     ),
     stressCase(
       "combined-downside",
@@ -350,7 +333,7 @@ export function buildDealStressTest(
       ["매출 -5%", "공사비 +10%", "PF +1.0%p", "공사 +3개월"],
       parcel,
       combined,
-      targetIRR
+      targetIRR,
     ),
   ];
 
