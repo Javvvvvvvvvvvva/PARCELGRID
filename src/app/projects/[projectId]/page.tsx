@@ -793,7 +793,7 @@ function DealStressLabPanel({
                       <span
                         style={{
                           display: "block",
-                          width: `${Math.max(1, (row.shareOfTotalCost / maxCostShare) * 100)}%`,
+                          width: `${Math.max(1, (Math.abs(row.shareOfTotalCost) / maxCostShare) * 100)}%`,
                           height: "100%",
                           borderRadius: 999,
                           background: "var(--fg-muted)",
@@ -1627,4 +1627,3 @@ function toneColors(tone: Tone) {
   if (tone === "review") return { bg: "var(--warn-soft)", fg: "var(--warn-fg)", edge: "var(--warn-fg)" };
   return { bg: "var(--bg-soft)", fg: "var(--fg)", edge: "var(--border)" };
 }
-
