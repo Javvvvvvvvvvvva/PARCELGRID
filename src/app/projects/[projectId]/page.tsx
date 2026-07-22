@@ -31,13 +31,19 @@ import {
   applyFinancialSources,
   buildSourceDataGate,
   FINANCIAL_SOURCE_FIELD_META,
+  sourceKindRequiresDocument,
   validateFinancialSource,
+  validateFinancialSourceEvidence,
   type FinancialSourceField,
   type FinancialSourceKind,
   type FinancialSourceMap,
   type FinancialSourceRecord,
   type SourceDataGateResult,
 } from "@/lib/finance/source-data-gate";
+import {
+  SOURCE_DOCUMENT_ACCEPT,
+  type SourceDocumentMetadata,
+} from "@/lib/finance/source-document";
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -602,6 +608,7 @@ export default function DashboardPage({
 
           <section className="evidence-panel">
             <SourceDataPanel
+              projectId={projectId}
               records={projectFinancialSources}
               gate={sourceGate}
               onSave={(record) => setFinancialSource(projectId, record)}
@@ -1651,11 +1658,13 @@ const SOURCE_KIND_LABELS: Record<FinancialSourceKind, string> = {
 };
 
 function SourceDataPanel({
+  projectId,
   records,
   gate,
   onSave,
   onRemove,
 }: {
+  projectId: string;
   records: FinancialSourceMap;
   gate: SourceDataGateResult;
   onSave: (record: FinancialSourceRecord) => void;
@@ -1682,8 +1691,26 @@ function SourceDataPanel({
   const [verifiedBy, setVerifiedBy] = useState(
     initialRecord?.verifiedBy ?? ""
   );
+  const [sourceDocument, setSourceDocument] =
+    useState<SourceDocumentMetadata | null>(initialRecord?.document ?? null);
+  const [uploadKey, setUploadKey] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const meta = FINANCIAL_SOURCE_FIELD_META[field];
+  const reusableDocuments = Array.from(
+    new Map(
+      Object.values(records)
+        .filter(
+          (record): record is FinancialSourceRecord & {
+            document: SourceDocumentMetadata;
+          } => Boolean(record?.document),
+        )
+        .map((record) => [record.document.pathname, record.document]),
+    ).values(),
+  );
 
   const selectField = (nextField: FinancialSourceField) => {
     const existing = records[nextField];
@@ -1695,7 +1722,95 @@ function SourceDataPanel({
     setDocumentRef(existing?.documentRef ?? "");
     setAsOf(existing?.asOf ?? "");
     setVerifiedBy(existing?.verifiedBy ?? "");
+    setSourceDocument(existing?.document ?? null);
+    setSelectedFile(null);
+    setFileInputKey((current) => current + 1);
     setError(null);
+    setNotice(null);
+  };
+
+  const uploadSourceDocument = async () => {
+    if (!uploadKey.trim()) {
+      setError("서버에 설정한 원문 보관함 접근 키를 입력하세요.");
+      return;
+    }
+    if (!selectedFile) {
+      setError("업로드할 PDF·Excel·CSV 원문을 선택하세요.");
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const form = new FormData();
+      form.set("field", field);
+      form.set("file", selectedFile);
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/source-documents`,
+        {
+          method: "POST",
+          headers: { "x-parcelgrid-upload-key": uploadKey },
+          body: form,
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | { document?: SourceDocumentMetadata; error?: string }
+        | null;
+      if (!response.ok || !payload?.document) {
+        throw new Error(payload?.error ?? "원문 업로드에 실패했습니다.");
+      }
+      setSourceDocument(payload.document);
+      setDocumentRef((current) => current.trim() || payload.document!.fileName);
+      setSelectedFile(null);
+      setFileInputKey((current) => current + 1);
+      setNotice(
+        `비공개 원문을 연결했습니다. SHA-256 ${payload.document.sha256.slice(0, 12)}…`,
+      );
+    } catch (uploadError) {
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "원문 업로드에 실패했습니다.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const openSourceDocument = async (document: SourceDocumentMetadata) => {
+    if (!uploadKey.trim()) {
+      setError("원문을 열려면 보관함 접근 키를 입력하세요.");
+      return;
+    }
+    setError(null);
+    try {
+      const query = new URLSearchParams({
+        pathname: document.pathname,
+        fileName: document.fileName,
+      });
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/source-documents?${query}`,
+        { headers: { "x-parcelgrid-upload-key": uploadKey } },
+      );
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "원문을 불러올 수 없습니다.");
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = window.document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = document.fileName;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "원문을 불러올 수 없습니다.",
+      );
+    }
   };
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -1709,6 +1824,7 @@ function SourceDataPanel({
       asOf,
       verifiedBy: verifiedBy.trim(),
       recordedAt: new Date().toISOString().slice(0, 10),
+      document: sourceDocument ?? undefined,
     };
     const validation = validateFinancialSource(record);
     if (!validation.valid) {
@@ -1717,6 +1833,11 @@ function SourceDataPanel({
     }
     onSave(record);
     setError(null);
+    setNotice(
+      sourceKindRequiresDocument(sourceKind) && !sourceDocument
+        ? "값은 계산에 반영됐지만 원문 파일이 없어 전문가 인계는 계속 차단됩니다."
+        : "원문 값과 증빙 메타데이터를 계산에 반영했습니다.",
+    );
   };
 
   return (
@@ -1828,6 +1949,111 @@ function SourceDataPanel({
             style={sourceInputStyle}
           />
         </label>
+        <fieldset
+          style={{
+            display: "grid",
+            gap: 7,
+            margin: 0,
+            padding: 9,
+            border: "1px solid var(--border-faint)",
+            borderRadius: 8,
+          }}
+        >
+          <legend style={{ padding: "0 4px", fontSize: 8.5, fontWeight: 800 }}>
+            비공개 원문 보관함
+          </legend>
+          <label style={sourceLabelStyle}>
+            접근 키 · 브라우저에 저장하지 않음
+            <input
+              type="password"
+              autoComplete="off"
+              value={uploadKey}
+              placeholder="SOURCE_DOCUMENT_UPLOAD_KEY"
+              onChange={(event) => setUploadKey(event.target.value)}
+              style={sourceInputStyle}
+            />
+          </label>
+          {reusableDocuments.length > 0 && (
+            <label style={sourceLabelStyle}>
+              이미 업로드한 원문 재사용
+              <select
+                value={sourceDocument?.pathname ?? ""}
+                onChange={(event) => {
+                  const reused = reusableDocuments.find(
+                    (document) => document.pathname === event.target.value,
+                  );
+                  setSourceDocument(reused ?? null);
+                  if (reused) {
+                    setDocumentRef((current) => current.trim() || reused.fileName);
+                    setNotice("기존 비공개 원문을 이 계산 항목에 연결했습니다.");
+                  }
+                }}
+                style={sourceInputStyle}
+              >
+                <option value="">새 원문 업로드 또는 연결 안 함</option>
+                {reusableDocuments.map((document) => (
+                  <option key={document.pathname} value={document.pathname}>
+                    {document.fileName} · {document.sha256.slice(0, 10)}…
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label style={sourceLabelStyle}>
+            PDF·XLSX·XLS·CSV · 최대 4MB
+            <input
+              key={fileInputKey}
+              type="file"
+              accept={SOURCE_DOCUMENT_ACCEPT}
+              onChange={(event) =>
+                setSelectedFile(event.target.files?.[0] ?? null)
+              }
+              style={{ ...sourceInputStyle, padding: 6 }}
+            />
+          </label>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={uploading || !selectedFile}
+            onClick={uploadSourceDocument}
+          >
+            {uploading ? "해시 확인·업로드 중…" : "원문 비공개 업로드"}
+          </button>
+          {sourceDocument && (
+            <div
+              style={{
+                display: "grid",
+                gap: 3,
+                padding: 8,
+                borderRadius: 7,
+                background: "var(--pos-soft)",
+                color: "var(--pos-fg)",
+                fontSize: 8.5,
+                overflowWrap: "anywhere",
+              }}
+            >
+              <b>{sourceDocument.fileName}</b>
+              <span>
+                {(sourceDocument.size / 1024).toFixed(1)}KB · SHA-256{" "}
+                {sourceDocument.sha256.slice(0, 16)}…
+              </span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => openSourceDocument(sourceDocument)}
+                style={{ justifySelf: "start" }}
+              >
+                원문 내려받기
+              </button>
+            </div>
+          )}
+          {sourceKindRequiresDocument(sourceKind) && !sourceDocument && (
+            <small style={{ color: "var(--neg-fg)", lineHeight: 1.5 }}>
+              이 출처 유형은 값을 저장할 수 있지만 원문 업로드 전까지 전문가
+              인계 게이트를 통과하지 못합니다.
+            </small>
+          )}
+        </fieldset>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
           <label style={sourceLabelStyle}>
             기준일
@@ -1866,6 +2092,22 @@ function SourceDataPanel({
             {error}
           </p>
         )}
+        {notice && (
+          <p
+            role="status"
+            style={{
+              margin: 0,
+              padding: 8,
+              borderRadius: 7,
+              background: "var(--pos-soft)",
+              color: "var(--pos-fg)",
+              fontSize: 9,
+              lineHeight: 1.45,
+            }}
+          >
+            {notice}
+          </p>
+        )}
         <button className="primary-button" type="submit">
           {records[field] ? "소스 값 갱신" : "소스 값 적용"}
         </button>
@@ -1875,7 +2117,7 @@ function SourceDataPanel({
         {gate.requiredFields.map((item) => {
           const record = records[item];
           if (!record) return null;
-          const validation = validateFinancialSource(record);
+          const validation = validateFinancialSourceEvidence(record);
           return (
             <div
               key={item}
@@ -1902,14 +2144,36 @@ function SourceDataPanel({
                 >
                   {record.sourceName} · {record.asOf} · {record.documentRef}
                 </small>
+                {record.document && (
+                  <small style={{ color: "var(--fg-muted)", overflowWrap: "anywhere" }}>
+                    비공개 원문 {record.document.fileName} · SHA-256{" "}
+                    {record.document.sha256.slice(0, 12)}…
+                  </small>
+                )}
+                {!validation.valid && (
+                  <small style={{ color: "var(--neg-fg)", lineHeight: 1.4 }}>
+                    {validation.errors.join(" ")}
+                  </small>
+                )}
               </span>
-              <button
-                type="button"
-                className="text-button"
-                onClick={() => onRemove(item)}
-              >
-                제거
-              </button>
+              <span style={{ display: "grid", gap: 5, alignContent: "start" }}>
+                {record.document && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => openSourceDocument(record.document!)}
+                  >
+                    원문
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => onRemove(item)}
+                >
+                  제거
+                </button>
+              </span>
             </div>
           );
         })}

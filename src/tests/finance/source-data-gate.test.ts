@@ -3,6 +3,7 @@ import {
   applyFinancialSources,
   buildSourceDataGate,
   requiredSourceFields,
+  sourceKindRequiresDocument,
   validateFinancialSource,
   type FinancialSourceField,
   type FinancialSourceMap,
@@ -70,7 +71,18 @@ function validRecord(field: FinancialSourceField, value: number) {
     constructionMonths: "professional-quote",
     saleOutMonths: "appraisal",
   };
-  return record(field, value, kindByField[field]);
+  const result = record(field, value, kindByField[field]);
+  if (sourceKindRequiresDocument(result.sourceKind)) {
+    result.document = {
+      pathname: `projects/source-gate/source-documents/${field}/source.pdf`,
+      fileName: "source.pdf",
+      contentType: "application/pdf",
+      size: 1_024,
+      sha256: "a".repeat(64),
+      uploadedAt: "2026-07-21T12:00:00.000Z",
+    };
+  }
+  return result;
 }
 
 describe("source data gate", () => {
@@ -107,6 +119,18 @@ describe("source data gate", () => {
     expect(gate.status).toBe("source-backed");
     expect(gate.coveragePct).toBe(100);
     expect(gate.missingFields).toEqual([]);
+  });
+
+  it("keeps manual values calculable while blocking handoff until an upload-required source has its original file", () => {
+    const manual = record("interestRate", 4.7, "lender-term-sheet");
+    const gate = buildSourceDataGate(scenario, { interestRate: manual });
+    const applied = applyFinancialSources(parcel, scenario, {
+      interestRate: manual,
+    });
+
+    expect(applied.scenario.assumptions.interestRate).toBe(4.7);
+    expect(gate.status).toBe("blocked");
+    expect(gate.invalidFields[0]?.errors[0]).toContain("원문 파일");
   });
 
   it("applies verified source values without mutating the saved project", () => {

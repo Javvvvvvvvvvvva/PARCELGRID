@@ -1,4 +1,8 @@
 import type { AssumptionSet, Parcel, Scenario } from "./types";
+import {
+  validateSourceDocumentMetadata,
+  type SourceDocumentMetadata,
+} from "./source-document";
 
 export type FinancialSourceField = "acquisitionPrice" | keyof AssumptionSet;
 
@@ -19,6 +23,7 @@ export interface FinancialSourceRecord {
   asOf: string;
   verifiedBy: string;
   recordedAt: string;
+  document?: SourceDocumentMetadata;
 }
 
 export type FinancialSourceMap = Partial<
@@ -127,6 +132,19 @@ export interface SourceValidationResult {
   errors: string[];
 }
 
+const UPLOAD_REQUIRED_KINDS: FinancialSourceKind[] = [
+  "signed-contract",
+  "professional-quote",
+  "lender-term-sheet",
+  "appraisal",
+];
+
+export function sourceKindRequiresDocument(
+  sourceKind: FinancialSourceKind,
+): boolean {
+  return UPLOAD_REQUIRED_KINDS.includes(sourceKind);
+}
+
 export interface SourceDataGateResult {
   status: "source-backed" | "blocked";
   requiredFields: FinancialSourceField[];
@@ -160,6 +178,19 @@ export function validateFinancialSource(
   if (!isIsoDate(record.recordedAt)) errors.push("등록일이 올바르지 않습니다.");
   if (!meta.allowedKinds.includes(record.sourceKind)) {
     errors.push(`${meta.label}에 허용되지 않는 출처 유형입니다.`);
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateFinancialSourceEvidence(
+  record: FinancialSourceRecord,
+): SourceValidationResult {
+  const base = validateFinancialSource(record);
+  const errors = [...base.errors];
+  if (record.document) {
+    errors.push(...validateSourceDocumentMetadata(record.document));
+  } else if (sourceKindRequiresDocument(record.sourceKind)) {
+    errors.push("이 출처 유형은 비공개 원문 파일 업로드가 필요합니다.");
   }
   return { valid: errors.length === 0, errors };
 }
@@ -206,7 +237,7 @@ export function buildSourceDataGate(
       missingFields.push(field);
       continue;
     }
-    const validation = validateFinancialSource(record);
+    const validation = validateFinancialSourceEvidence(record);
     if (!validation.valid) {
       invalidFields.push({ field, errors: validation.errors });
       continue;
