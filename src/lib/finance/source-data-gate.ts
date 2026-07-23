@@ -46,7 +46,7 @@ export const FINANCIAL_SOURCE_FIELD_META: Record<
   FinancialSourceFieldMeta
 > = {
   acquisitionPrice: {
-    label: "토지 총매입가",
+    label: "부동산 총 취득대금",
     unit: "만원",
     allowedKinds: ["signed-contract", "appraisal", "official-api"],
   },
