@@ -2,7 +2,7 @@
 
 // components/AcquisitionPriceInput.tsx
 // PARCELGRID — Round H
-// 인수가 입력 UX 재설계:
+// 부동산 총 취득대금 입력 UX 재설계:
 //   - 자동 추정값을 "정답"에서 "참고 칩"으로 강등 (pre-fill 안 함)
 //   - 사용자가 직접 입력 (총액 억 ↔ 평당가 만원/평 토글, 부지면적으로 동기화)
 //   - 입력하는 즉시 "주변 시세 대비 N%ile" 컨텍스트 + 분포 위 위치
@@ -26,7 +26,7 @@ interface Props {
   subjectAreaPyeong: number;
   /** 주변 실거래 (MOLIT/comps에서 매핑) */
   transactions: RawTransaction[];
-  /** 현재 인수가 (총액, 원). 상위 상태와 연결 */
+  /** 현재 부동산 총 취득대금(원). 상위 상태와 연결 */
   value: number | null;
   onChange: (totalWon: number | null) => void;
   /** 참고용 자동추정 (총액, 원). 있으면 칩으로만 노출 */
@@ -58,7 +58,7 @@ export default function AcquisitionPriceInput({
 
   const dist = useMemo(() => buildDistribution(transactions, { trim: { method: 'iqr' } }), [transactions]);
 
-  // 현재 인수가의 평당가
+  // 현재 총 취득대금의 대지면적 환산 평당가
   const perPyeong = value != null ? totalToPerPyeong(value, subjectAreaPyeong) : null;
   const ctx = perPyeong != null && dist.values.length ? describeContext(perPyeong, dist.values, dist.stats) : null;
   const estPerPyeong = estimatedTotalWon != null ? totalToPerPyeong(estimatedTotalWon, subjectAreaPyeong) : null;
@@ -96,7 +96,7 @@ export default function AcquisitionPriceInput({
     <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* 헤더 + 토글 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>인수가 직접 입력</label>
+        <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>부동산 총 취득대금 직접 입력</label>
         <div style={{ display: 'inline-flex', border: '1px solid var(--pg-border, #e5e7eb)', borderRadius: 8, overflow: 'hidden' }}>
           {(['total', 'perPyeong'] as Mode[]).map((m) => (
             <button
