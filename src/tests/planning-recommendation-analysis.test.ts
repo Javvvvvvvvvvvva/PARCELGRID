@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzePlanningRecommendations,
+  calculateAcquisitionCapacity,
   generatePlanningRecommendationsV2,
   isLegalGeometryCandidate,
   legalGeometryFailureCodes,
@@ -72,6 +73,29 @@ function input(acquisitionCostManwon = 20_000) {
 }
 
 describe("Stage 2 recommendation result analysis", () => {
+  it("calculates the break-even land price and current-price headroom", () => {
+    const result = generatePlanningRecommendationsV2(input());
+    const preview = result.profitOptimal?.economicsPreview;
+    expect(preview).toBeDefined();
+    if (!preview) return;
+
+    const capacity = calculateAcquisitionCapacity(preview);
+    const nonLandCost = preview.totalCostManwon - preview.acquisitionCostManwon;
+
+    expect(capacity.breakEvenAcquisitionCostManwon).toBeCloseTo(
+      Math.max(0, preview.expectedRevenueManwon - nonLandCost),
+      2
+    );
+    expect(capacity.acquisitionHeadroomManwon).toBeCloseTo(
+      capacity.breakEvenAcquisitionCostManwon - preview.acquisitionCostManwon,
+      2
+    );
+    expect(capacity.acquisitionHeadroomManwon).toBeCloseTo(
+      preview.profitManwon,
+      2
+    );
+  });
+
   it("uses a stable physical-plan key that ignores scenario and zone IDs", () => {
     const result = generatePlanningRecommendations(input());
     const scenario = result.architecturalFeasibility;

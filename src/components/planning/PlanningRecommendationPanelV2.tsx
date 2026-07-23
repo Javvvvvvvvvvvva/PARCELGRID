@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Panel } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
+  calculateAcquisitionCapacity,
   generatePlanningRecommendationsV2,
   type PlanningRecommendationAnalysis,
   type RecommendationProfitMode,
@@ -89,6 +90,9 @@ function RecommendationCard({
   const summary = summarizePlanningScenario(scenario);
   const metadata = scenario.recommendation;
   const profit = calculation.economicsPreview.profitManwon;
+  const acquisitionCapacity = calculateAcquisitionCapacity(
+    calculation.economicsPreview
+  );
   const failCount = calculation.checks.filter((check) => check.status === "fail").length;
   const reviewCount = calculation.checks.filter(
     (check) => check.status === "review" || check.status === "unknown"
@@ -202,6 +206,41 @@ function RecommendationCard({
           tone={failCount > 0 ? "negative" : "positive"}
         />
       </div>
+
+      {!reference && (
+        <div style={twoMetricGridStyle}>
+          <MiniMetric
+            label="손익분기 토지가"
+            value={won(acquisitionCapacity.breakEvenAcquisitionCostManwon)}
+          />
+          <MiniMetric
+            label={
+              acquisitionCapacity.acquisitionHeadroomManwon >= 0
+                ? "현재가 대비 매입 여유"
+                : "현재가 대비 초과"
+            }
+            value={won(Math.abs(acquisitionCapacity.acquisitionHeadroomManwon))}
+            tone={
+              acquisitionCapacity.acquisitionHeadroomManwon >= 0
+                ? "positive"
+                : "negative"
+            }
+          />
+        </div>
+      )}
+      {!reference && (
+        <p
+          style={{
+            margin: "6px 0 0",
+            color: "var(--fg-faint)",
+            fontSize: 9,
+            lineHeight: 1.45,
+          }}
+        >
+          토지비만 변동한 Stage 2 개략값입니다. 세금·PF·공정 반영 최종 매입 한도는
+          Stage 3에서 확인합니다.
+        </p>
+      )}
 
       <div style={{ marginTop: 11, display: "grid", gap: 4 }}>
         {metadata.reasons.slice(0, combined ? 6 : 4).map((reason) => (
