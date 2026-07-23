@@ -76,10 +76,67 @@ describe("calculateTaxes", () => {
     expect(codes).toContain("부가세");
   });
 
-  it("acquisition tax on land is 4.6% of acquisition price", () => {
-    const acqLand = taxes.lines.find((l) => l.tax === "취득세" && l.base === "토지");
-    expect(acqLand).toBeDefined();
-    expect(acqLand!.amount).toBeCloseTo(parcel.acquiredPrice * 0.046, -1);
+  it("does not apply a land-only tax rate when building status is unknown", () => {
+    const acquisition = taxes.lines.find(
+      (line) =>
+        line.tax === "취득세" && line.base === "부동산 총 취득대금",
+    );
+    expect(acquisition).toMatchObject({
+      amount: 0,
+      rate: "미산정",
+      status: "not-calculated",
+    });
+    expect(acquisition?.note).toContain("건축물 존재 여부");
+  });
+
+  it("estimates the land rate only when the parcel is confirmed vacant", () => {
+    const vacantParcel: Parcel = {
+      ...parcel,
+      currentBuilding: {
+        hasBuilding: false,
+      } as NonNullable<Parcel["currentBuilding"]>,
+    };
+    const vacantResult = calculateScenario({ parcel: vacantParcel, scenario });
+    const vacantTaxes = calculateTaxes({
+      parcel: vacantParcel,
+      result: vacantResult,
+      residentialSaleShare: scenario.program.mix.residentialSale,
+    });
+    const acquisition = vacantTaxes.lines.find(
+      (line) => line.tax === "취득세" && line.base === "토지",
+    );
+    expect(acquisition).toMatchObject({ status: "estimated" });
+    expect(acquisition!.amount).toBeCloseTo(
+      vacantParcel.acquiredPrice * TAX_RATES.acquisitionLandGeneral,
+      -1,
+    );
+  });
+
+  it("blocks acquisition tax when an existing building is confirmed", () => {
+    const improvedParcel: Parcel = {
+      ...parcel,
+      currentBuilding: {
+        hasBuilding: true,
+      } as NonNullable<Parcel["currentBuilding"]>,
+    };
+    const improvedResult = calculateScenario({
+      parcel: improvedParcel,
+      scenario,
+    });
+    const improvedTaxes = calculateTaxes({
+      parcel: improvedParcel,
+      result: improvedResult,
+      residentialSaleShare: scenario.program.mix.residentialSale,
+    });
+    const acquisition = improvedTaxes.lines.find(
+      (line) =>
+        line.tax === "취득세" && line.base === "부동산 총 취득대금",
+    );
+    expect(acquisition).toMatchObject({
+      amount: 0,
+      status: "not-calculated",
+    });
+    expect(acquisition?.note).toContain("토지·건물 안분");
   });
 
   it("corporate tax applies progressive brackets to positive profit", () => {
