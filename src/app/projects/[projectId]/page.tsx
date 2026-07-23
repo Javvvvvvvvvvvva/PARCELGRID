@@ -393,7 +393,7 @@ export default function DashboardPage({
           }
         />
         <DecisionSignal
-          label="토지 매입 여력"
+          label="부동산 취득대금 여력"
           title={bidGap >= 0 ? "예비 모델 범위 이내" : "예비 모델 범위 초과"}
           value={bidGap >= 0 ? `여유 ${won(bidGap)}` : `초과 ${won(Math.abs(bidGap))}`}
           tone={bidGap >= 0 ? "positive" : "negative"}
@@ -412,7 +412,7 @@ export default function DashboardPage({
         <SectionHeader
           eyebrow="LAND PRICE LADDER"
           title="토지 가격의 원본·입력·알고리즘 결과를 분리합니다"
-          description="시장 참고 추정가는 실거래·공시지가에 자체 보정 규칙을 적용한 값입니다. 감정평가액이 아니며, 예비 매입 한도는 현재 세전 금융모델을 역산한 값입니다."
+          description="시장 참고 추정가는 실거래·공시지가에 자체 보정 규칙을 적용한 값입니다. 감정평가액이 아니며, 예비 취득대금 한도는 현재 세전 금융모델을 역산한 값입니다."
         />
         <div className="price-ladder">
           <PricePoint label="공시지가 총액" value={publicValueTotal} note="공시지가 × 필지면적" />
@@ -430,13 +430,13 @@ export default function DashboardPage({
             tone="market"
           />
           <PricePoint
-            label="현재 검토 매입가 총액"
+            label="현재 부동산 총 취득대금"
             value={acquisitionPrice}
             note={`${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평 · ${acquisitionEdited ? "사용자 수정값" : "부지 등록 입력값"}`}
             tone="active"
           />
           <PricePoint
-            label="예비 모델상 매입 한도"
+            label="예비 모델상 취득대금 한도"
             value={maxAcquisition.maxLandCost}
             note={`요구 IRR ${assumptions.equityIRR.toFixed(1)}% 역산`}
             tone={bidGap >= 0 ? "safe" : "risk"}
@@ -507,7 +507,7 @@ export default function DashboardPage({
               title="사업비 구성"
               total={result.totalCost}
               items={[
-                ["토지비", result.landCost], ["철거비", result.demolitionCost], ["직접 공사비", result.hardCost],
+                ["부동산 취득대금", result.landCost], ["철거비", result.demolitionCost], ["직접 공사비", result.hardCost],
                 ["설계·인허가·간접비", result.softCost], ["금융비", result.financingCost], ["예비비", result.contingency],
               ]}
             />
@@ -1574,7 +1574,7 @@ function AcquisitionPriceEditor({
   return (
     <div style={{ padding: "10px 0 12px", borderBottom: "1px solid var(--border-faint)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-        <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>토지 검토 매입가</span>
+        <span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>부동산 총 취득대금</span>
         <span style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
           {(["total", "per-pyeong"] as AcquisitionPriceMode[]).map((item) => (
             <button
@@ -1598,7 +1598,7 @@ function AcquisitionPriceEditor({
       </div>
       <label style={{ display: "flex", justifyContent: "flex-end", gap: 5, alignItems: "center", marginTop: 7 }}>
         <input
-          aria-label={mode === "total" ? "토지 검토 매입가 총액" : "토지 검토 매입가 평당가"}
+          aria-label={mode === "total" ? "부동산 총 취득대금 총액" : "부동산 총 취득대금 평당가"}
           type="number"
           min={0}
           step={mode === "total" ? 1000 : 50}
