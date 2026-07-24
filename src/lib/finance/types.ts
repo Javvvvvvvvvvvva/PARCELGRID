@@ -90,6 +90,14 @@ export interface Parcel {
   acquisitionEstimate?: AcquisitionEstimateSnapshot;
 
   acquired: string; // ISO date
+  /**
+   * 부동산 총 취득대금(만원).
+   *
+   * 토지만의 안분가액이 아니다. 기존 건축물이 있는 거래에서는 계약상
+   * 토지·건물 대가를 모두 포함할 수 있다. acquiredPrice는 기존 저장
+   * 데이터 호환을 위해 유지하는 legacy 필드명이며, 세금 계산에서 토지
+   * 과세표준으로 직접 사용하면 안 된다.
+   */
   acquiredPrice: ManWon;
   /** 철거비 (만원). 빈 땅이거나 신축 유지면 0 또는 undefined */
   demolitionCost?: ManWon;

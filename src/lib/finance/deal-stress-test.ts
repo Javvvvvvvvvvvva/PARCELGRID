@@ -148,7 +148,7 @@ function pctDelta(current: number, threshold: number | null): number | null {
 
 function buildCostDna(result: ScenarioResult): DealStressCostItem[] {
   const rows: Array<Omit<DealStressCostItem, "shareOfTotalCost">> = [
-    { id: "land", label: "토지비", amount: result.landCost },
+    { id: "land", label: "부동산 취득대금", amount: result.landCost },
     { id: "demolition", label: "철거비", amount: result.demolitionCost },
     { id: "hard-cost", label: "직접 공사비", amount: result.hardCost },
     { id: "soft-cost", label: "설계·인허가·간접비", amount: result.softCost },
@@ -241,7 +241,7 @@ export function buildDealStressTest(
   const thresholds: DealStressThreshold[] = [
     {
       id: "land-price",
-      label: "토지 총매입가",
+      label: "부동산 총 취득대금",
       direction: "maximum",
       status: thresholdStatus(baselinePasses, land),
       current: parcel.acquiredPrice,
@@ -370,7 +370,7 @@ export function buildDealStressTest(
     geometryPolicy:
       "계획 규모·용적률은 연속 보간하지 않습니다. Stage 2에서 저장된 법규·배치 검증 계획안끼리만 별도 비교합니다.",
     bounds: [
-      `토지 총매입가 0~${Math.round(landHigh)}만원`,
+      `부동산 총 취득대금 0~${Math.round(landHigh)}만원`,
       `매출 단가 0~현재의 4배`,
       `직접 공사비 0~현재의 2.5배`,
       `PF 금리 0~25%`,

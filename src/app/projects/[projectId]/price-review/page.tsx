@@ -16,7 +16,7 @@ import { useReviewStore } from "@/lib/stores/review-store";
 import { num } from "@/lib/utils/format";
 
 const TARGET_LABEL: Record<PriceVerificationTarget, string> = {
-  acquisition: "토지 매입가",
+  acquisition: "부동산 총 취득대금",
   sale: "매각·분양 단가",
 };
 

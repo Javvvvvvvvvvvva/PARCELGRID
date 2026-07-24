@@ -214,7 +214,7 @@ function findLandPricePath(
     [
       change(
         "acquiredPrice",
-        "토지 검토 매입가",
+        "부동산 총 취득대금",
         parcel.acquiredPrice,
         value,
         "만원"
@@ -513,7 +513,7 @@ function findBalancedPath(
       changes.push(
         change(
           "acquiredPrice",
-          "토지 검토 매입가",
+          "부동산 총 취득대금",
           parcel.acquiredPrice,
           candidate.parcel.acquiredPrice,
           "만원"
