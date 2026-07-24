@@ -103,9 +103,11 @@ export default function StatusPage({
   const allComps: CompVM[] = data?.comps ?? [];
 
   const subjectPPP = useMemo(() => {
-    if (!parcel?.acquiredPrice || !parcel?.lotArea) return null;
-    return Math.round(parcel.acquiredPrice / (parcel.lotArea / SQM_PER_PYEONG));
-  }, [parcel]);
+    if (!parcel?.acquiredPrice || !parcel.lotArea) return null;
+    return Math.round(
+      parcel.acquiredPrice / (parcel.lotArea / SQM_PER_PYEONG),
+    );
+  }, [parcel?.acquiredPrice, parcel?.lotArea]);
 
   const [stations, setStations] = useState<StationMarker[]>([]);
 
@@ -632,14 +634,14 @@ export default function StatusPage({
             roads={parcel.roads}
             boundary={parcel.boundary}
             focusSubject
-            zoomLevel={3}
+            zoomLevel={4}
             maxZoomOutLevel={4}
-            nearbyRadiusM={500}
+            nearbyRadiusM={700}
             subjectLabel={layers.subject ? parcel.address.split(" ").slice(-2).join(" ") : undefined}
             subjectPPP={subjectPPP}
             comps={layers.comps ? compMarkers : []}
             stations={layers.stations ? stations : []}
-            height={380}
+            height={500}
           />
         ) : (
           <p style={{ fontSize: 13, color: "var(--fg-muted)" }}>
@@ -647,7 +649,7 @@ export default function StatusPage({
           </p>
         )}
         <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-          우측 버튼(◎)으로 대상지 재중심 · 실거래는 동 단위 근사 좌표 · 중앙값은 단순 시장 참고값이며 최종 비교사례 선정값이 아닙니다.
+          초기 화면은 대상지 중심 약 700m 범위를 유지해 주변 블록과 도로를 읽을 수 있게 합니다. 우측 +/−로 확대·축소하고 ◎으로 다시 맞출 수 있습니다. 실거래 위치는 동 단위 근사이며 중앙값은 참고값입니다.
         </p>
       </Panel>
 

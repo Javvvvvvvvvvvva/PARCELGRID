@@ -14,7 +14,34 @@ import { num } from "@/lib/utils/format";
 
 export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsight }) {
   return (
-    <Panel title="⑤ 도로·방위 현황" source="필지 경계 · V월드 도로 중심선">
+    <details
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--r-lg)",
+        background: "var(--bg-elev)",
+        overflow: "hidden",
+      }}
+    >
+      <summary
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          padding: "14px 16px",
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 700,
+          listStylePosition: "inside",
+        }}
+      >
+        <span>⑤ 도로·방위 참고자료</span>
+        <span style={{ fontSize: 10.5, fontWeight: 500, color: "var(--fg-faint)" }}>
+          Stage 2 일조·접도·주차 검증에 사용 · 눌러서 보기
+        </span>
+      </summary>
+      <div style={{ padding: "0 10px 10px" }}>
+        <Panel title="도로·방위 파생 분석" source="필지 경계 · V월드 도로 중심선">
       <div
         style={{
           display: "grid",
@@ -177,7 +204,9 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
           </div>
         ))}
       </div>
-    </Panel>
+        </Panel>
+      </div>
+    </details>
   );
 }
 
@@ -213,7 +242,7 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
       />
       {insight.subjectPricePerPyeong != null && (
         <MarketMetric
-          label="입력 인수가"
+          label="현재 총 취득대금 환산"
           value={`${num(insight.subjectPricePerPyeong)}만/평`}
           sub={
             insight.subjectVsMedianPct != null
@@ -387,7 +416,7 @@ function ReviewCard({ option }: { option: ExistingReviewOption }) {
         borderRadius: 9,
         padding: 14,
         background: style.background,
-        minHeight: 220,
+        minHeight: 420,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -427,7 +456,41 @@ function ReviewCard({ option }: { option: ExistingReviewOption }) {
           </div>
         ))}
       </div>
+      <ReviewDetail label="비용 영향" text={option.costImpact} />
+      <ReviewDetail label="필수 확인" items={option.requiredChecks} />
+      <ReviewDetail label="다음 단계" text={option.nextStep} />
     </article>
+  );
+}
+
+function ReviewDetail({
+  label,
+  text,
+  items,
+}: {
+  label: string;
+  text?: string;
+  items?: string[];
+}) {
+  return (
+    <div style={{ marginTop: 13, paddingTop: 11, borderTop: "1px solid rgba(100,116,139,0.2)" }}>
+      <div style={{ fontSize: 10.5, fontWeight: 750, color: "var(--fg-subtle)", marginBottom: 5 }}>
+        {label}
+      </div>
+      {text && (
+        <div style={{ fontSize: 11.5, lineHeight: 1.55, color: "var(--fg-muted)" }}>{text}</div>
+      )}
+      {items && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {items.map((item) => (
+            <div key={item} style={{ display: "flex", gap: 6, fontSize: 11, lineHeight: 1.45, color: "var(--fg-muted)" }}>
+              <span>·</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
