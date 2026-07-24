@@ -258,7 +258,7 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
 export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight }) {
   const confirmed = insight.availableCount + insight.derivedCount;
   return (
-    <Panel title="⑧ 데이터 확인 상태" source="사실 데이터 · 파생 분석 · 미확인 구분">
+    <Panel title="⑦ 데이터 확인 상태" source="사실 데이터 · 파생 분석 · 미확인 구분">
       <div
         style={{
           display: "grid",
@@ -294,7 +294,7 @@ export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight 
 
 export function ExistingReviewPanel({ options }: { options: ExistingReviewOption[] }) {
   return (
-    <Panel title="⑨ 기존 건물 예비 검토" source="노후도·법규 사용 현황 기반 · 최종 추천 아님">
+    <Panel title="⑧ 기존 건물 예비 검토" source="노후도·법규 사용 현황 기반 · 최종 추천 아님">
       <div
         style={{
           display: "grid",
