@@ -148,5 +148,8 @@ describe("Stage 1 status insights", () => {
     expect(rebuild?.status).toBe("검토 여지 큼");
     expect(rebuild?.summary).toContain("결론을 내리지 않습니다");
     expect(rebuild?.points.some((point) => point.includes("Stage 2"))).toBe(true);
+    expect(rebuild?.costImpact).toContain("철거");
+    expect(rebuild?.requiredChecks).toContain("Stage 2 실제 배치·일조·주차 검증");
+    expect(rebuild?.nextStep).toContain("Stage 3");
   });
 });
