@@ -13,7 +13,6 @@ import dynamic from "next/dynamic";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { KakaoMap, type CompMarker, type StationMarker } from "@/components/ui/KakaoMap";
 import { Panel, SectionTitle, DataRow, Button } from "@/components/ui/primitives";
-import { AcquisitionEvidencePanel } from "@/components/status/AcquisitionEvidencePanel";
 import { Dot } from "@/components/ui/Tag";
 import {
   DataReadinessPanel,
@@ -70,12 +69,8 @@ export default function StatusPage({
 }) {
   const { projectId } = use(params);
   const data = useProjectStore((s) => s.data);
-  const financialSources = useProjectStore((s) => s.financialSources);
-  const setFinancialSource = useProjectStore((s) => s.setFinancialSource);
-  const removeFinancialSource = useProjectStore((s) => s.removeFinancialSource);
   const parcel = data?.parcel;
   const currentBuilding = parcel?.currentBuilding;
-  const acquisitionSource = financialSources[projectId]?.acquisitionPrice;
 
   const [layers, setLayers] = useState<Record<MapLayer, boolean>>({
     subject: true,
@@ -108,13 +103,11 @@ export default function StatusPage({
   const allComps: CompVM[] = data?.comps ?? [];
 
   const subjectPPP = useMemo(() => {
-    const activeAcquisitionPrice =
-      acquisitionSource?.value ?? parcel?.acquiredPrice;
-    if (!activeAcquisitionPrice || !parcel?.lotArea) return null;
+    if (!parcel?.acquiredPrice || !parcel.lotArea) return null;
     return Math.round(
-      activeAcquisitionPrice / (parcel.lotArea / SQM_PER_PYEONG),
+      parcel.acquiredPrice / (parcel.lotArea / SQM_PER_PYEONG),
     );
-  }, [acquisitionSource?.value, parcel?.acquiredPrice, parcel?.lotArea]);
+  }, [parcel?.acquiredPrice, parcel?.lotArea]);
 
   const [stations, setStations] = useState<StationMarker[]>([]);
 
@@ -599,27 +592,8 @@ export default function StatusPage({
         </div>
       )}
 
-      <div style={{ marginTop: "var(--s5)" }}>
-        <AcquisitionEvidencePanel
-          projectId={projectId}
-          lotAreaSqm={parcel.lotArea}
-          registeredValueManwon={parcel.acquiredPrice}
-          estimatedValueManwon={
-            parcel.acquisitionEstimate?.estimatedPriceManwon ?? null
-          }
-          marketMedianPerPyeong={
-            marketInsight?.sameDongMedianPricePerPyeong ??
-            marketInsight?.medianPricePerPyeong ??
-            null
-          }
-          record={acquisitionSource}
-          onSave={(record) => setFinancialSource(projectId, record)}
-          onRemove={() => removeFinancialSource(projectId, "acquisitionPrice")}
-        />
-      </div>
-
       <Panel
-        title="⑦ 지도와 주변 시장"
+        title="⑥ 지도와 주변 시장"
         source="Kakao Map · MOLIT 실거래"
         style={{ marginTop: "var(--s5)" }}
       >
@@ -660,9 +634,9 @@ export default function StatusPage({
             roads={parcel.roads}
             boundary={parcel.boundary}
             focusSubject
-            zoomLevel={5}
-            maxZoomOutLevel={6}
-            nearbyRadiusM={1200}
+            zoomLevel={4}
+            maxZoomOutLevel={4}
+            nearbyRadiusM={700}
             subjectLabel={layers.subject ? parcel.address.split(" ").slice(-2).join(" ") : undefined}
             subjectPPP={subjectPPP}
             comps={layers.comps ? compMarkers : []}
@@ -675,7 +649,7 @@ export default function StatusPage({
           </p>
         )}
         <p style={{ margin: "10px 0 0", fontSize: 11.5, color: "var(--fg-faint)" }}>
-          초기 화면은 대상지와 약 1.2km 주변 실거래·역세권을 함께 맞춥니다. 우측 +/−로 확대·축소하고 ◎으로 다시 맞출 수 있습니다. 실거래 위치는 동 단위 근사이며 중앙값은 참고값입니다.
+          초기 화면은 대상지 중심 약 700m 범위를 유지해 주변 블록과 도로를 읽을 수 있게 합니다. 우측 +/−로 확대·축소하고 ◎으로 다시 맞출 수 있습니다. 실거래 위치는 동 단위 근사이며 중앙값은 참고값입니다.
         </p>
       </Panel>
 
