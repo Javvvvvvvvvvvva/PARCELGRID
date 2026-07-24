@@ -106,6 +106,13 @@ describe("source data gate", () => {
     );
   });
 
+  it("rejects a zero total acquisition price as source evidence", () => {
+    const invalid = record("acquisitionPrice", 0, "signed-contract");
+    const result = validateFinancialSource(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("부동산 총 취득대금은 0보다 커야 합니다.");
+  });
+
   it("passes only when every financially material field is source-backed", () => {
     const records: FinancialSourceMap = {};
     for (const field of requiredSourceFields(scenario)) {
