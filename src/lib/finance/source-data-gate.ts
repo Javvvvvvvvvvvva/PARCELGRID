@@ -168,6 +168,8 @@ export function validateFinancialSource(
   const meta = FINANCIAL_SOURCE_FIELD_META[record.field];
   if (!Number.isFinite(record.value) || record.value < 0) {
     errors.push("유효한 0 이상의 값을 입력해야 합니다.");
+  } else if (record.field === "acquisitionPrice" && record.value <= 0) {
+    errors.push("부동산 총 취득대금은 0보다 커야 합니다.");
   }
   if (!record.sourceName.trim()) errors.push("발급기관·출처명이 필요합니다.");
   if (!record.documentRef.trim())
