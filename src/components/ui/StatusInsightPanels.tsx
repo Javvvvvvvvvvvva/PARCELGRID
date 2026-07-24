@@ -14,7 +14,34 @@ import { num } from "@/lib/utils/format";
 
 export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsight }) {
   return (
-    <Panel title="⑤ 도로·방위 현황" source="필지 경계 · V월드 도로 중심선">
+    <details
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--r-lg)",
+        background: "var(--bg-elev)",
+        overflow: "hidden",
+      }}
+    >
+      <summary
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          padding: "14px 16px",
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 700,
+          listStylePosition: "inside",
+        }}
+      >
+        <span>⑤ 도로·방위 참고자료</span>
+        <span style={{ fontSize: 10.5, fontWeight: 500, color: "var(--fg-faint)" }}>
+          Stage 2 일조·접도·주차 검증에 사용 · 눌러서 보기
+        </span>
+      </summary>
+      <div style={{ padding: "0 10px 10px" }}>
+        <Panel title="도로·방위 파생 분석" source="필지 경계 · V월드 도로 중심선">
       <div
         style={{
           display: "grid",
@@ -177,7 +204,9 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
           </div>
         ))}
       </div>
-    </Panel>
+        </Panel>
+      </div>
+    </details>
   );
 }
 
@@ -213,7 +242,7 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
       />
       {insight.subjectPricePerPyeong != null && (
         <MarketMetric
-          label="입력 인수가"
+          label="현재 총 취득대금 환산"
           value={`${num(insight.subjectPricePerPyeong)}만/평`}
           sub={
             insight.subjectVsMedianPct != null
@@ -229,7 +258,7 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
 export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight }) {
   const confirmed = insight.availableCount + insight.derivedCount;
   return (
-    <Panel title="⑦ 데이터 확인 상태" source="사실 데이터 · 파생 분석 · 미확인 구분">
+    <Panel title="⑧ 데이터 확인 상태" source="사실 데이터 · 파생 분석 · 미확인 구분">
       <div
         style={{
           display: "grid",
@@ -265,7 +294,7 @@ export function DataReadinessPanel({ insight }: { insight: DataReadinessInsight 
 
 export function ExistingReviewPanel({ options }: { options: ExistingReviewOption[] }) {
   return (
-    <Panel title="⑧ 기존 건물 예비 검토" source="노후도·법규 사용 현황 기반 · 최종 추천 아님">
+    <Panel title="⑨ 기존 건물 예비 검토" source="노후도·법규 사용 현황 기반 · 최종 추천 아님">
       <div
         style={{
           display: "grid",
