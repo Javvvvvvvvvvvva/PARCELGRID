@@ -2,16 +2,15 @@
 
 
 import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
-import { LandProxyNote } from "@/components/ui/LandProxyNote";
 import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
 /**
  * /projects/new — 새 부지 분석 페이지
  *
  * 흐름:
  *   1. 주소 입력 → POST /api/parcels/lookup (Kakao + V월드 + MOLIT 건축물)
- *   2. lookup 성공 → POST /api/parcels/estimate-price (시군구별 인수가 추정)
- *   3. 결과 자동 표시, 인수가 자동 입력 (수정 가능)
- *   4. "분석 시작" → sessionStorage 저장 → /projects/${pnu} 이동
+ *   2. 사용자가 알고 있는 부동산 총 취득대금을 직접 입력
+ *   3. lookup 성공 → 주변 실거래·공시지가를 참고자료로 조회
+ *   4. "분석 시작" → 입력값과 조회 사실을 분리 저장 → /projects/${pnu}/status 이동
  *
  * 살아있는 어댑터들:
  *   - calculateDemolitionCost(buildings, signal) → 철거비 (만원)
@@ -259,12 +258,12 @@ export default function NewParcelPage() {
         <SectionTitle
           size="lg"
           title="새 부지 분석"
-          desc="지번 입력 → Kakao + V월드 + MOLIT 5개 API 자동 조회 → 시나리오 4종 자동 생성"
+          desc="주소와 알고 있는 총 취득대금을 입력하면 토지·건물·법규·주변 시장 현황을 분석합니다."
           style={{ marginBottom: "var(--s6)" }}
         />
 
         {/* Address input */}
-        <Panel title="주소 검색">
+        <Panel title="주소와 총 취득대금">
           <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
             <AddressAutocomplete
               value={address}
@@ -292,6 +291,67 @@ export default function NewParcelPage() {
             2글자 이상 입력 시 주소 후보가 표시됩니다. 목록에서 선택하거나 Enter로 조회하세요.
           </p>
 
+          <div
+            style={{
+              marginTop: 16,
+              paddingTop: 16,
+              borderTop: "1px solid var(--border)",
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) minmax(220px, 0.45fr)",
+              gap: 18,
+              alignItems: "end",
+            }}
+          >
+            <div>
+              <label
+                htmlFor="initial-acquisition-price"
+                style={{ display: "block", fontSize: 13, fontWeight: 700 }}
+              >
+                현재 알고 있는 부동산 총 취득대금
+              </label>
+              <p
+                style={{
+                  margin: "5px 0 0",
+                  fontSize: 11.5,
+                  color: "var(--fg-muted)",
+                  lineHeight: 1.55,
+                }}
+              >
+                토지와 기존 건물을 함께 취득하는 금액입니다. 주변 시세나 알고리즘 추정값으로 자동 입력하지 않습니다.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                id="initial-acquisition-price"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={acquiredPrice > 0 ? acquiredPrice / 10_000 : ""}
+                onChange={(event) => {
+                  const eok = Number(event.target.value);
+                  setAcquiredPrice(Number.isFinite(eok) && eok > 0 ? Math.round(eok * 10_000) : 0);
+                }}
+                placeholder="예: 20.6"
+                aria-label="부동산 총 취득대금 억원"
+                style={{
+                  width: "100%",
+                  height: 40,
+                  padding: "0 12px",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: 8,
+                  background: "var(--bg-elev)",
+                  color: "var(--fg)",
+                  font: "inherit",
+                  fontSize: 16,
+                  fontWeight: 700,
+                  textAlign: "right",
+                }}
+              />
+              <span style={{ flexShrink: 0, fontSize: 12.5, color: "var(--fg-muted)" }}>억원</span>
+            </div>
+          </div>
+
           {/* 진행 상태 / 에러 */}
           {isLookingUp && (
             <div
@@ -309,7 +369,7 @@ export default function NewParcelPage() {
               }}
             >
               <Dot kind="accent" />
-              <span>Kakao 좌표 → V월드 지적 → V월드 용도지역 → MOLIT 건축물 → 인수가 추정...</span>
+              <span>Kakao 좌표 → V월드 지적·용도지역 → MOLIT 건축물 → 주변 시장 참고자료...</span>
             </div>
           )}
           {lookupError && (
@@ -403,13 +463,13 @@ export default function NewParcelPage() {
 
               {/* 우 컬럼 — 인수 의사결정 */}
               <Panel
-                title="인수 정보"
+                title="입력값 확인과 주변 시장"
                 source={
                   estimate
                     ? estimate.method === "house-comps"
-                      ? "구축 다가구 사례 · 자체 알고리즘 참고"
-                      : `실거래·공시지가 자체 알고리즘 참고 · ${estimate.method}`
-                    : "수동 입력"
+                      ? "구축 다가구 실거래 참고"
+                      : `주변 실거래·공시지가 참고 · ${estimate.method}`
+                    : "사용자 직접 입력"
                 }
               >
                 <AcquisitionPriceInput
@@ -427,9 +487,7 @@ export default function NewParcelPage() {
                   onChange={(won) =>
                     setAcquiredPrice(won == null ? 0 : Math.round(won / 10_000))
                   }
-                  estimatedTotalWon={
-                    estimate ? estimate.estimatedPriceManwon * 10_000 : null
-                  }
+                  estimatedTotalWon={null}
                 />
                 {estimate?.marketMedianManwon != null && estimate.marketMedianManwon > 0 && (
                   <div
@@ -439,39 +497,15 @@ export default function NewParcelPage() {
                       border: "1px solid var(--border)",
                       borderRadius: 8,
                       background: "var(--bg-sunken)",
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto",
-                      gap: 10,
-                      alignItems: "center",
                     }}
                   >
-                    <div>
-                      <strong style={{ display: "block", fontSize: 11.5 }}>토지 실거래 중앙값 참고</strong>
-                      <span style={{ display: "block", marginTop: 3, color: "var(--fg-muted)", fontSize: 10.5 }}>
-                        {(estimate.marketMedianManwon / 10_000).toFixed(1)}억 · {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
-                      </span>
-                      <small style={{ color: "var(--fg-faint)", fontSize: 9 }}>
-                        토지 분포 중앙값 × 대상 부지 {sqmToPyeong(parcel.lotArea).toFixed(1)}평
-                      </small>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setAcquiredPrice(estimate.marketMedianManwon ?? 0)}
-                      style={{
-                        minHeight: 32,
-                        padding: "0 10px",
-                        border: "1px solid var(--fg)",
-                        borderRadius: 7,
-                        background: "var(--bg)",
-                        color: "var(--fg)",
-                        font: "inherit",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      중앙값 총액 적용
-                    </button>
+                    <strong style={{ display: "block", fontSize: 11.5 }}>주변 토지 거래 중앙값 참고</strong>
+                    <span style={{ display: "block", marginTop: 3, color: "var(--fg-muted)", fontSize: 10.5 }}>
+                      {(estimate.marketMedianManwon / 10_000).toFixed(1)}억 · {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
+                    </span>
+                    <small style={{ display: "block", marginTop: 4, color: "var(--fg-faint)", fontSize: 9.5 }}>
+                      대상 부지와 동일한 매입가가 아닙니다. 현재 입력값을 바꾸지 않는 주변 시장 참고자료입니다.
+                    </small>
                   </div>
                 )}
                 {estimate && (
@@ -488,9 +522,9 @@ export default function NewParcelPage() {
                       lineHeight: 1.55,
                     }}
                   >
-                    <strong>외부 검증 전 참고 추정</strong>
+                    <strong>주변 시장 참고자료</strong>
                     <div>
-                      시군구·부지 크기 보정계수는 자체 규칙입니다. 감정평가액이나 매입 확정가로 사용하지 마세요.
+                      아래 값은 사용자가 입력한 총 취득대금이 아닙니다. 거래 표본의 위치와 분포를 이해하는 용도로만 사용합니다.
                     </div>
                     <div className="mono" style={{ marginTop: 3 }}>
                       {estimate.method === "house-comps" && estimate.houseEstimate
@@ -502,10 +536,6 @@ export default function NewParcelPage() {
                     </div>
                   </div>
                 )}
-                <LandProxyNote
-                  est={estimate?.houseEstimate}
-                  onApply={(manwon) => setAcquiredPrice(manwon)}
-                />
                 <div style={{ marginTop: "var(--s4)", maxWidth: 220 }}>
                   <DateField
                     label="인수일"
@@ -523,7 +553,7 @@ export default function NewParcelPage() {
                 variant="primary"
                 size="lg"
                 onClick={handleStart}
-                disabled={!acquiredPrice}
+                disabled={!parcel || !acquiredPrice}
               >
                 분석 시작 → 현황 분석
               </Button>
