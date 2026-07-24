@@ -387,7 +387,7 @@ function ReviewCard({ option }: { option: ExistingReviewOption }) {
         borderRadius: 9,
         padding: 14,
         background: style.background,
-        minHeight: 220,
+        minHeight: 420,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -427,7 +427,41 @@ function ReviewCard({ option }: { option: ExistingReviewOption }) {
           </div>
         ))}
       </div>
+      <ReviewDetail label="비용 영향" text={option.costImpact} />
+      <ReviewDetail label="필수 확인" items={option.requiredChecks} />
+      <ReviewDetail label="다음 단계" text={option.nextStep} />
     </article>
+  );
+}
+
+function ReviewDetail({
+  label,
+  text,
+  items,
+}: {
+  label: string;
+  text?: string;
+  items?: string[];
+}) {
+  return (
+    <div style={{ marginTop: 13, paddingTop: 11, borderTop: "1px solid rgba(100,116,139,0.2)" }}>
+      <div style={{ fontSize: 10.5, fontWeight: 750, color: "var(--fg-subtle)", marginBottom: 5 }}>
+        {label}
+      </div>
+      {text && (
+        <div style={{ fontSize: 11.5, lineHeight: 1.55, color: "var(--fg-muted)" }}>{text}</div>
+      )}
+      {items && (
+        <div style={{ display: "grid", gap: 4 }}>
+          {items.map((item) => (
+            <div key={item} style={{ display: "flex", gap: 6, fontSize: 11, lineHeight: 1.45, color: "var(--fg-muted)" }}>
+              <span>·</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
