@@ -1,3 +1,5 @@
+import { createRegulatoryReferenceSet, VWORLD_LAND_USE_SOURCE_URL, type RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
+
 /**
  * V-World API adapter — verified against real API responses.
  *
@@ -495,30 +497,38 @@ export interface ZoningInfo {
   zoneCode: string;
   maxFAR: number;
   maxBCR: number;
+  /** Legacy compatibility: no parcel-specific height was returned, therefore always 0. */
   heightLimitM: number;
+  regulatoryConstraints: RegulatoryConstraintSet;
   overlays: Array<{ code: string; name: string; conflict: string }>;
 }
 
-const ZONE_RULES_BY_NAME: Record<
+/**
+ * National Enforcement Decree ceiling references.
+ *
+ * These are not parcel-specific confirmed limits. Local ordinances,
+ * district-unit plans and overlapping districts may impose lower values.
+ */
+const NATIONAL_ZONE_CEILINGS_BY_NAME: Record<
   string,
-  { maxFAR: number; maxBCR: number; height: number }
+  { maxFAR: number; maxBCR: number }
 > = {
-  제1종전용주거지역: { maxFAR: 100, maxBCR: 50, height: 12 },
-  제2종전용주거지역: { maxFAR: 150, maxBCR: 50, height: 16 },
-  제1종일반주거지역: { maxFAR: 200, maxBCR: 60, height: 16 },
-  제2종일반주거지역: { maxFAR: 250, maxBCR: 60, height: 22 },
-  제3종일반주거지역: { maxFAR: 300, maxBCR: 50, height: 28 },
-  준주거지역: { maxFAR: 500, maxBCR: 70, height: 50 },
-  중심상업지역: { maxFAR: 1500, maxBCR: 90, height: 80 },
-  일반상업지역: { maxFAR: 1300, maxBCR: 80, height: 70 },
-  근린상업지역: { maxFAR: 900, maxBCR: 70, height: 50 },
-  유통상업지역: { maxFAR: 1100, maxBCR: 80, height: 50 },
-  전용공업지역: { maxFAR: 300, maxBCR: 70, height: 30 },
-  일반공업지역: { maxFAR: 350, maxBCR: 70, height: 30 },
-  준공업지역: { maxFAR: 400, maxBCR: 70, height: 40 },
-  보전녹지지역: { maxFAR: 80, maxBCR: 20, height: 12 },
-  생산녹지지역: { maxFAR: 100, maxBCR: 20, height: 12 },
-  자연녹지지역: { maxFAR: 100, maxBCR: 20, height: 12 },
+  제1종전용주거지역: { maxFAR: 100, maxBCR: 50 },
+  제2종전용주거지역: { maxFAR: 150, maxBCR: 50 },
+  제1종일반주거지역: { maxFAR: 200, maxBCR: 60 },
+  제2종일반주거지역: { maxFAR: 250, maxBCR: 60 },
+  제3종일반주거지역: { maxFAR: 300, maxBCR: 50 },
+  준주거지역: { maxFAR: 500, maxBCR: 70 },
+  중심상업지역: { maxFAR: 1500, maxBCR: 90 },
+  일반상업지역: { maxFAR: 1300, maxBCR: 80 },
+  근린상업지역: { maxFAR: 900, maxBCR: 70 },
+  유통상업지역: { maxFAR: 1100, maxBCR: 80 },
+  전용공업지역: { maxFAR: 300, maxBCR: 70 },
+  일반공업지역: { maxFAR: 350, maxBCR: 70 },
+  준공업지역: { maxFAR: 400, maxBCR: 70 },
+  보전녹지지역: { maxFAR: 80, maxBCR: 20 },
+  생산녹지지역: { maxFAR: 100, maxBCR: 20 },
+  자연녹지지역: { maxFAR: 100, maxBCR: 20 },
 };
 
 function isBaseZoneCode(code: string): boolean {
@@ -570,18 +580,30 @@ export async function lookupZoningByPNU(pnu: string): Promise<ZoningInfo> {
     }
   }
 
-  const rules = ZONE_RULES_BY_NAME[baseZoneName] ?? {
+  const rules = NATIONAL_ZONE_CEILINGS_BY_NAME[baseZoneName] ?? {
     maxFAR: 0,
     maxBCR: 0,
-    height: 0,
   };
+  const retrievedAt = new Date().toISOString();
+  const regulatoryConstraints = createRegulatoryReferenceSet({
+    farPct: rules.maxFAR,
+    bcrPct: rules.maxBCR,
+    // VWorld getLandUseAttr returns land-use zone/district names, not a
+    // parcel-specific legal maximum height. Never manufacture one here.
+    heightM: null,
+    floors: null,
+    retrievedAt,
+    zoningSourceName: "VWorld NED 토지이용계획속성조회",
+    zoningSourceRef: VWORLD_LAND_USE_SOURCE_URL,
+  });
 
   return {
     zoning: baseZoneName,
     zoneCode: baseZoneCode,
     maxFAR: rules.maxFAR,
     maxBCR: rules.maxBCR,
-    heightLimitM: rules.height,
+    heightLimitM: 0,
+    regulatoryConstraints,
     overlays,
   };
 }
