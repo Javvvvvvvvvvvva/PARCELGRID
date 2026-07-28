@@ -35,6 +35,10 @@ import type {
   PlanningScenario,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
+import {
+  regulatoryConstraintIsDecisionGrade,
+  type RegulatoryConstraintSet,
+} from "@/lib/regulatory/constraints";
 
 export const PLANNING_RECOMMENDATION_ENGINE_VERSION =
   "planning-recommendation-v2-stepped-envelope" as const;
@@ -59,6 +63,8 @@ export interface RecommendationEngineParcel {
   maxFARPct: number;
   maxBCRPct: number;
   heightLimitM: number;
+  regulatoryConstraints?: RegulatoryConstraintSet;
+  roofAllowanceM?: number;
   acquisitionCostManwon: number;
   demolitionCostManwon: number;
   boundary?: LngLat[];
@@ -151,11 +157,31 @@ function maxCandidateFloors(parcel: RecommendationEngineParcel): number {
   const bcr = Math.max(1, parcel.maxBCRPct || 50);
   const far = Math.max(1, parcel.maxFARPct || 100);
   const byFar = Math.max(1, Math.ceil(far / Math.max(20, bcr * 0.75)));
+  const verifiedHeight = regulatoryConstraintIsDecisionGrade(
+    parcel.regulatoryConstraints?.height
+  )
+    ? parcel.regulatoryConstraints!.height.value!
+    : null;
   const byHeight =
-    parcel.heightLimitM > 0
-      ? Math.max(1, 1 + Math.floor(Math.max(0, parcel.heightLimitM - 3.6) / 3))
+    verifiedHeight != null
+      ? Math.max(
+          1,
+          1 +
+            Math.floor(
+              Math.max(0, verifiedHeight - (parcel.roofAllowanceM ?? 1.4) - 3.6) / 3
+            )
+        )
       : MAX_GENERATED_FLOORS;
-  return clamp(Math.min(byHeight, byFar + 2), 1, MAX_GENERATED_FLOORS);
+  const verifiedFloors = regulatoryConstraintIsDecisionGrade(
+    parcel.regulatoryConstraints?.floors
+  )
+    ? Math.floor(parcel.regulatoryConstraints!.floors.value!)
+    : MAX_GENERATED_FLOORS;
+  return clamp(
+    Math.min(byHeight, verifiedFloors, byFar + 2),
+    1,
+    MAX_GENERATED_FLOORS
+  );
 }
 
 function averageFloorHeight(floors: number): number {
@@ -504,6 +530,8 @@ export function generatePlanningRecommendations(
       maxFARPct: input.parcel.maxFARPct,
       maxBCRPct: input.parcel.maxBCRPct,
       heightLimitM: input.parcel.heightLimitM,
+      regulatoryConstraints: input.parcel.regulatoryConstraints,
+      roofAllowanceM: input.parcel.roofAllowanceM,
       acquisitionCostManwon: input.parcel.acquisitionCostManwon,
       demolitionCostManwon: input.parcel.demolitionCostManwon,
     },
