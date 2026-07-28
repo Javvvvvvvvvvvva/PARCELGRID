@@ -31,6 +31,7 @@ import {
 import { sunRestrictionApplies } from "@/lib/finance/sun-envelope";
 import { computeScore, type ScoreDeduction } from "@/lib/finance/score-engine";
 import type { BuildingType } from "@/lib/finance/types";
+import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
 
 /** 최소 건물 깊이 (MVP — 주택/다가구) */
 const MIN_BUILDING_DEPTH_M = 7.0;
@@ -38,6 +39,28 @@ const MIN_BUILDING_DEPTH_M = 7.0;
 const VILLA_UNIT_AREA_SQM = 50;
 /** 기본 층고 (m) — 기존 건물 실측값 있으면 대체 (C 하드코딩 제거) */
 const DEFAULT_FLOOR_HEIGHT_M = 3.0;
+/** 옥상 파라펫·슬래브 등 층고 밖 높이. 별도 실측 전 계획용 값이며 법정 높이와 분리 표시한다. */
+const DEFAULT_ROOF_ALLOWANCE_M = 1.4;
+
+function capFloorsByVerifiedConstraints(
+  parcel: Parcel,
+  farBasedFloors: number,
+  floorHeightM: number
+): number {
+  const constraints = parcel.regulatoryConstraints;
+  let result = Math.max(1, farBasedFloors);
+  if (regulatoryConstraintIsDecisionGrade(constraints?.height)) {
+    const occupiableHeightM = Math.max(
+      floorHeightM,
+      constraints!.height.value! - DEFAULT_ROOF_ALLOWANCE_M
+    );
+    result = Math.min(result, Math.max(1, Math.floor(occupiableHeightM / floorHeightM)));
+  }
+  if (regulatoryConstraintIsDecisionGrade(constraints?.floors)) {
+    result = Math.min(result, Math.max(1, Math.floor(constraints!.floors.value!)));
+  }
+  return result;
+}
 
 export type VerdictMark = "ok" | "warn" | "fail";
 
@@ -191,9 +214,10 @@ function pickRecommendedOption(
   unitAreaSqm: number,
   floorHeightM: number
 ): ScenarioOption {
-  const maxFloors = Math.max(
-    1,
-    Math.floor(env.maxFarFloorAreaSqm / env.maxBuildingAreaSqm)
+  const maxFloors = capFloorsByVerifiedConstraints(
+    parcel,
+    Math.max(1, Math.floor(env.maxFarFloorAreaSqm / env.maxBuildingAreaSqm)),
+    floorHeightM
   );
   let best: ScenarioOption | null = null;
   for (let floors = 1; floors <= maxFloors; floors++) {
@@ -235,14 +259,19 @@ function buildOption(
     1,
     Math.floor(maxFarFloorAreaSqm / maxBuildingAreaSqm)
   );
+  const maxCandidateFloors = capFloorsByVerifiedConstraints(
+    parcel,
+    maxFloorsByFar,
+    floorHeightM
+  );
   const floors =
     floorOverride != null
       ? floorOverride
       : mode === "max"
-        ? maxFloorsByFar
+        ? maxCandidateFloors
         : mode === "input"
           ? Math.max(1, inputFloors ?? 1)
-          : maxFloorsByFar; // recommended는 pickRecommendedOption 경유
+          : maxCandidateFloors; // recommended는 pickRecommendedOption 경유
   // Buildable Area 엔진 (#2) — 정북일조 반영 실제 건축가능면적 (계단식 합)
   const sunApplies = sunRestrictionApplies(parcel.zoning);
   // 대지경계 최소 이격 0.5m만 사실 기반 반영 (C 확정).
@@ -326,7 +355,7 @@ function buildOption(
       ? Math.max(1, inputUnits)
       : autoUnits;
 
-  const heightM = floors * floorHeightM + 1.4;
+  const heightM = floors * floorHeightM + DEFAULT_ROOF_ALLOWANCE_M;
   const sun = evalSunVerdict(parcel.zoning, heightM, floors, northSouthM, parcel);
 
   const pk = calcParking(
