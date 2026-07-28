@@ -10,6 +10,48 @@ import {
   createFloorZone,
 } from "@/lib/planning/scenario-utils";
 import type { PlanningScenario } from "@/lib/planning/types";
+import {
+  createRegulatoryReferenceSet,
+  replaceConstraintEvidence,
+} from "@/lib/regulatory/constraints";
+
+const referenceConstraints = createRegulatoryReferenceSet({
+  farPct: 200,
+  bcrPct: 60,
+  retrievedAt: "2026-07-13T00:00:00.000Z",
+  zoningSourceName: "VWorld 용도지역",
+  zoningSourceRef: "test-zone-ref",
+});
+const verifiedConstraints = {
+  ...referenceConstraints,
+  far: replaceConstraintEvidence(referenceConstraints.far, {
+    value: 200,
+    status: "source-backed",
+    sourceName: "테스트 조례",
+    sourceRef: "제1조",
+    asOf: "2026-07-13",
+    checkedBy: "테스터",
+    checkedRole: "건축사",
+  }),
+  bcr: replaceConstraintEvidence(referenceConstraints.bcr, {
+    value: 60,
+    status: "source-backed",
+    sourceName: "테스트 조례",
+    sourceRef: "제1조",
+    asOf: "2026-07-13",
+    checkedBy: "테스터",
+    checkedRole: "건축사",
+  }),
+  height: replaceConstraintEvidence(referenceConstraints.height, {
+    value: 15,
+    status: "source-backed",
+    sourceName: "테스트 높이 고시",
+    sourceRef: "제2조",
+    asOf: "2026-07-13",
+    checkedBy: "테스터",
+    checkedRole: "건축사",
+  }),
+};
 
 const context: PlanningCalculationContext = {
   parcel: {
@@ -17,6 +59,8 @@ const context: PlanningCalculationContext = {
     maxFARPct: 200,
     maxBCRPct: 60,
     heightLimitM: 15,
+    regulatoryConstraints: verifiedConstraints,
+    roofAllowanceM: 1.4,
     acquisitionCostManwon: 50_000,
     demolitionCostManwon: 1_000,
   },
@@ -75,6 +119,9 @@ describe("Stage 2 planning calculation engine", () => {
     expect(result.metrics.rentableAreaSqm).toBe(40);
     expect(result.metrics.residentialUnitCount).toBe(3);
     expect(result.metrics.commercialUnitCount).toBe(1);
+    expect(result.metrics.occupiedFloorHeightM).toBe(9);
+    expect(result.metrics.roofAllowanceM).toBe(1.4);
+    expect(result.metrics.totalHeightM).toBe(10.4);
     expect(result.metrics.totalUnitCount).toBe(4);
     expect(result.metrics.unitCount).toBe(3);
   });
@@ -129,6 +176,20 @@ describe("Stage 2 planning calculation engine", () => {
     expect(result.metrics.preliminaryFarPct).toBe(160);
     expect(result.checks.find((check) => check.code === "bcr")?.status).toBe("fail");
     expect(result.checks.find((check) => check.code === "far")?.status).toBe("fail");
+  });
+
+  it("does not turn national reference ceilings into parcel-specific approval", () => {
+    const result = calculatePlanningScenario(mixedUseScenario(), {
+      ...context,
+      parcel: {
+        ...context.parcel,
+        regulatoryConstraints: referenceConstraints,
+      },
+    });
+
+    expect(result.checks.find((check) => check.code === "bcr")?.status).toBe("review");
+    expect(result.checks.find((check) => check.code === "far")?.status).toBe("review");
+    expect(result.checks.find((check) => check.code === "height")?.status).toBe("unknown");
   });
 
   it("applies derived checks and economics without replacing the plan definition", () => {
