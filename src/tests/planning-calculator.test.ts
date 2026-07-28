@@ -119,9 +119,9 @@ describe("Stage 2 planning calculation engine", () => {
     expect(result.metrics.rentableAreaSqm).toBe(40);
     expect(result.metrics.residentialUnitCount).toBe(3);
     expect(result.metrics.commercialUnitCount).toBe(1);
-    expect(result.metrics.occupiedFloorHeightM).toBe(9);
+    expect(result.metrics.occupiedFloorHeightM).toBe(9.6);
     expect(result.metrics.roofAllowanceM).toBe(1.4);
-    expect(result.metrics.totalHeightM).toBe(10.4);
+    expect(result.metrics.totalHeightM).toBe(11);
     expect(result.metrics.totalUnitCount).toBe(4);
     expect(result.metrics.unitCount).toBe(3);
   });
@@ -169,6 +169,27 @@ describe("Stage 2 planning calculation engine", () => {
         lotAreaSqm: 100,
         maxBCRPct: 50,
         maxFARPct: 100,
+        regulatoryConstraints: {
+          ...verifiedConstraints,
+          bcr: replaceConstraintEvidence(verifiedConstraints.bcr, {
+            value: 50,
+            status: "source-backed",
+            sourceName: "테스트 조례",
+            sourceRef: "제1조",
+            asOf: "2026-07-13",
+            checkedBy: "테스터",
+            checkedRole: "건축사",
+          }),
+          far: replaceConstraintEvidence(verifiedConstraints.far, {
+            value: 100,
+            status: "source-backed",
+            sourceName: "테스트 조례",
+            sourceRef: "제1조",
+            asOf: "2026-07-13",
+            checkedBy: "테스터",
+            checkedRole: "건축사",
+          }),
+        },
       },
     });
 
