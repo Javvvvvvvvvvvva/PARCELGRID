@@ -6,6 +6,7 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { validateFinancialSourceEvidence } from "@/lib/finance/source-data-gate";
+import { coreRegulatoryConstraintsVerified } from "@/lib/regulatory/constraints";
 import {
   buildEvidenceGate,
   buildHandoffBrief,
@@ -93,6 +94,9 @@ export default function HandoffPage({
       address: data.parcel.address,
       geometryHash: projectGeometry?.geometryHash ?? null,
       roadReferenceCount: data.parcel.roads?.length ?? 0,
+      regulatorySourceBacked: coreRegulatoryConstraintsVerified(
+        data.parcel.regulatoryConstraints
+      ),
       saleCompCount: data.comps?.length ?? 0,
       saleEstimateVersion: data.saleEstimate?.modelVersion ?? null,
       acquisitionEstimateVersion:

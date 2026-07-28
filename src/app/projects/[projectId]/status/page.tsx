@@ -39,6 +39,7 @@ import {
 import { num, pyeong, won } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
+import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
 
 const ExistingBuildingMass = dynamic(
   () =>
@@ -214,6 +215,15 @@ export default function StatusPage({
     );
   }
 
+  const farDecisionGrade = regulatoryConstraintIsDecisionGrade(
+    parcel.regulatoryConstraints?.far
+  );
+  const bcrDecisionGrade = regulatoryConstraintIsDecisionGrade(
+    parcel.regulatoryConstraints?.bcr
+  );
+  const heightDecisionGrade = regulatoryConstraintIsDecisionGrade(
+    parcel.regulatoryConstraints?.height
+  );
   const ageYears = currentBuilding?.maxAgeYears ?? main?.ageYears ?? null;
   const bcrHeadroom = ratios ? headroomPct(ratios.bcrPct, parcel.maxBCR) : null;
   const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
@@ -230,7 +240,9 @@ export default function StatusPage({
     : "건축물대장에 등록된 현재 건물이 없습니다";
 
   const overviewText = ratios
-    ? `현재 건폐율은 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 법정 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 반영해 계산합니다.`
+    ? farDecisionGrade && bcrDecisionGrade
+      ? `현재 건폐율은 원문 확인 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 확인 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 함께 검토합니다.`
+      : `현재 건물 비율은 계산됐지만 건폐율·용적률 숫자는 전국 시행령 참고 상한입니다. 관할 조례·지구단위계획 원문을 확인하기 전에는 법정 여유로 확정하지 않습니다.`
     : "현재 건물 비율을 계산할 수 없습니다. 대지·건축물대장 데이터를 확인한 뒤 Stage 2에서 가능 규모를 검토합니다.";
 
   const badges: { label: string; tone: BadgeTone }[] = [
@@ -244,17 +256,27 @@ export default function StatusPage({
     ...(bcrHeadroom != null
       ? [
           {
-            label: bcrHeadroom < 10 ? "건폐율 여유 적음" : "건폐율 여유 있음",
-            tone: bcrHeadroom < 10 ? ("warning" as const) : ("positive" as const),
+            label: bcrDecisionGrade
+              ? bcrHeadroom < 10
+                ? "건폐율 여유 적음"
+                : "건폐율 여유 있음"
+              : "건폐율 원문 확인 필요",
+            tone: bcrDecisionGrade && bcrHeadroom >= 10
+              ? ("positive" as const)
+              : ("warning" as const),
           },
         ]
       : []),
     ...(farHeadroom != null
       ? [
           {
-            label: farHeadroom >= parcel.maxFAR * 0.3 ? "용적률 여유 큼" : "용적률 여유 적음",
+            label: farDecisionGrade
+              ? farHeadroom >= parcel.maxFAR * 0.3
+                ? "용적률 여유 큼"
+                : "용적률 여유 적음"
+              : "용적률 원문 확인 필요",
             tone:
-              farHeadroom >= parcel.maxFAR * 0.3
+              farDecisionGrade && farHeadroom >= parcel.maxFAR * 0.3
                 ? ("positive" as const)
                 : ("warning" as const),
           },
@@ -263,6 +285,10 @@ export default function StatusPage({
     ...(parcel.demolitionCost && parcel.demolitionCost > 0
       ? [{ label: "철거비 발생", tone: "neutral" as const }]
       : []),
+    {
+      label: heightDecisionGrade ? "높이 원문 확인" : "높이 원문 확인 필요",
+      tone: heightDecisionGrade ? "positive" : "warning",
+    },
     {
       label: parcel.roads && parcel.roads.length > 0 ? "도로 데이터 있음" : "도로 확인 필요",
       tone: parcel.roads && parcel.roads.length > 0 ? "positive" : "warning",
@@ -385,12 +411,12 @@ export default function StatusPage({
           <OverviewMetric
             label="건폐율"
             value={ratios ? `${ratios.bcrPct.toFixed(1)}%` : "—"}
-            sub={`법정 상한 ${parcel.maxBCR}%`}
+            sub={`${bcrDecisionGrade ? "원문 확인 상한" : "전국 상한 참고"} ${parcel.maxBCR}%`}
           />
           <OverviewMetric
             label="용적률"
             value={ratios ? `${ratios.farPct.toFixed(1)}%` : "—"}
-            sub={`법정 상한 ${parcel.maxFAR}%`}
+            sub={`${farDecisionGrade ? "원문 확인 상한" : "전국 상한 참고"} ${parcel.maxFAR}%`}
           />
           <OverviewMetric
             label="데이터 상태"
@@ -438,15 +464,27 @@ export default function StatusPage({
                 sub={`연면적 ${num(ratios.totalAreaSqm, 2)}㎡ · ${ratios.farSource}`}
               />
               <DataRow
-                label="법규 여유"
+                label={farDecisionGrade && bcrDecisionGrade ? "확인 상한 여유" : "참고 상한 여유"}
                 value={`건폐 ${bcrHeadroom?.toFixed(1)}%p · 용적 ${farHeadroom?.toFixed(1)}%p`}
-                sub="법정 상한 대비 잔여 · 실제 신축 가능량 아님"
+                sub={
+                  farDecisionGrade && bcrDecisionGrade
+                    ? "원문 확인 상한 대비 · 실제 신축 가능량은 Stage 2 검토"
+                    : "전국 상한 참고 대비 · 필지별 법정 여유로 확정하지 않음"
+                }
               />
             </>
           ) : (
             <>
-              <DataRow label="건폐율 상한" value={`${parcel.maxBCR}%`} sub="기존 건물 비율 미확인" />
-              <DataRow label="용적률 상한" value={`${parcel.maxFAR}%`} sub="기존 건물 비율 미확인" />
+              <DataRow
+                label={bcrDecisionGrade ? "건폐율 확인 상한" : "건폐율 전국 상한 참고"}
+                value={`${parcel.maxBCR}%`}
+                sub="기존 건물 비율 미확인"
+              />
+              <DataRow
+                label={farDecisionGrade ? "용적률 확인 상한" : "용적률 전국 상한 참고"}
+                value={`${parcel.maxFAR}%`}
+                sub="기존 건물 비율 미확인"
+              />
             </>
           )}
           <DataRow
@@ -823,7 +861,7 @@ function Stage1ReadingGuide({
         <ReadingCard
           step="2"
           title="아직 확정하지 않는 것"
-          body={`건폐율 ${maxBCR}%·용적률 ${maxFAR}%는 법정 상한입니다. 실제 층수·면적·주차 가능 대수를 뜻하지 않습니다.`}
+          body={`건폐율 ${maxBCR}%·용적률 ${maxFAR}%는 전국 시행령 참고 상한입니다. 필지별 원문 확인 전에는 법정 상한으로 확정하지 않으며 실제 층수·면적·주차 가능 대수를 뜻하지 않습니다.`}
         />
         <ReadingCard
           step="3"

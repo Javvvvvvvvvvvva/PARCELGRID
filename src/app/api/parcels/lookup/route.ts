@@ -5,7 +5,7 @@
  *   1. Kakao                    → 좌표 + 행정코드 + 정확 지번
  *   2. V월드 연속지적도          → PNU + 면적 + 지목 + 공시지가 + 필지 경계
  *   3. V월드 주변 연속지적도      → 인접 필지 + 지목이 도로인 필지 경계
- *   4. V월드 용도지역            → 용도지역 + 건폐율 + 용적률 + 높이제한
+ *   4. V월드 용도지역            → 용도지역·지구 조회 사실 + 전국 법령 상한 참고
  *   5. MOLIT 건축물대장          → 현재 건물 속성 + 재건축 시그널
  *   6. V월드 GIS건물통합정보     → 실제 건물 외곽선·위치·방향 (dt_d010)
  *
@@ -164,9 +164,12 @@ export async function POST(req: NextRequest) {
 
       zoning: zoning.zoning,
       zoneCode: zoning.zoneCode,
+      // maxFAR/maxBCR are national ceiling references retained for legacy
+      // candidate generation. regulatoryConstraints carries their provenance.
       maxFAR: zoning.maxFAR,
       maxBCR: zoning.maxBCR,
       heightLimit: zoning.heightLimitM,
+      regulatoryConstraints: zoning.regulatoryConstraints,
       overlays: zoning.overlays,
 
       currentBuilding,

@@ -10,6 +10,20 @@ import {
   createFloorZone,
 } from "@/lib/planning/scenario-utils";
 import type { PlanningScenario } from "@/lib/planning/types";
+import {
+  createRegulatoryReferenceSet,
+  replaceConstraintEvidence,
+} from "@/lib/regulatory/constraints";
+
+const referenceConstraints = createRegulatoryReferenceSet({ farPct: 200, bcrPct: 60 });
+const sourceInput = {
+  status: "source-backed" as const,
+  sourceName: "테스트 조례",
+  sourceRef: "제1조",
+  asOf: "2026-07-28",
+  checkedBy: "테스터",
+  checkedRole: "건축사",
+};
 
 const context: PlanningCalculationContext = {
   parcel: {
@@ -17,6 +31,22 @@ const context: PlanningCalculationContext = {
     maxFARPct: 200,
     maxBCRPct: 60,
     heightLimitM: 15,
+    regulatoryConstraints: {
+      ...referenceConstraints,
+      far: replaceConstraintEvidence(referenceConstraints.far, {
+        ...sourceInput,
+        value: 200,
+      }),
+      bcr: replaceConstraintEvidence(referenceConstraints.bcr, {
+        ...sourceInput,
+        value: 60,
+      }),
+      height: replaceConstraintEvidence(referenceConstraints.height, {
+        ...sourceInput,
+        value: 15,
+      }),
+    },
+    roofAllowanceM: 1.4,
     acquisitionCostManwon: 50_000,
     demolitionCostManwon: 1_000,
   },

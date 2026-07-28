@@ -6,6 +6,7 @@ const input = {
   address: "서울 테스트구 테스트동 1",
   geometryHash: "PG-ABC123",
   roadReferenceCount: 2,
+  regulatorySourceBacked: false,
   saleCompCount: 5,
   saleEstimateVersion: "experimental-2026.1",
   acquisitionEstimateVersion: "land-v1",
@@ -23,8 +24,19 @@ describe("Stage 4 evidence gate", () => {
   it("keeps observed data in expert review", () => {
     const items = buildEvidenceGate(input).lanes.flatMap((lane) => lane.items);
     expect(items.find((item) => item.id === "geometry-snapshot")?.status).toBe("system-confirmed");
+    expect(items.find((item) => item.id === "regulatory-source")?.status).toBe("missing");
     expect(items.find((item) => item.id === "road-boundary")?.status).toBe("expert-review");
     expect(items.find((item) => item.id === "sale-comps")?.status).toBe("expert-review");
+  });
+
+  it("moves source-backed regulation to architect review without auto-approving it", () => {
+    const items = buildEvidenceGate({
+      ...input,
+      regulatorySourceBacked: true,
+    }).lanes.flatMap((lane) => lane.items);
+    expect(items.find((item) => item.id === "regulatory-source")?.status).toBe(
+      "expert-review"
+    );
   });
 
   it("creates a discipline-specific request brief", () => {

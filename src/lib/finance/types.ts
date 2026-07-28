@@ -1,4 +1,5 @@
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
+import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
 /**
  * Core domain types for the PARCELGRID financial engine.
  *
@@ -72,9 +73,18 @@ export interface Parcel {
   // Zoning
   zoning: string; // e.g. "제3종일반주거지역"
   zoneCode: string; // e.g. "UB30"
-  maxFAR: Pct; // 용적률 상한, % of lotArea
-  maxBCR: Pct; // 건폐율 상한, % of lotArea
-  heightLimit: number; // m
+  /**
+   * Legacy numeric references used by older candidate generation.
+   * The legal decision state lives in regulatoryConstraints.
+   */
+  maxFAR: Pct;
+  maxBCR: Pct;
+  /** Legacy field. 0 means no parcel-specific height has been verified. */
+  heightLimit: number;
+  /** Source, date and verification status for FAR/BCR/height/floor limits. */
+  regulatoryConstraints?: RegulatoryConstraintSet;
+  /** VWorld NED overlapping zone/district records retained for review. */
+  overlays?: Array<{ code: string; name: string; conflict: string }>;
 
   setback: {
     road: number; // m

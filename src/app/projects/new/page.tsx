@@ -28,6 +28,7 @@ import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
 import type { BuildingInfo, RedevelopmentSignal } from "@/lib/integrations/molit-building";
 import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
+import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
 
 /* ─────────────────────────── 타입 ─────────────────────────── */
 
@@ -62,6 +63,7 @@ interface LookupResult {
   maxFAR: number;
   maxBCR: number;
   heightLimit: number;
+  regulatoryConstraints: RegulatoryConstraintSet;
   overlays: Array<{ code: string; name: string; conflict: string }>;
 
   currentBuilding: {
@@ -193,6 +195,8 @@ export default function NewParcelPage() {
       maxFAR: parcel.maxFAR,
       maxBCR: parcel.maxBCR,
       heightLimit: parcel.heightLimit,
+      regulatoryConstraints: parcel.regulatoryConstraints,
+      overlays: parcel.overlays,
       landPrice: parcel.landPrice,
       landPriceYear: parcel.landPriceYear,
       // 법적 최대 외곽선과 분리된 사용자 설계 여유거리. 새 프로젝트는 추가 여유 0m.
@@ -424,9 +428,28 @@ export default function NewParcelPage() {
                     value={`${num(parcel.lotArea, 2)} m²`}
                     sub={pyeong(parcel.lotArea)}
                   />
-                  <DataRow label="건폐율 상한" value={`${parcel.maxBCR}%`} />
-                  <DataRow label="용적률 상한" value={`${parcel.maxFAR}%`} />
-                  <DataRow label="최고고도" value={`${parcel.heightLimit} m`} />
+                  <DataRow
+                    label="건폐율 전국 상한 참고"
+                    value={parcel.maxBCR > 0 ? `${parcel.maxBCR}%` : "미확인"}
+                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
+                  />
+                  <DataRow
+                    label="용적률 전국 상한 참고"
+                    value={parcel.maxFAR > 0 ? `${parcel.maxFAR}%` : "미확인"}
+                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
+                  />
+                  <DataRow
+                    label="필지별 최고높이"
+                    value="미확인"
+                    sub="VWorld 용도지역 조회만으로 확정하지 않음 · Stage 2 원문 검증"
+                  />
+                  {parcel.overlays.length > 0 && (
+                    <DataRow
+                      label="중첩 용도지구·구역"
+                      value={`${parcel.overlays.length}건`}
+                      sub={parcel.overlays.map((item) => item.name).join(" · ")}
+                    />
+                  )}
                   <DataRow
                     label="공시지가"
                     value={`${num(parcel.landPrice / 10_000)}만원/m²`}
