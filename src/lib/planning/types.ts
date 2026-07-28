@@ -1,3 +1,5 @@
+import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
+
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
   | "algorithm-balanced"
@@ -232,7 +234,11 @@ export interface PlanningCalculationParcel {
   lotAreaSqm: number;
   maxFARPct: number;
   maxBCRPct: number;
+  /** Legacy value. It must not create a legal pass unless provenance is decision-grade. */
   heightLimitM: number;
+  regulatoryConstraints?: RegulatoryConstraintSet;
+  /** Explicit planning allowance above occupied floor-to-floor heights. */
+  roofAllowanceM?: number;
   acquisitionCostManwon: number;
   demolitionCostManwon: number;
 }
@@ -256,6 +262,11 @@ export interface PlanningScenarioMetrics extends PlanningScenarioSummary {
   preliminaryFarAreaSqm: number;
   preliminaryBcrPct: number;
   preliminaryFarPct: number;
+  /** Sum of above-ground floor-to-floor heights. */
+  occupiedFloorHeightM: number;
+  /** Parapet, roof build-up and equipment headroom planning allowance. */
+  roofAllowanceM: number;
+  /** occupiedFloorHeightM + roofAllowanceM. */
   totalHeightM: number;
   requiredCars: number;
   parkingShortfallCars: number;
