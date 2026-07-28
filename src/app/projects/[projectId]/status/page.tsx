@@ -378,6 +378,11 @@ export default function StatusPage({
             sub={main && main.undergroundFloors > 0 ? `지하 ${main.undergroundFloors}층` : purpose}
           />
           <OverviewMetric
+            label="입력한 총 취득대금"
+            value={parcel.acquiredPrice > 0 ? won(parcel.acquiredPrice, { full: true }) : "미입력"}
+            sub="사용자 입력 · 주변 시세와 별도"
+          />
+          <OverviewMetric
             label="건폐율"
             value={ratios ? `${ratios.bcrPct.toFixed(1)}%` : "—"}
             sub={`법정 상한 ${parcel.maxBCR}%`}
@@ -394,6 +399,15 @@ export default function StatusPage({
           />
         </div>
       </section>
+
+      <Stage1ReadingGuide
+        hasBuilding={Boolean(main)}
+        buildingAgeYears={ageYears}
+        acquiredPriceManwon={parcel.acquiredPrice}
+        maxBCR={parcel.maxBCR}
+        maxFAR={parcel.maxFAR}
+        missingCount={dataReadiness?.missingCount ?? 0}
+      />
 
       <div
         style={{
@@ -730,6 +744,161 @@ function StatusBadge({
     >
       {label}
     </span>
+  );
+}
+
+function Stage1ReadingGuide({
+  hasBuilding,
+  buildingAgeYears,
+  acquiredPriceManwon,
+  maxBCR,
+  maxFAR,
+  missingCount,
+}: {
+  hasBuilding: boolean;
+  buildingAgeYears: number | null;
+  acquiredPriceManwon: number;
+  maxBCR: number;
+  maxFAR: number;
+  missingCount: number;
+}) {
+  const acquisitionLabel =
+    acquiredPriceManwon > 0 ? won(acquiredPriceManwon, { full: true }) : "아직 입력하지 않음";
+  const buildingLabel = hasBuilding
+    ? `건축물대장상 기존 건물 있음${buildingAgeYears != null ? ` · 약 ${buildingAgeYears}년 경과` : ""}`
+    : "건축물대장상 등록 건물 없음";
+
+  return (
+    <section
+      style={{
+        marginBottom: "var(--s5)",
+        padding: "18px 20px",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--r-lg)",
+        background: "var(--bg-elev)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div>
+          <div
+            style={{
+              fontSize: 10.5,
+              fontWeight: 800,
+              letterSpacing: "0.08em",
+              color: "var(--fg-subtle)",
+            }}
+          >
+            HOW TO READ
+          </div>
+          <h2 style={{ margin: "5px 0 0", fontSize: 17 }}>처음 보는 분은 이렇게 읽으세요</h2>
+        </div>
+        <span
+          style={{
+            alignSelf: "center",
+            padding: "5px 9px",
+            borderRadius: 999,
+            background: "var(--bg-sunken)",
+            color: "var(--fg-muted)",
+            fontSize: 10.5,
+            fontWeight: 650,
+          }}
+        >
+          Stage 1은 현재 상태 확인 단계
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 10,
+          marginTop: 15,
+        }}
+      >
+        <ReadingCard
+          step="1"
+          title="지금 확인된 것"
+          body={`${buildingLabel}. 총 취득대금은 사용자가 입력한 ${acquisitionLabel}을 사용합니다.`}
+        />
+        <ReadingCard
+          step="2"
+          title="아직 확정하지 않는 것"
+          body={`건폐율 ${maxBCR}%·용적률 ${maxFAR}%는 법정 상한입니다. 실제 층수·면적·주차 가능 대수를 뜻하지 않습니다.`}
+        />
+        <ReadingCard
+          step="3"
+          title="다음에 할 일"
+          body={
+            missingCount > 0
+              ? `추가 확인 항목 ${missingCount}개를 확인하고 Stage 2에서 실제 배치 가능 규모를 비교합니다.`
+              : "확보된 현황을 기준으로 Stage 2에서 실제 배치 가능 규모를 비교합니다."
+          }
+        />
+      </div>
+
+      <details
+        style={{
+          marginTop: 12,
+          borderTop: "1px solid var(--border)",
+          paddingTop: 12,
+          color: "var(--fg-muted)",
+        }}
+      >
+        <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 700 }}>
+          자주 나오는 용어 뜻 보기
+        </summary>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+            gap: 8,
+            marginTop: 10,
+          }}
+        >
+          <TermCard term="건폐율" meaning="대지 중 1층 건축면적이 차지하는 비율입니다." />
+          <TermCard term="용적률" meaning="대지 대비 지상층 바닥면적 합계의 비율입니다." />
+          <TermCard term="공시지가" meaning="세금·행정용 토지가격 기준이며 실제 매매가격이 아닙니다." />
+          <TermCard term="예상 철거비" meaning="대장 면적과 구조별 단가로 계산한 개략값이며 업체 견적이 아닙니다." />
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function ReadingCard({ step, title, body }: { step: string; title: string; body: string }) {
+  return (
+    <article
+      style={{
+        minHeight: 118,
+        padding: "13px 14px",
+        border: "1px solid var(--border)",
+        borderRadius: 9,
+        background: "var(--bg-sunken)",
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 800, color: "var(--fg-faint)" }}>STEP {step}</div>
+      <h3 style={{ margin: "6px 0 0", fontSize: 13.5 }}>{title}</h3>
+      <p style={{ margin: "7px 0 0", fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-muted)" }}>
+        {body}
+      </p>
+    </article>
+  );
+}
+
+function TermCard({ term, meaning }: { term: string; meaning: string }) {
+  return (
+    <div
+      style={{
+        padding: "10px 11px",
+        borderRadius: 8,
+        background: "var(--bg-sunken)",
+        fontSize: 11,
+        lineHeight: 1.5,
+      }}
+    >
+      <strong style={{ display: "block", color: "var(--fg)", marginBottom: 3 }}>{term}</strong>
+      {meaning}
+    </div>
   );
 }
 
