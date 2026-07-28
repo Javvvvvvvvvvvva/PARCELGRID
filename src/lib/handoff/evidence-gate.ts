@@ -14,6 +14,7 @@ export interface EvidenceGateInput {
   address: string;
   geometryHash?: string | null;
   roadReferenceCount: number;
+  regulatorySourceBacked?: boolean;
   saleCompCount: number;
   saleEstimateVersion?: string | null;
   acquisitionEstimateVersion?: string | null;
@@ -95,6 +96,18 @@ export function buildEvidenceGate(input: EvidenceGateInput): EvidenceGate {
           nextAction: geometryReady
             ? "건축가가 배치·층별 프로그램과 원본 좌표를 대조"
             : "Stage 2에서 대표 계획안을 다시 확정",
+        },
+        {
+          id: "regulatory-source",
+          label: "건폐율·용적률·높이 원문",
+          status: input.regulatorySourceBacked ? "expert-review" : "missing",
+          critical: true,
+          source: input.regulatorySourceBacked
+            ? "원문 번호·기준일·확인자와 함께 등록된 규제 수치"
+            : "VWorld 용도지역과 전국 상한 참고만 있음",
+          nextAction: input.regulatorySourceBacked
+            ? "건축사가 적용 조례·지구단위계획·높이 지정과 최신성을 재확인"
+            : "Stage 2 법규 원장에 적용 조례·고시 원문과 수치를 기록",
         },
         {
           id: "road-boundary",
