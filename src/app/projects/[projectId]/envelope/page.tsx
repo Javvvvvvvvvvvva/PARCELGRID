@@ -13,6 +13,7 @@ import { CadastralRoadContextPanel } from "@/components/planning/CadastralRoadCo
 import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacementWorkspace";
 import { ScenarioParkingWorkspace } from "@/components/planning/ScenarioParkingWorkspace";
 import { ScenarioChangeWorkspace } from "@/components/planning/ScenarioChangeWorkspace";
+import { RegulatoryEvidencePanel } from "@/components/planning/RegulatoryEvidencePanel";
 
 type StudioSection = "plan" | "design" | "verify" | "context" | "export";
 
@@ -209,11 +210,12 @@ export default function EnvelopePage({
           <div className="section-intro">
             <span>STEP 3</span>
             <div>
-              <h2>법규 외곽선과 도로 데이터를 검증합니다</h2>
-              <p>정북일조·면적 계약·지적 도로와 계획도로의 출처를 구분해 확인합니다.</p>
+              <h2>법규 수치의 원문과 외곽선·도로 데이터를 검증합니다</h2>
+              <p>건폐율·용적률·높이의 원문 근거를 기록하고 정북일조·지적 도로·계획도로의 출처를 구분합니다.</p>
             </div>
           </div>
           <div className="studio-panel-stack">
+            <RegulatoryEvidencePanel projectId={projectId} />
             <PlanningGeometryContractPanel projectId={projectId} />
             <CadastralRoadContextPanel projectId={projectId} />
           </div>
