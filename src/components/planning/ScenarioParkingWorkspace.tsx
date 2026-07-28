@@ -358,6 +358,8 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
         heightLimitM: parcel.heightLimit ?? 0,
+        regulatoryConstraints: parcel.regulatoryConstraints,
+        roofAllowanceM: 1.4,
         acquisitionCostManwon: parcel.acquiredPrice,
         demolitionCostManwon: parcel.demolitionCost ?? 0,
       },
