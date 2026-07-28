@@ -1,6 +1,11 @@
 import { calcParking } from "@/lib/finance/parking";
 import type { AssumptionSet, BuildingType } from "@/lib/finance/types";
 import {
+  constraintStatusLabel,
+  regulatoryConstraintIsDecisionGrade,
+  type RegulatoryConstraintEvidence,
+} from "@/lib/regulatory/constraints";
+import {
   resolveZoneRevenueModel,
   summarizePlanningScenario,
 } from "@/lib/planning/scenario-utils";
@@ -21,6 +26,7 @@ const WON_PER_MANWON = 10_000;
 const RETAIL_AREA_PER_CAR_SQM = 134;
 const CONVENTIONAL_PARKING_AREA_PER_CAR_SQM = 25;
 const MECHANICAL_PARKING_AREA_PER_CAR_SQM = 16;
+const DEFAULT_ROOF_ALLOWANCE_M = 1.4;
 
 export interface PlanningCalculationContext {
   parcel: PlanningCalculationParcel;
@@ -274,37 +280,113 @@ function buildChecks(
     });
   }
 
-  checks.push({
-    code: "bcr",
-    label: "예비 건폐율",
-    status: metrics.preliminaryBcrPct <= parcel.maxBCRPct + 0.01 ? "pass" : "fail",
-    message: `${metrics.preliminaryBcrPct.toFixed(1)}% / 상한 ${parcel.maxBCRPct.toFixed(1)}% · 실제 수평투영면적은 배치 3D에서 재검토`,
-    source: "층별 최대 외곽면적 ÷ 대지면적",
-  });
+  const buildLimitCheck = (
+    code: "bcr" | "far",
+    label: string,
+    actual: number,
+    fallbackLimit: number,
+    evidence: RegulatoryConstraintEvidence | undefined
+  ): PlanningCheck => {
+    const limit = evidence?.value ?? fallbackLimit;
+    if (!(limit > 0)) {
+      return {
+        code,
+        label,
+        status: "unknown",
+        message: `계획 ${actual.toFixed(1)}% · 필지별 적용 상한 미확인`,
+        source: "관할 조례·지구단위계획 원문 필요",
+      };
+    }
 
-  checks.push({
-    code: "far",
-    label: "예비 용적률",
-    status: metrics.preliminaryFarPct <= parcel.maxFARPct + 0.01 ? "pass" : "fail",
-    message: `${metrics.preliminaryFarPct.toFixed(1)}% / 상한 ${parcel.maxFARPct.toFixed(1)}% · 지상 주차·필로티 제외 예비값`,
-    source: "예비 용적률 산입면적 ÷ 대지면적",
-  });
+    const decisionGrade = regulatoryConstraintIsDecisionGrade(evidence);
+    const exceeds = actual > limit + 0.01;
+    const nationalReferenceExceeded =
+      evidence?.status === "reference-only" && exceeds;
+    return {
+      code,
+      label,
+      status: decisionGrade
+        ? exceeds
+          ? "fail"
+          : "pass"
+        : nationalReferenceExceeded
+          ? "fail"
+          : "review",
+      message: decisionGrade
+        ? `${actual.toFixed(1)}% / 확인 상한 ${limit.toFixed(1)}%`
+        : nationalReferenceExceeded
+          ? `${actual.toFixed(1)}% / 전국 시행령 참고 상한 ${limit.toFixed(1)}% 초과`
+          : `${actual.toFixed(1)}% / 참고 상한 ${limit.toFixed(1)}% · 필지별 원문 확인 전`,
+      source: evidence
+        ? `${constraintStatusLabel(evidence.status)} · ${evidence.sourceName}`
+        : "구버전 저장값 · 출처 미확인",
+    };
+  };
 
-  if (parcel.heightLimitM > 0) {
+  checks.push(
+    buildLimitCheck(
+      "bcr",
+      "건폐율",
+      metrics.preliminaryBcrPct,
+      parcel.maxBCRPct,
+      parcel.regulatoryConstraints?.bcr
+    )
+  );
+
+  checks.push(
+    buildLimitCheck(
+      "far",
+      "용적률",
+      metrics.preliminaryFarPct,
+      parcel.maxFARPct,
+      parcel.regulatoryConstraints?.far
+    )
+  );
+
+  const heightEvidence = parcel.regulatoryConstraints?.height;
+  if (regulatoryConstraintIsDecisionGrade(heightEvidence)) {
+    const limit = heightEvidence!.value!;
     checks.push({
       code: "height",
       label: "높이",
-      status: metrics.totalHeightM <= parcel.heightLimitM + 0.01 ? "pass" : "fail",
-      message: `${metrics.totalHeightM.toFixed(1)}m / 높이 한도 ${parcel.heightLimitM.toFixed(1)}m`,
-      source: "층고 합계 · 높이 한도",
+      status: metrics.totalHeightM <= limit + 0.01 ? "pass" : "fail",
+      message:
+        `계획 ${metrics.totalHeightM.toFixed(1)}m = 층고 합계 ${metrics.occupiedFloorHeightM.toFixed(1)}m + 옥상 여유 ${metrics.roofAllowanceM.toFixed(1)}m / 확인 한도 ${limit.toFixed(1)}m`,
+      source: `${constraintStatusLabel(heightEvidence!.status)} · ${heightEvidence!.sourceName}`,
     });
   } else {
     checks.push({
       code: "height",
       label: "높이",
       status: "unknown",
-      message: `계획 높이 ${metrics.totalHeightM.toFixed(1)}m · 별도 높이 한도 미확인`,
-      source: "층고 합계",
+      message:
+        `계획 ${metrics.totalHeightM.toFixed(1)}m = 층고 합계 ${metrics.occupiedFloorHeightM.toFixed(1)}m + 옥상 여유 ${metrics.roofAllowanceM.toFixed(1)}m · 필지별 높이 원문 미확인`,
+      source: heightEvidence
+        ? `${constraintStatusLabel(heightEvidence.status)} · ${heightEvidence.sourceName}`
+        : parcel.heightLimitM > 0
+          ? "구버전 높이 참고값은 법규 판정에서 제외"
+          : "가로구역·지구단위계획·고도지구·정북일조 원문 필요",
+    });
+  }
+
+  const floorEvidence = parcel.regulatoryConstraints?.floors;
+  if (floorEvidence?.value != null && floorEvidence.value > 0) {
+    const exceeds = metrics.aboveGroundFloors > floorEvidence.value;
+    const decisionGrade = regulatoryConstraintIsDecisionGrade(floorEvidence);
+    checks.push({
+      code: "floor-count",
+      label: "층수 제한",
+      status: decisionGrade ? (exceeds ? "fail" : "pass") : "review",
+      message: `계획 ${metrics.aboveGroundFloors}층 / ${decisionGrade ? "확인" : "입력·참고"} 한도 ${floorEvidence.value}층`,
+      source: `${constraintStatusLabel(floorEvidence.status)} · ${floorEvidence.sourceName}`,
+    });
+  } else {
+    checks.push({
+      code: "floor-count",
+      label: "층수 제한",
+      status: "unknown",
+      message: `계획 ${metrics.aboveGroundFloors}층 · 별도 층수 지정 여부 미확인`,
+      source: "지구단위계획·도시계획 결정 원문 필요",
     });
   }
 
@@ -432,10 +514,15 @@ export function calculatePlanningScenario(
     (max, floor) => Math.max(max, floorArea(floor)),
     0
   );
-  const totalHeightM = aboveFloors.reduce(
+  const occupiedFloorHeightM = aboveFloors.reduce(
     (sum, floor) => sum + nonNegative(floor.floorHeightM),
     0
   );
+  const roofAllowanceM =
+    parcel.roofAllowanceM != null
+      ? nonNegative(parcel.roofAllowanceM)
+      : DEFAULT_ROOF_ALLOWANCE_M;
+  const totalHeightM = occupiedFloorHeightM + roofAllowanceM;
 
   const parking = assessParking(
     scenario,
@@ -456,6 +543,8 @@ export function calculatePlanningScenario(
       parcel.lotAreaSqm > 0 ? (gradeFootprintAreaSqm / parcel.lotAreaSqm) * 100 : 0,
     preliminaryFarPct:
       parcel.lotAreaSqm > 0 ? (preliminaryFarAreaSqm / parcel.lotAreaSqm) * 100 : 0,
+    occupiedFloorHeightM,
+    roofAllowanceM,
     totalHeightM,
     requiredCars: parking.requiredCars,
     parkingShortfallCars: parking.shortfallCars,
@@ -496,6 +585,8 @@ export function calculatePlanningScenario(
       preliminaryFarAreaSqm: round(metrics.preliminaryFarAreaSqm),
       preliminaryBcrPct: round(metrics.preliminaryBcrPct, 1),
       preliminaryFarPct: round(metrics.preliminaryFarPct, 1),
+      occupiedFloorHeightM: round(metrics.occupiedFloorHeightM, 1),
+      roofAllowanceM: round(metrics.roofAllowanceM, 1),
       totalHeightM: round(metrics.totalHeightM, 1),
     },
     parking,
