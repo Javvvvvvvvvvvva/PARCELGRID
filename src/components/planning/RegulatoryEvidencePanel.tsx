@@ -60,8 +60,30 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
     height: numberText(baseSet?.height.value),
     floors: numberText(baseSet?.floors.value),
   }));
-  const [sourceName, setSourceName] = useState("");
-  const [sourceRef, setSourceRef] = useState("");
+  const [sourceNames, setSourceNames] = useState<Record<RegulatoryConstraintKey, string>>(
+    () => ({
+      far: baseSet?.far.status === "source-backed" ? baseSet.far.sourceName : "",
+      bcr: baseSet?.bcr.status === "source-backed" ? baseSet.bcr.sourceName : "",
+      height:
+        baseSet?.height.status === "source-backed" ? baseSet.height.sourceName : "",
+      floors:
+        baseSet?.floors.status === "source-backed" ? baseSet.floors.sourceName : "",
+    })
+  );
+  const [sourceRefs, setSourceRefs] = useState<Record<RegulatoryConstraintKey, string>>(
+    () => ({
+      far: baseSet?.far.status === "source-backed" ? baseSet.far.sourceRef ?? "" : "",
+      bcr: baseSet?.bcr.status === "source-backed" ? baseSet.bcr.sourceRef ?? "" : "",
+      height:
+        baseSet?.height.status === "source-backed"
+          ? baseSet.height.sourceRef ?? ""
+          : "",
+      floors:
+        baseSet?.floors.status === "source-backed"
+          ? baseSet.floors.sourceRef ?? ""
+          : "",
+    })
+  );
   const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [checkedBy, setCheckedBy] = useState("");
   const [checkedRole, setCheckedRole] = useState("");
@@ -76,11 +98,38 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
   };
 
   const persist = (sourceBacked: boolean) => {
+    const enteredKeys = FIELD_META.filter((field) => parseValue(field.key) != null).map(
+      (field) => field.key
+    );
+    const missingCore = FIELD_META.filter(
+      (field) => field.requiredForCore && parseValue(field.key) == null
+    ).map((field) => field.label);
+    const incompleteSources = enteredKeys.filter(
+      (key) => !sourceNames[key].trim() || !sourceRefs[key].trim()
+    );
     if (
       sourceBacked &&
-      (!sourceName.trim() || !sourceRef.trim() || !asOf || !checkedBy.trim() || !checkedRole.trim())
+      (missingCore.length > 0 ||
+        incompleteSources.length > 0 ||
+        !asOf ||
+        !checkedBy.trim() ||
+        !checkedRole.trim())
     ) {
-      setMessage("원문 확인값은 출처명·URL/문서번호·기준일·확인자·역할을 모두 입력해야 합니다.");
+      setMessage(
+        [
+          missingCore.length > 0
+            ? `핵심 값 필요: ${missingCore.join(", ")}.`
+            : null,
+          incompleteSources.length > 0
+            ? "입력한 각 항목의 원문명과 URL/문서번호가 필요합니다."
+            : null,
+          !asOf || !checkedBy.trim() || !checkedRole.trim()
+            ? "기준일·확인자·역할을 모두 입력하세요."
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
       return;
     }
 
@@ -91,8 +140,8 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
       far: replaceConstraintEvidence(baseSet.far, {
         value: parseValue("far"),
         status,
-        sourceName: sourceName || "사용자 입력",
-        sourceRef,
+        sourceName: sourceNames.far || "사용자 입력",
+        sourceRef: sourceRefs.far,
         asOf,
         checkedBy,
         checkedRole,
@@ -101,8 +150,8 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
       bcr: replaceConstraintEvidence(baseSet.bcr, {
         value: parseValue("bcr"),
         status,
-        sourceName: sourceName || "사용자 입력",
-        sourceRef,
+        sourceName: sourceNames.bcr || "사용자 입력",
+        sourceRef: sourceRefs.bcr,
         asOf,
         checkedBy,
         checkedRole,
@@ -111,8 +160,8 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
       height: replaceConstraintEvidence(baseSet.height, {
         value: parseValue("height"),
         status,
-        sourceName: sourceName || "사용자 입력",
-        sourceRef,
+        sourceName: sourceNames.height || "사용자 입력",
+        sourceRef: sourceRefs.height,
         asOf,
         checkedBy,
         checkedRole,
@@ -121,8 +170,8 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
       floors: replaceConstraintEvidence(baseSet.floors, {
         value: parseValue("floors"),
         status,
-        sourceName: sourceName || "사용자 입력",
-        sourceRef,
+        sourceName: sourceNames.floors || "사용자 입력",
+        sourceRef: sourceRefs.floors,
         asOf,
         checkedBy,
         checkedRole,
@@ -268,20 +317,40 @@ export function RegulatoryEvidencePanel({ projectId }: { projectId: string }) {
                   <span style={{ flexShrink: 0, fontSize: 11, color: "var(--fg-muted)" }}>{field.unit}</span>
                 </div>
                 <small style={{ minHeight: 28, fontSize: 9.5, lineHeight: 1.45, color: "var(--fg-faint)" }}>
-                  {evidence.sourceName}
+                  현재 근거: {evidence.sourceName}
                 </small>
+                <input
+                  value={sourceNames[field.key]}
+                  onChange={(event) =>
+                    setSourceNames((current) => ({
+                      ...current,
+                      [field.key]: event.target.value,
+                    }))
+                  }
+                  placeholder="적용 원문·조례·고시명"
+                  style={{ width: "100%", height: 32, border: "1px solid var(--border)", borderRadius: 7, padding: "0 8px", background: "var(--bg)", color: "var(--fg)", font: "inherit", fontSize: 10.5 }}
+                />
+                <input
+                  value={sourceRefs[field.key]}
+                  onChange={(event) =>
+                    setSourceRefs((current) => ({
+                      ...current,
+                      [field.key]: event.target.value,
+                    }))
+                  }
+                  placeholder="공식 URL·조문·고시번호"
+                  style={{ width: "100%", height: 32, border: "1px solid var(--border)", borderRadius: 7, padding: "0 8px", background: "var(--bg)", color: "var(--fg)", font: "inherit", fontSize: 10.5 }}
+                />
               </label>
             );
           })}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-          <Field label="원문·고시·조례명" value={sourceName} onChange={setSourceName} placeholder="예: 서울특별시 도시계획 조례" />
-          <Field label="원문 URL 또는 문서번호" value={sourceRef} onChange={setSourceRef} placeholder="공식 URL·고시번호·파일 참조" />
-          <Field label="기준일" value={asOf} onChange={setAsOf} type="date" />
+          <Field label="공통 확인 기준일" value={asOf} onChange={setAsOf} type="date" />
           <Field label="확인자" value={checkedBy} onChange={setCheckedBy} placeholder="성명" />
           <Field label="확인 역할" value={checkedRole} onChange={setCheckedRole} placeholder="건축사·도시계획 담당 등" />
-          <Field label="적용 메모" value={note} onChange={setNote} placeholder="완화·중첩·적용 조건" />
+          <Field label="공통 적용 메모" value={note} onChange={setNote} placeholder="완화·중첩·적용 조건" />
         </div>
 
         {message && (
