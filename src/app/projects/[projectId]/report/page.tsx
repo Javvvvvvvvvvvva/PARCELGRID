@@ -13,6 +13,11 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { won, num, scenarioViable } from "@/lib/utils/format";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { buildEvidenceGate } from "@/lib/handoff/evidence-gate";
+import {
+  constraintStatusLabel,
+  coreRegulatoryConstraintsVerified,
+  type RegulatoryConstraintEvidence,
+} from "@/lib/regulatory/constraints";
 
 const SQM_PER_PYEONG = 3.305785;
 
@@ -42,6 +47,9 @@ export default function ReportPage({
       address: data.parcel.address,
       geometryHash: geometry?.geometryHash ?? null,
       roadReferenceCount: data.parcel.roads?.length ?? 0,
+      regulatorySourceBacked: coreRegulatoryConstraintsVerified(
+        data.parcel.regulatoryConstraints
+      ),
       saleCompCount: comps.length,
       saleEstimateVersion: data.saleEstimate?.modelVersion ?? null,
       acquisitionEstimateVersion:
@@ -136,11 +144,38 @@ export default function ReportPage({
           <div className="rpt-ov">
             <OvItem l="대지면적" v={`${num(Math.round(parcel.lotArea * 100) / 100)}㎡ / ${pyeong.toFixed(1)}평`} />
             <OvItem l="용도지역" v={parcel.zoning} />
-            <OvItem l="용적률 상한" v={`${parcel.maxFAR}%`} />
-            <OvItem l="건폐율 상한" v={`${parcel.maxBCR}%`} />
+            <OvItem
+              l="용적률"
+              v={`${parcel.maxFAR}% · ${constraintStatusLabel(parcel.regulatoryConstraints?.far.status ?? "unknown")}`}
+            />
+            <OvItem
+              l="건폐율"
+              v={`${parcel.maxBCR}% · ${constraintStatusLabel(parcel.regulatoryConstraints?.bcr.status ?? "unknown")}`}
+            />
             <OvItem l="검토 인수가" v={won(parcel.acquiredPrice)} />
             <OvItem l="평당 검토 인수가" v={`${num(Math.round(parcel.acquiredPrice / pyeong))}만`} />
           </div>
+        </div>
+
+        <div className="rpt-sec">
+          <div className="rpt-sec-h">법규 수치 근거</div>
+          <div style={{ marginBottom: 10, fontSize: 10.5, lineHeight: 1.55, color: "var(--fg-muted)" }}>
+            VWorld는 용도지역·중첩 규제 명칭의 관측 출처입니다. 건폐율·용적률·높이 숫자는 아래 원문 상태가
+            <strong> 원문 확인</strong> 또는 <strong>전문가 승인</strong>일 때만 법규 판정에 사용합니다.
+          </div>
+          <table className="rpt-table">
+            <thead>
+              <tr>
+                <th>항목</th><th>값</th><th>근거 상태</th><th>원문·확인 정보</th>
+              </tr>
+            </thead>
+            <tbody>
+              <RegulatoryEvidenceRow label="건폐율" evidence={parcel.regulatoryConstraints?.bcr} />
+              <RegulatoryEvidenceRow label="용적률" evidence={parcel.regulatoryConstraints?.far} />
+              <RegulatoryEvidenceRow label="최고높이" evidence={parcel.regulatoryConstraints?.height} />
+              <RegulatoryEvidenceRow label="층수 제한" evidence={parcel.regulatoryConstraints?.floors} />
+            </tbody>
+          </table>
         </div>
 
         {/* 시나리오 비교 */}
@@ -207,6 +242,37 @@ export default function ReportPage({
         </button>
       </div>
     </div>
+  );
+}
+
+function RegulatoryEvidenceRow({
+  label,
+  evidence,
+}: {
+  label: string;
+  evidence?: RegulatoryConstraintEvidence;
+}) {
+  const value =
+    evidence?.value != null ? `${num(evidence.value)}${evidence.unit}` : "미확인";
+  const source = evidence
+    ? [
+        evidence.sourceName,
+        evidence.sourceRef,
+        evidence.asOf ? `기준일 ${evidence.asOf}` : null,
+        evidence.checkedBy
+          ? `확인 ${evidence.checkedBy}${evidence.checkedRole ? `(${evidence.checkedRole})` : ""}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "원문 미등록";
+  return (
+    <tr>
+      <td>{label}</td>
+      <td>{value}</td>
+      <td>{constraintStatusLabel(evidence?.status ?? "unknown")}</td>
+      <td style={{ maxWidth: 380, whiteSpace: "normal", lineHeight: 1.45 }}>{source}</td>
+    </tr>
   );
 }
 
