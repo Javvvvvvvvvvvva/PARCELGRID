@@ -11,6 +11,7 @@ import {
   type GuidedPlanningParcel,
 } from "@/lib/planning/guided-floor-stack";
 import {
+  defaultRevenueModelForUse,
   sortFloorPrograms,
 } from "@/lib/planning/scenario-utils";
 import {
@@ -18,6 +19,7 @@ import {
   updateFloorZone,
 } from "@/lib/planning/floor-program-editor";
 import type {
+  FloorUseType,
   PlanningParking,
   PlanningScenario,
   PlanningScenarioCalculation,
@@ -82,6 +84,40 @@ function floorSummary(floor: PlanningScenario["floorPrograms"][number]): string 
     guidedFloorArea(floor),
     1
   )}㎡${units > 0 ? ` · ${units}개` : ""}`;
+}
+
+function revenueUseForPlan(
+  primaryUse: PlanningScenario["primaryUse"],
+  floorLevel: number
+): FloorUseType {
+  if (primaryUse === "retail") return "retail";
+  if (primaryUse === "office") return "office";
+  if (primaryUse === "mixed") {
+    return floorLevel === 1 ? "retail" : "residential";
+  }
+  return "residential";
+}
+
+function applyPrimaryUse(
+  scenario: PlanningScenario,
+  primaryUse: PlanningScenario["primaryUse"]
+): PlanningScenario["floorPrograms"] {
+  return scenario.floorPrograms.map((floor) => {
+    if (floor.level < 1) return floor;
+    const useType = revenueUseForPlan(primaryUse, floor.level);
+    return {
+      ...floor,
+      zones: floor.zones.map((zone) =>
+        ["residential", "retail", "office"].includes(zone.useType)
+          ? {
+              ...zone,
+              useType,
+              revenueModel: defaultRevenueModelForUse(useType),
+            }
+          : zone
+      ),
+    };
+  });
 }
 
 export function PlanningGuidedEditor({
@@ -264,15 +300,19 @@ export function PlanningGuidedEditor({
           <span>대표 용도</span>
           <select
             value={scenario.primaryUse}
-            onChange={(event) =>
+            onChange={(event) => {
+              const primaryUse = event.target
+                .value as PlanningScenario["primaryUse"];
               applyPatch(
                 {
-                  primaryUse: event.target
-                    .value as PlanningScenario["primaryUse"],
+                  primaryUse,
+                  floorPrograms: applyPrimaryUse(scenario, primaryUse),
                 },
-                "대표 용도를 변경했습니다. 실제 계산은 아래 층별 용도가 기준입니다."
-              )
-            }
+                primaryUse === "mixed"
+                  ? "1층은 근린생활시설, 상부층은 주거로 빠르게 적용했습니다."
+                  : "지상층의 주 용도를 변경하고 사업성을 다시 계산했습니다."
+              );
+            }}
             style={fieldStyle}
           >
             {PRIMARY_USE_OPTIONS.map((option) => (
