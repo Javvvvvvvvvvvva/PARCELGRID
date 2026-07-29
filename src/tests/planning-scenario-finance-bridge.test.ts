@@ -122,6 +122,47 @@ describe("PlanningScenario → finance bridge", () => {
     expect(computed!.scenarioComparison).toBeUndefined();
   });
 
+  it("carries the sourced facade cost delta into Stage 3 hard cost", () => {
+    const baseScenario = mixedScenario();
+    const baseComputed = recomputeFromPlanningScenarios(
+      parcel,
+      [baseScenario],
+      baseScenario.id,
+      null,
+      { calculateMaxAcquisition: false }
+    );
+
+    const materialScenario = mixedScenario();
+    materialScenario.materials = {
+      primaryFacadeMaterial: "brick-veneer",
+      secondaryFacadeMaterial: "exposed-concrete",
+      primaryFacadeSharePct: 80,
+      windowRatioPct: 25,
+      facadeAreaOverrideSqm: 100,
+      baselineFacadeUnitCostPerSqmWon: 100_000,
+      selectedFacadeUnitCostPerSqmWon: 200_000,
+      rateEvidence: {
+        status: "source-backed",
+        sourceName: "테스트 견적서",
+        observedAt: "2026-07-29",
+      },
+    };
+    const materialComputed = recomputeFromPlanningScenarios(
+      parcel,
+      [materialScenario],
+      materialScenario.id,
+      null,
+      { calculateMaxAcquisition: false }
+    );
+
+    expect(baseComputed).not.toBeNull();
+    expect(materialComputed).not.toBeNull();
+    expect(
+      materialComputed!.scenarios[0].hardCost -
+        baseComputed!.scenarios[0].hardCost
+    ).toBeCloseTo(1_000, 6);
+  });
+
   it("rejects a calculation that belongs to another planning scenario", () => {
     const scenario = mixedScenario();
     const calculation = calculate(scenario);
