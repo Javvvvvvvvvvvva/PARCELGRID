@@ -9,6 +9,11 @@ import {
   resolveZoneRevenueModel,
   summarizePlanningScenario,
 } from "@/lib/planning/scenario-utils";
+import {
+  calculatePlanningMaterialAdjustment,
+  PLANNING_FACADE_LABELS,
+  resolvePlanningMaterials,
+} from "@/lib/planning/materials";
 import type {
   FloorUseType,
   FloorZone,
@@ -154,9 +159,14 @@ function calculateEconomics(
   const weightedConstructionAreaSqm =
     aboveGroundAreaSqm +
     basementAreaSqm * Math.max(1, assumptions.basementCostMultiplier);
-  const constructionCostManwon =
+  const baseConstructionCostManwon =
     (weightedConstructionAreaSqm * nonNegative(assumptions.constructionCostPerSqmWon)) /
     WON_PER_MANWON;
+  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
+  const constructionCostManwon = Math.max(
+    0,
+    baseConstructionCostManwon + materialAdjustment.adjustmentManwon
+  );
   const softCostManwon =
     constructionCostManwon * (nonNegative(assumptions.softCostRatePct) / 100);
   const contingencyCostManwon =
@@ -211,6 +221,19 @@ function calculateEconomics(
     acquisitionCostManwon: round(acquisitionCostManwon),
     demolitionCostManwon: round(demolitionCostManwon),
     constructionCostManwon: round(constructionCostManwon),
+    baseConstructionCostManwon: round(baseConstructionCostManwon),
+    materialAdjustmentCostManwon: round(
+      materialAdjustment.adjustmentManwon
+    ),
+    facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
+    materialCostStatus: materialAdjustment.priced
+      ? materialAdjustment.evidenceStatus === "source-backed"
+        ? "source-backed"
+        : materialAdjustment.areaBasis === "user-input"
+          ? "user-input"
+          : "estimated"
+      : "unpriced",
+    materialCostSource: materialAdjustment.sourceLabel,
     softCostManwon: round(softCostManwon),
     contingencyCostManwon: round(contingencyCostManwon),
     financingCostManwon: round(financingCostManwon),
@@ -445,6 +468,25 @@ function buildChecks(
       status: "fail",
       message: "임대 구역이 있지만 Cap rate가 0이어서 자산가치를 계산할 수 없습니다.",
       source: "사업성 가정",
+    });
+  }
+
+  const materials = resolvePlanningMaterials(scenario.materials);
+  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
+  if (materials.primaryFacadeMaterial !== "unselected") {
+    const sourceBacked =
+      materialAdjustment.priced &&
+      materialAdjustment.evidenceStatus === "source-backed";
+    checks.push({
+      code: "material-cost",
+      label: "외장재·공사비",
+      status: sourceBacked ? "pass" : "review",
+      message: materialAdjustment.priced
+        ? `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} · 외벽 ${materialAdjustment.facadeAreaSqm.toFixed(1)}㎡ · 기준 대비 ${materialAdjustment.adjustmentManwon >= 0 ? "+" : ""}${materialAdjustment.adjustmentManwon.toFixed(0)}만원`
+        : `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} 3D 표현만 적용 · 기준·선택 단가 입력 전 공사비 미반영`,
+      source: materialAdjustment.priced
+        ? `${materialAdjustment.sourceLabel} · ${materialAdjustment.areaNote}`
+        : "사용자 단가·견적 근거 필요",
     });
   }
 
