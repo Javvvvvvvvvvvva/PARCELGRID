@@ -96,7 +96,7 @@ export function PlanningGuidedEditor({
   onChange: (patch: GuidedPatch) => void;
 }) {
   const sortedFloors = useMemo(
-    () => sortFloorPrograms(scenario.floorPrograms).reverse(),
+    () => sortFloorPrograms(scenario.floorPrograms),
     [scenario.floorPrograms]
   );
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(
