@@ -53,7 +53,11 @@ describe("guided floor stack", () => {
 
     expect(result.status).toBe("adjusted");
     expect(result.floorPrograms).toHaveLength(3);
-    expect(guidedFloorArea(result.floorPrograms[2])).toBeCloseTo(30, 5);
+    const created = result.floorPrograms.find(
+      (candidate) => candidate.id === result.createdFloorId
+    );
+    expect(created).toBeDefined();
+    expect(guidedFloorArea(created!)).toBeCloseTo(30, 5);
   });
 
   it("blocks a floor above a confirmed floor-count limit", () => {
@@ -81,7 +85,11 @@ describe("guided floor stack", () => {
     );
 
     expect(result.status).toBe("applied");
-    expect(guidedFloorArea(result.floorPrograms[2])).toBeCloseTo(60, 5);
+    const created = result.floorPrograms.find(
+      (candidate) => candidate.id === result.createdFloorId
+    );
+    expect(created).toBeDefined();
+    expect(guidedFloorArea(created!)).toBeCloseTo(60, 5);
     expect(result.message).toContain("미확정 규제");
   });
 
