@@ -227,7 +227,8 @@ function calculateEconomics(
     ),
     facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
     materialCostStatus: materialAdjustment.priced
-      ? materialAdjustment.evidenceStatus === "source-backed"
+      ? materialAdjustment.evidenceStatus === "source-backed" &&
+        materialAdjustment.areaBasis === "user-input"
         ? "source-backed"
         : materialAdjustment.areaBasis === "user-input"
           ? "user-input"
@@ -476,6 +477,7 @@ function buildChecks(
   if (materials.primaryFacadeMaterial !== "unselected") {
     const sourceBacked =
       materialAdjustment.priced &&
+      materialAdjustment.areaBasis === "user-input" &&
       materialAdjustment.evidenceStatus === "source-backed";
     checks.push({
       code: "material-cost",
