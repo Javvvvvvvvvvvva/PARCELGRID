@@ -151,9 +151,12 @@ export function PlanningMaterialEditor({
           label="단가 근거"
           value={adjustment.sourceLabel}
           sub={
-            materials.rateEvidence?.status === "source-backed"
-              ? "근거 자료 연결"
-              : "확정 견적 전 사용자 검토 필요"
+            materials.rateEvidence?.status === "source-backed" &&
+            adjustment.areaBasis === "user-input"
+              ? "단가·수량 근거 연결"
+              : adjustment.areaBasis !== "user-input"
+                ? "외벽면적 직접 입력 전 개략 추정"
+                : "확정 견적 전 사용자 검토 필요"
           }
         />
       </div>
@@ -258,8 +261,9 @@ export function PlanningMaterialEditor({
         }}
       >
         <p style={{ margin: 0, fontSize: 10, color: "var(--fg-faint)" }}>
-          외벽 직접 입력이 없으면 층 면적을 정사각형으로 환산한 개략치를
-          사용합니다. 확정 견적에는 실제 3D 벽체 수량이 필요합니다.
+          외벽 직접 입력이 없으면 층 면적 환산 개략치를 사용하며
+          &apos;근거 확인&apos;으로 판정하지 않습니다. 확정 견적에는
+          실측·도면 외벽면적과 단가 출처가 모두 필요합니다.
         </p>
         <button type="button" style={buttonStyle} onClick={downloadPlanDna}>
           Plan DNA JSON 다운로드
