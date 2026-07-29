@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
 import { PlanningMassingView } from "@/components/planning/PlanningMassingView";
+import { PlanningMaterialEditor } from "@/components/planning/PlanningMaterialEditor";
 import { Panel, SectionTitle } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
@@ -915,6 +916,23 @@ export function PlanningScenarioWorkspaceV4({
                     )}
                   />
                   <Metric
+                    label="외장재 증감"
+                    value={
+                      selectedCalculation.economicsPreview.materialCostStatus ===
+                      "unpriced"
+                        ? "미산정"
+                        : won(
+                            selectedCalculation.economicsPreview
+                              .materialAdjustmentCostManwon ?? 0,
+                            { full: true, sign: true }
+                          )
+                    }
+                    sub={
+                      selectedCalculation.economicsPreview.materialCostSource ??
+                      "재료 단가 입력 필요"
+                    }
+                  />
+                  <Metric
                     label="예상 이익"
                     value={won(
                       selectedCalculation.economicsPreview.profitManwon,
@@ -931,6 +949,29 @@ export function PlanningScenarioWorkspaceV4({
                     )}
                   />
                 </div>
+              </Panel>
+
+              <Panel
+                title="외장재·Plan DNA"
+                source="3D 표현 · 사용자 단가 근거 · 이미지 생성 준비"
+                bodyStyle={{ padding: "var(--s5)" }}
+              >
+                <PlanningMaterialEditor
+                  scenario={selectedScenario}
+                  calculation={selectedCalculation}
+                  parcel={{
+                    projectId,
+                    address: parcel.address,
+                    parcelAreaSqm: parcel.lotArea,
+                    maxBuildingCoveragePct: parcel.maxBCR,
+                    maxFloorAreaRatioPct: parcel.maxFAR,
+                  }}
+                  onChange={(materials) =>
+                    editPlanningScenarioDraft(selectedScenario.id, {
+                      materials,
+                    })
+                  }
+                />
               </Panel>
 
               <div className="lower-grid">
