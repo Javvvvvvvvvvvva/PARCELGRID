@@ -91,6 +91,44 @@ export interface PlanningParking {
   columnLossPct?: number;
 }
 
+export type PlanningFacadeMaterial =
+  | "unselected"
+  | "standard-render"
+  | "brick-veneer"
+  | "exposed-concrete"
+  | "metal-panel";
+
+export type PlanningMaterialEvidenceStatus =
+  | "unpriced"
+  | "user-input"
+  | "source-backed";
+
+export interface PlanningMaterialRateEvidence {
+  status: PlanningMaterialEvidenceStatus;
+  sourceName?: string;
+  sourceUrl?: string;
+  observedAt?: string;
+  note?: string;
+}
+
+/**
+ * 외장 선택과 비용 근거를 함께 보존한다.
+ * 단가가 없는 재료 선택은 3D 표현에만 사용하고 사업비에는 반영하지 않는다.
+ */
+export interface PlanningMaterialSelection {
+  primaryFacadeMaterial: PlanningFacadeMaterial;
+  secondaryFacadeMaterial: PlanningFacadeMaterial;
+  primaryFacadeSharePct: number;
+  windowRatioPct: number;
+  /** 실제 외벽 순면적을 확인한 경우에만 입력한다. */
+  facadeAreaOverrideSqm?: number;
+  /** 기존 총공사비에 포함된 기준 외벽 마감 단가. */
+  baselineFacadeUnitCostPerSqmWon?: number;
+  /** 선택한 외벽 사양의 설치 단가. */
+  selectedFacadeUnitCostPerSqmWon?: number;
+  rateEvidence?: PlanningMaterialRateEvidence;
+}
+
 export type PlanningCheckStatus = "pass" | "review" | "fail" | "unknown";
 
 export interface PlanningCheck {
@@ -174,6 +212,15 @@ export interface PlanningEconomicsPreview {
   acquisitionCostManwon: number;
   demolitionCostManwon: number;
   constructionCostManwon: number;
+  /** 재료 증감 전 기본 공사비. 구버전 저장값에는 없을 수 있다. */
+  baseConstructionCostManwon?: number;
+  /** 기준 외벽 단가 대비 선택 사양 증감액. */
+  materialAdjustmentCostManwon?: number;
+  /** 재료비 계산에 사용한 외벽 순면적. */
+  facadeAreaSqm?: number;
+  /** 외벽 면적·단가의 근거 상태. */
+  materialCostStatus?: PlanningMaterialEvidenceStatus | "estimated";
+  materialCostSource?: string;
   softCostManwon: number;
   contingencyCostManwon: number;
   financingCostManwon: number;
@@ -206,6 +253,8 @@ export interface PlanningScenario {
   floorPrograms: FloorProgram[];
   placement: PlanningPlacement;
   parking: PlanningParking;
+  /** 기존 저장 계획안은 값이 없을 수 있으며 미선택 계획 매스로 처리한다. */
+  materials?: PlanningMaterialSelection;
   checks: PlanningCheck[];
   economicsPreview: PlanningEconomicsPreview;
   recommendation?: PlanningRecommendationMetadata;
