@@ -90,6 +90,10 @@ export function resolvePlanningMaterials(
     rateEvidence: {
       ...defaults.rateEvidence,
       ...selection?.rateEvidence,
+      status:
+        selection?.rateEvidence?.status ??
+        defaults.rateEvidence?.status ??
+        "unpriced",
     },
   };
 }
