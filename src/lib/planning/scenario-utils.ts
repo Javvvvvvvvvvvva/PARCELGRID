@@ -8,6 +8,7 @@ import type {
   PlanningScenarioOrigin,
   PlanningScenarioSummary,
 } from "./types";
+import { createDefaultPlanningMaterials } from "./materials";
 
 function uid(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -116,6 +117,7 @@ export function createBlankPlanningScenario(input?: {
       strategy: "none",
       providedCars: 0,
     },
+    materials: createDefaultPlanningMaterials(),
     checks: [],
     economicsPreview: emptyEconomicsPreview(input?.acquisitionCostManwon ?? 0),
   };
@@ -143,6 +145,14 @@ export function clonePlanningScenario(
     })),
     placement: { ...source.placement },
     parking: { ...source.parking },
+    materials: source.materials
+      ? {
+          ...source.materials,
+          rateEvidence: source.materials.rateEvidence
+            ? { ...source.materials.rateEvidence }
+            : undefined,
+        }
+      : createDefaultPlanningMaterials(),
     checks: source.checks.map((check) => ({ ...check })),
     economicsPreview: {
       ...source.economicsPreview,
