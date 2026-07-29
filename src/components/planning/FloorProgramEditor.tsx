@@ -79,7 +79,10 @@ interface FloorProgramEditorProps {
   scenario: PlanningScenario;
   onChange: (
     patch: Partial<
-      Pick<PlanningScenario, "floorPrograms" | "parking" | "primaryUse">
+      Pick<
+        PlanningScenario,
+        "floorPrograms" | "parking" | "placement" | "primaryUse"
+      >
     >
   ) => void;
 }
@@ -570,6 +573,96 @@ export function FloorProgramEditor({
         })}
       </div>
 
+      <section className="placement-panel">
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 750 }}>
+            건물 배치 정밀값
+          </div>
+          <div
+            style={{
+              marginTop: 3,
+              fontSize: 10.5,
+              color: "var(--fg-faint)",
+            }}
+          >
+            빠른 계획보다 세밀한 위치·회전·후퇴 값을 직접 입력합니다.
+          </div>
+        </div>
+        <div className="placement-settings-grid">
+          <NumberField
+            label="좌우 이동"
+            value={scenario.placement.offsetXM}
+            min={-100}
+            max={100}
+            step={0.1}
+            suffix="m"
+            onChange={(value) =>
+              onChange({
+                placement: { ...scenario.placement, offsetXM: value },
+              })
+            }
+          />
+          <NumberField
+            label="남북 이동"
+            value={scenario.placement.offsetZM}
+            min={-100}
+            max={100}
+            step={0.1}
+            suffix="m"
+            onChange={(value) =>
+              onChange({
+                placement: { ...scenario.placement, offsetZM: value },
+              })
+            }
+          />
+          <NumberField
+            label="회전각"
+            value={scenario.placement.rotationDeg}
+            min={-360}
+            max={360}
+            step={0.1}
+            suffix="°"
+            onChange={(value) =>
+              onChange({
+                placement: { ...scenario.placement, rotationDeg: value },
+              })
+            }
+          />
+          <NumberField
+            label="전면도로 후퇴"
+            value={scenario.placement.roadSetbackM}
+            min={0}
+            max={50}
+            step={0.1}
+            suffix="m"
+            onChange={(value) =>
+              onChange({
+                placement: {
+                  ...scenario.placement,
+                  roadSetbackM: Math.max(0, value),
+                },
+              })
+            }
+          />
+          <NumberField
+            label="북측 후퇴"
+            value={scenario.placement.northSetbackM}
+            min={0}
+            max={50}
+            step={0.1}
+            suffix="m"
+            onChange={(value) =>
+              onChange({
+                placement: {
+                  ...scenario.placement,
+                  northSetbackM: Math.max(0, value),
+                },
+              })
+            }
+          />
+        </div>
+      </section>
+
       <section className="parking-panel">
         <div style={{ fontSize: 12, fontWeight: 750 }}>주차 계획</div>
         <div className="parking-settings-grid">
@@ -670,30 +763,37 @@ export function FloorProgramEditor({
           background: var(--bg-elev);
         }
         .zone-edit-row label,
+        .placement-settings-grid label,
         .parking-settings-grid label {
           min-width: 0;
           display: grid;
           gap: 4px;
         }
         .zone-edit-row label > span,
+        .placement-settings-grid label > span,
         .parking-settings-grid label > span {
           font-size: 9.5px;
           color: var(--fg-faint);
         }
+        .placement-panel,
         .parking-panel {
           padding: 12px;
           border: 1px solid var(--border);
           border-radius: 11px;
           background: var(--bg-sunken);
         }
+        .placement-settings-grid,
+        .placement-settings-grid {
+          grid-template-columns: repeat(3, minmax(120px, 1fr));
+        }
         .parking-settings-grid {
-          display: grid;
           grid-template-columns: minmax(140px, 1fr) minmax(120px, 0.7fr);
           gap: 8px;
           margin-top: 9px;
         }
         @media (max-width: 760px) {
           .floor-settings-grid,
+          .placement-settings-grid,
           .parking-settings-grid {
             grid-template-columns: 1fr;
           }
