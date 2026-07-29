@@ -783,13 +783,16 @@ export function FloorProgramEditor({
           background: var(--bg-sunken);
         }
         .placement-settings-grid,
+        .parking-settings-grid {
+          display: grid;
+          gap: 8px;
+          margin-top: 9px;
+        }
         .placement-settings-grid {
           grid-template-columns: repeat(3, minmax(120px, 1fr));
         }
         .parking-settings-grid {
           grid-template-columns: minmax(140px, 1fr) minmax(120px, 0.7fr);
-          gap: 8px;
-          margin-top: 9px;
         }
         @media (max-width: 760px) {
           .floor-settings-grid,
