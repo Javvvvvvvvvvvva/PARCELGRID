@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
+import { PlanningGuidedEditor } from "@/components/planning/PlanningGuidedEditor";
 import { PlanningMassingView } from "@/components/planning/PlanningMassingView";
 import { PlanningMaterialEditor } from "@/components/planning/PlanningMaterialEditor";
 import { Panel, SectionTitle } from "@/components/ui/primitives";
@@ -56,6 +57,7 @@ const CHECK_TONE: Record<
 };
 
 type NewPlanMode = "blank" | "clone";
+type PlanningEditorMode = "guided" | "expert";
 
 function scenarioSeed(parcel: {
   lotArea: number;
@@ -405,6 +407,7 @@ export function PlanningScenarioWorkspaceV4({
   const [newPlanOpen, setNewPlanOpen] = useState(false);
   const [newPlanName, setNewPlanName] = useState("새 계획안");
   const [newPlanMode, setNewPlanMode] = useState<NewPlanMode>("blank");
+  const [editorMode, setEditorMode] = useState<PlanningEditorMode>("guided");
   const initializedRef = useRef(false);
 
   const parcel = data?.parcel;
@@ -842,6 +845,35 @@ export function PlanningScenarioWorkspaceV4({
                   representative={isRepresentative}
                 />
 
+                <section className="editor-mode-switch" aria-label="계획 편집 방식">
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 800 }}>
+                      편집 방식
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 3,
+                        fontSize: 10.5,
+                        color: "var(--fg-muted)",
+                      }}
+                    >
+                      같은 계획 데이터를 빠른 조작 또는 정밀 숫자로 편집합니다.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                    <ModeButton
+                      active={editorMode === "guided"}
+                      onClick={() => setEditorMode("guided")}
+                      label="초보자 · 빠른 계획"
+                    />
+                    <ModeButton
+                      active={editorMode === "expert"}
+                      onClick={() => setEditorMode("expert")}
+                      label="전문가 · 정밀 편집"
+                    />
+                  </div>
+                </section>
+
                 <PlanningMassingView
                   boundary={parcel.boundary}
                   zoning={parcel.zoning ?? ""}
@@ -976,16 +1008,38 @@ export function PlanningScenarioWorkspaceV4({
 
               <div className="lower-grid">
                 <Panel
-                  title="층별 프로그램 편집"
-                  source="실시간 재계산"
+                  title={
+                    editorMode === "guided"
+                      ? "빠른 층·배치 편집"
+                      : "층별 프로그램 정밀 편집"
+                  }
+                  source={
+                    editorMode === "guided"
+                      ? "초보자 가이드 · 실시간 재계산"
+                      : "전문가 숫자 입력 · 실시간 재계산"
+                  }
                   bodyStyle={{ padding: "var(--s4)" }}
                 >
-                  <FloorProgramEditor
-                    scenario={selectedScenario}
-                    onChange={(patch) =>
-                      editPlanningScenarioDraft(selectedScenario.id, patch)
-                    }
-                  />
+                  {editorMode === "guided" ? (
+                    <PlanningGuidedEditor
+                      scenario={selectedScenario}
+                      calculation={selectedCalculation}
+                      parcel={{
+                        lotAreaSqm: parcel.lotArea,
+                        regulatoryConstraints: parcel.regulatoryConstraints,
+                      }}
+                      onChange={(patch) =>
+                        editPlanningScenarioDraft(selectedScenario.id, patch)
+                      }
+                    />
+                  ) : (
+                    <FloorProgramEditor
+                      scenario={selectedScenario}
+                      onChange={(patch) =>
+                        editPlanningScenarioDraft(selectedScenario.id, patch)
+                      }
+                    />
+                  )}
                 </Panel>
 
                 <Panel
@@ -1063,6 +1117,18 @@ export function PlanningScenarioWorkspaceV4({
           grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) auto;
           gap: 16px;
           align-items: end;
+        }
+        .editor-mode-switch {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
+          flex-wrap: wrap;
+          margin: 12px 0;
+          padding: 11px 12px;
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          background: var(--bg-sunken);
         }
         .selected-metrics,
         .economics-grid {
