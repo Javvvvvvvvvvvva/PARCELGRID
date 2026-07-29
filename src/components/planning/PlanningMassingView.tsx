@@ -22,6 +22,10 @@ import {
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
 import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
+import {
+  planningMaterialAppearance,
+  type PlanningMaterialAppearance,
+} from "@/lib/planning/materials";
 import type {
   FloorUseType,
   PlanningScenario,
@@ -135,6 +139,7 @@ function FloorMassMesh({
   selected,
   hovered,
   extent,
+  appearance,
   onSelect,
   onHover,
 }: {
@@ -142,6 +147,7 @@ function FloorMassMesh({
   selected: boolean;
   hovered: boolean;
   extent: number;
+  appearance: PlanningMaterialAppearance | null;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
 }) {
@@ -165,6 +171,22 @@ function FloorMassMesh({
   const overCapacity = !mass.fitsEnvelope;
   const unsupported = mass.level > 1 && !mass.supportedByLowerFloor;
   const invalid = overCapacity || unsupported;
+  const facadeMaterialApplies =
+    appearance != null &&
+    mass.level > 0 &&
+    mass.dominantUse !== "piloti" &&
+    mass.dominantUse !== "parking";
+  const normalColor = useMemo(() => {
+    if (!facadeMaterialApplies || !appearance) {
+      return USE_COLOR[mass.dominantUse];
+    }
+    return new THREE.Color(appearance.primaryColor)
+      .lerp(
+        new THREE.Color(appearance.secondaryColor),
+        1 - appearance.primarySharePct / 100
+      )
+      .getStyle();
+  }, [appearance, facadeMaterialApplies, mass.dominantUse]);
 
   if (!renderable) return null;
 
@@ -194,7 +216,7 @@ function FloorMassMesh({
                 ? "#ef4444"
                 : overCapacity
                   ? "#dc2626"
-                  : USE_COLOR[mass.dominantUse]
+                  : normalColor
           }
           transparent
           opacity={
@@ -208,8 +230,12 @@ function FloorMassMesh({
                   ? 0.34
                   : 0.7
           }
-          roughness={0.58}
-          metalness={0.04}
+          roughness={
+            facadeMaterialApplies && appearance ? appearance.roughness : 0.58
+          }
+          metalness={
+            facadeMaterialApplies && appearance ? appearance.metalness : 0.04
+          }
           wireframe={unsupported}
           side={THREE.DoubleSide}
           depthWrite={!unsupported}
@@ -303,6 +329,7 @@ function PlanningScene({
   showBasements,
   selectedFloorId,
   hoveredFloorId,
+  appearance,
   onSelect,
   onHover,
 }: {
@@ -312,6 +339,7 @@ function PlanningScene({
   showBasements: boolean;
   selectedFloorId: string | null;
   hoveredFloorId: string | null;
+  appearance: PlanningMaterialAppearance | null;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
 }) {
@@ -338,6 +366,7 @@ function PlanningScene({
           selected={selectedFloorId === mass.id}
           hovered={hoveredFloorId === mass.id}
           extent={extent}
+          appearance={appearance}
           onSelect={onSelect}
           onHover={onHover}
         />
@@ -541,6 +570,10 @@ export function PlanningMassingView({
         : null,
     [boundary, zoning, scenario, roads, setback]
   );
+  const appearance = useMemo(
+    () => planningMaterialAppearance(scenario.materials),
+    [scenario.materials]
+  );
 
   if (!data) {
     return (
@@ -638,6 +671,7 @@ export function PlanningMassingView({
                 showBasements={showBasements}
                 selectedFloorId={selectedFloorId}
                 hoveredFloorId={hoveredFloorId}
+                appearance={appearance}
                 onSelect={(id) =>
                   setSelectedFloorId((current) =>
                     current === id ? null : id
