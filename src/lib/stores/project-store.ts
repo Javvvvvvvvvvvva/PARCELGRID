@@ -15,7 +15,12 @@ import type {
   FinancialSourceMap,
   FinancialSourceRecord,
 } from "@/lib/finance/source-data-gate";
-import type { ProjectComputed } from "@/lib/services/compute-project";
+import {
+  computeProject,
+  type ProjectComputed,
+} from "@/lib/services/compute-project";
+import { defaultAssumptions } from "@/lib/finance/scenario";
+import { planningScenarioToFinanceScenario } from "@/lib/planning/finance-adapter";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
@@ -412,7 +417,43 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
+          const baseAssumptions =
+            state.data?.scenarios.find((candidate) => candidate.recommended)
+              ?._raw.assumptions ??
+            state.data?.scenarios[0]?._raw.assumptions ??
+            defaultAssumptions();
+
+          let nextData = state.data;
+          try {
+            const financeScenario = planningScenarioToFinanceScenario(
+              scenario,
+              parcel,
+              baseAssumptions
+            );
+            const computed = computeProject(parcel, [financeScenario], {
+              startDate: parcel.acquired,
+              recommendedId: financeScenario.id,
+              calculateMaxAcquisition: true,
+            });
+            nextData = {
+              ...computed,
+              comps: state.data?.comps ?? [],
+              saleEstimate: state.data?.saleEstimate,
+              scenarioComparison: state.data?.scenarioComparison,
+            };
+          } catch (error) {
+            set(
+              representativeInvalidation(
+                error instanceof Error
+                  ? `대표 계획안 금융 시나리오 생성 실패: ${error.message}`
+                  : "대표 계획안 금융 시나리오를 생성하지 못했습니다."
+              )
+            );
+            return false;
+          }
+
           set({
+            data: nextData,
             representativePlanningScenarioId: id,
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
