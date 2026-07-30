@@ -16,6 +16,7 @@ import type {
   FinancialSourceRecord,
 } from "@/lib/finance/source-data-gate";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
@@ -47,6 +48,15 @@ export interface PendingOverride {
   overrideValue: number;
   reason?: string;
   evidenceUrl?: string;
+}
+
+export interface Stage3FeasibilitySnapshot {
+  projectId: string;
+  representativeScenarioId: string;
+  representativeScenarioVersion: number;
+  geometryHash: string;
+  savedAt: string;
+  data: ProjectComputed;
 }
 
 interface ProjectStore {
@@ -81,6 +91,13 @@ interface ProjectStore {
     projectId: string,
     field: FinancialSourceRecord["field"]
   ) => void;
+
+  /** Stage 3에서 명시적으로 저장한 보고서용 계산 스냅샷. */
+  stage3FeasibilitySnapshots: Record<string, Stage3FeasibilitySnapshot>;
+  saveStage3FeasibilitySnapshot: (
+    snapshot: Stage3FeasibilitySnapshot
+  ) => void;
+  clearStage3FeasibilitySnapshot: (projectId: string) => void;
 
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
@@ -224,6 +241,22 @@ export const useProjectStore = create<ProjectStore>()(
                 [projectId]: projectRecords,
               },
             };
+          }),
+
+        stage3FeasibilitySnapshots: {},
+        saveStage3FeasibilitySnapshot: (snapshot) =>
+          set((state) => ({
+            data: snapshot.data,
+            stage3FeasibilitySnapshots: {
+              ...state.stage3FeasibilitySnapshots,
+              [snapshot.projectId]: snapshot,
+            },
+          })),
+        clearStage3FeasibilitySnapshot: (projectId) =>
+          set((state) => {
+            const next = { ...state.stage3FeasibilitySnapshots };
+            delete next[projectId];
+            return { stage3FeasibilitySnapshots: next };
           }),
 
         envelopePlan: null,
@@ -412,7 +445,39 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
+          let nextData: ProjectComputed | null = null;
+          try {
+            nextData = recomputeFromPlanningScenarios(
+              parcel,
+              state.planningScenarios,
+              id,
+              state.data,
+              {
+                startDate: parcel.acquired,
+                calculateMaxAcquisition: true,
+              }
+            );
+          } catch (error) {
+            set(
+              representativeInvalidation(
+                error instanceof Error
+                  ? `대표 계획안 금융 재계산 실패: ${error.message}`
+                  : "대표 계획안 금융 재계산을 완료하지 못했습니다."
+              )
+            );
+            return false;
+          }
+          if (!nextData) {
+            set(
+              representativeInvalidation(
+                "대표 계획안을 금융 시나리오로 변환하지 못했습니다."
+              )
+            );
+            return false;
+          }
+
           set({
+            data: nextData,
             representativePlanningScenarioId: id,
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
@@ -447,6 +512,7 @@ export const useProjectStore = create<ProjectStore>()(
           draftAssumptions: state.draftAssumptions,
           draftAcquisitionPrices: state.draftAcquisitionPrices,
           financialSources: state.financialSources,
+          stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
         }),
       }
     )
