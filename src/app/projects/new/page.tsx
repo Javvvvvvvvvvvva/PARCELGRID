@@ -649,7 +649,7 @@ function LandProxyNote({
         </div>
         <Button
           type="button"
-          variant="secondary"
+          variant="default"
           onClick={() => onApply(estimate.estimateManwon)}
           aria-label={`토지 proxy 환산가 ${(
             estimate.estimateManwon / 10_000
