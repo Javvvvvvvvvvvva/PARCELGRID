@@ -50,6 +50,15 @@ export interface PendingOverride {
   evidenceUrl?: string;
 }
 
+export interface Stage3FeasibilitySnapshot {
+  projectId: string;
+  representativeScenarioId: string;
+  representativeScenarioVersion: number;
+  geometryHash: string;
+  savedAt: string;
+  data: ProjectComputed;
+}
+
 interface ProjectStore {
   data: ProjectComputed | null;
   setData: (data: ProjectComputed) => void;
@@ -82,6 +91,13 @@ interface ProjectStore {
     projectId: string,
     field: FinancialSourceRecord["field"]
   ) => void;
+
+  /** Stage 3에서 명시적으로 저장한 보고서용 계산 스냅샷. */
+  stage3FeasibilitySnapshots: Record<string, Stage3FeasibilitySnapshot>;
+  saveStage3FeasibilitySnapshot: (
+    snapshot: Stage3FeasibilitySnapshot
+  ) => void;
+  clearStage3FeasibilitySnapshot: (projectId: string) => void;
 
   envelopePlan: EnvelopePlan | null;
   setEnvelopePlan: (plan: EnvelopePlan) => void;
@@ -225,6 +241,22 @@ export const useProjectStore = create<ProjectStore>()(
                 [projectId]: projectRecords,
               },
             };
+          }),
+
+        stage3FeasibilitySnapshots: {},
+        saveStage3FeasibilitySnapshot: (snapshot) =>
+          set((state) => ({
+            data: snapshot.data,
+            stage3FeasibilitySnapshots: {
+              ...state.stage3FeasibilitySnapshots,
+              [snapshot.projectId]: snapshot,
+            },
+          })),
+        clearStage3FeasibilitySnapshot: (projectId) =>
+          set((state) => {
+            const next = { ...state.stage3FeasibilitySnapshots };
+            delete next[projectId];
+            return { stage3FeasibilitySnapshots: next };
           }),
 
         envelopePlan: null,
@@ -480,6 +512,7 @@ export const useProjectStore = create<ProjectStore>()(
           draftAssumptions: state.draftAssumptions,
           draftAcquisitionPrices: state.draftAcquisitionPrices,
           financialSources: state.financialSources,
+          stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
         }),
       }
     )

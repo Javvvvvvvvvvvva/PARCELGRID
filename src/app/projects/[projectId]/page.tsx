@@ -47,6 +47,7 @@ import {
 import type { AssumptionSet } from "@/lib/finance/types";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
+import { commitStage3FeasibilitySnapshot } from "@/lib/services/commit-stage3-feasibility";
 import {
   buildStage3Sensitivity,
   findStage3BreakEvenRevenuePrice,
@@ -116,6 +117,9 @@ export default function DashboardPage({
   const { projectId } = use(params);
   const router = useRouter();
   const data = useProjectStore((state) => state.data);
+  const saveStage3FeasibilitySnapshot = useProjectStore(
+    (state) => state.saveStage3FeasibilitySnapshot
+  );
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
   const representativeScenarioId = useProjectStore((state) => state.representativePlanningScenarioId);
   const representativeGeometry = useProjectStore((state) => state.representativeGeometrySnapshot);
@@ -139,6 +143,7 @@ export default function DashboardPage({
     result: DealStressResult;
   } | null>(null);
   const [stressRunning, setStressRunning] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const projectPlanningScenarios = useMemo(
     () => planningScenarios.filter(
@@ -313,6 +318,34 @@ export default function DashboardPage({
   const resetAll = () => {
     resetDraftAssumptions(financeScenario.id);
     resetDraftAcquisitionPrice(projectId);
+  };
+
+  const commitCurrentSnapshot = () => {
+    const nextData = commitStage3FeasibilitySnapshot(
+      data,
+      calculation.parcel,
+      scenario
+    );
+    const savedAtIso = new Date().toISOString();
+    saveStage3FeasibilitySnapshot({
+      projectId,
+      representativeScenarioId: planningScenario.id,
+      representativeScenarioVersion: planningScenario.version,
+      geometryHash: geometry.geometryHash,
+      savedAt: savedAtIso,
+      data: nextData,
+    });
+    setSavedAt(
+      new Date(savedAtIso).toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    );
+  };
+
+  const openHandoff = () => {
+    commitCurrentSnapshot();
+    router.push(`/projects/${projectId}/handoff`);
   };
 
   const runDealRescue = () => {
@@ -641,7 +674,9 @@ export default function DashboardPage({
 
           <section className="next-actions">
             <button className="secondary-button" onClick={() => router.push(`/projects/${projectId}/comps`)}>가격 근거</button>
-            <button className="primary-button" disabled={sourceGate.status !== "source-backed"} title={sourceGate.status === "source-backed" ? "전문가 검증·인계" : "필수 소스 데이터를 모두 등록해야 합니다."} onClick={() => router.push(`/projects/${projectId}/handoff`)}>전문가 검증·인계</button>
+            <button className="secondary-button" onClick={commitCurrentSnapshot}>현재안 저장</button>
+            <button className="primary-button" disabled={sourceGate.status !== "source-backed"} title={sourceGate.status === "source-backed" ? "현재안을 저장하고 전문가 검증·인계로 이동합니다." : "필수 소스 데이터를 모두 등록해야 합니다."} onClick={openHandoff}>저장 후 전문가 인계</button>
+            {savedAt && <span className="save-status" role="status">{savedAt} 보고서 스냅샷 저장</span>}
           </section>
         </aside>
       </div>
@@ -659,7 +694,7 @@ export default function DashboardPage({
         .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}.return-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:9px;border:1px solid var(--border-faint);border-radius:9px;overflow:hidden}.return-strip>:global(div)+:global(div){border-left:1px solid var(--border-faint)}
         .split-section{display:grid;grid-template-columns:1fr 1fr;gap:28px}.break-even-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.break-even-strip>div{padding:11px 12px;border-radius:8px;background:var(--bg-soft);display:grid;gap:4px}.break-even-strip span{font-size:9.5px;color:var(--fg-muted)}.break-even-strip strong{font-size:13px;font-family:var(--font-mono)}
         .evidence-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:14px}.case-list{display:grid;margin:12px 0}.case-row{display:grid;grid-template-columns:1fr 130px 65px;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--border-faint);font-size:10.5px}.case-row span{display:grid;gap:2px}.case-row small{color:var(--fg-muted)}.case-row strong{text-align:right;font-family:var(--font-mono)}.case-row em{font-style:normal;text-align:center;border-radius:999px;background:var(--bg-soft);padding:4px 6px;color:var(--fg-muted)}.empty-evidence{padding:13px;background:var(--warn-soft);color:var(--warn-fg);border-radius:8px;font-size:10.5px;line-height:1.55}
-        .assumption-group{border-bottom:1px solid var(--border-faint)}.assumption-group summary{padding:11px 0 7px;font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--fg-muted);cursor:pointer}.coverage-note{padding:10px;margin:11px 0 0;border-radius:8px;background:var(--bg-soft);font-size:9.5px;color:var(--fg-muted);line-height:1.55}.next-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .assumption-group{border-bottom:1px solid var(--border-faint)}.assumption-group summary{padding:11px 0 7px;font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--fg-muted);cursor:pointer}.coverage-note{padding:10px;margin:11px 0 0;border-radius:8px;background:var(--bg-soft);font-size:9.5px;color:var(--fg-muted);line-height:1.55}.next-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.next-actions .primary-button,.save-status{grid-column:1/-1}.save-status{text-align:center;color:var(--pos-fg);font-size:9.5px}
         @media(max-width:1180px){.workspace-grid{grid-template-columns:1fr}.stage3-sidebar{position:static;grid-template-columns:1fr 1fr}.next-actions{grid-column:1/-1}.decision-grid{grid-template-columns:repeat(2,1fr)}}
         @media(max-width:760px){.stage3-page{padding:18px 14px}.stage3-header{display:block}.header-actions{margin-top:14px}.source-lock,.price-ladder,.metric-grid,.split-section,.evidence-summary,.stage3-sidebar{grid-template-columns:1fr}.source-main{border-right:0}.decision-grid{grid-template-columns:1fr}.return-strip{grid-template-columns:repeat(2,1fr)}.case-row{grid-template-columns:1fr}.case-row strong,.case-row em{text-align:left}.method-strip button{margin-left:0}}
       `}</style>
