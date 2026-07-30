@@ -45,6 +45,12 @@ function ProjectShell({
   const representativePlanningScenarioId = useProjectStore(
     (s) => s.representativePlanningScenarioId
   );
+  const representativeGeometrySnapshot = useProjectStore(
+    (s) => s.representativeGeometrySnapshot
+  );
+  const savedStage3Snapshot = useProjectStore(
+    (s) => s.stage3FeasibilitySnapshots[projectId]
+  );
   const pathname = usePathname();
   const lastKeyRef = useRef<string>("");
   useEffect(() => {
@@ -59,6 +65,22 @@ function ProjectShell({
 
     // 새 Stage 2 대표 계획안이 있으면 구형 EnvelopePlan보다 우선한다.
     if (representativeScenario && representativePlanningScenarioId) {
+      const savedSnapshotMatches =
+        savedStage3Snapshot?.projectId === projectId &&
+        savedStage3Snapshot.representativeScenarioId ===
+          representativePlanningScenarioId &&
+        savedStage3Snapshot.representativeScenarioVersion ===
+          representativeScenario.version &&
+        savedStage3Snapshot.geometryHash ===
+          representativeGeometrySnapshot?.geometryHash;
+      if (savedSnapshotMatches) {
+        const snapshotKey = `stage3-snapshot|${savedStage3Snapshot.savedAt}`;
+        if (lastKeyRef.current === snapshotKey) return;
+        lastKeyRef.current = snapshotKey;
+        setData(savedStage3Snapshot.data);
+        return;
+      }
+
       const planningVersionKey = projectPlanningScenarios
         .filter(
           (scenario) =>
@@ -107,7 +129,9 @@ function ProjectShell({
     envelopePlan,
     planningScenarios,
     projectId,
+    representativeGeometrySnapshot,
     representativePlanningScenarioId,
+    savedStage3Snapshot,
     setData,
   ]);
 
