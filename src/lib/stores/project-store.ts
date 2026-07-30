@@ -413,8 +413,7 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
-          const baseAssumptions =
-            state.data?.scenarios          let nextData: ProjectComputed | null = null;
+          let nextData: ProjectComputed | null = null;
           try {
             nextData = recomputeFromPlanningScenarios(
               parcel,
@@ -451,7 +450,9 @@ export const useProjectStore = create<ProjectStore>()(
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
           });
-) =>
+          return true;
+        },
+        clearPlanningScenarios: () =>
           set({
             planningScenarios: [],
             selectedPlanningScenarioId: null,
