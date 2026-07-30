@@ -11,7 +11,6 @@ import {
   summarizePlanningScenario,
 } from "@/lib/planning/scenario-utils";
 import type {
-  FloorUseType,
   FloorZone,
   PlanningScenario,
 } from "@/lib/planning/types";
@@ -36,10 +35,6 @@ function zoneRevenueArea(zone: FloorZone): number {
     return Math.min(area, nonNegative(zone.rentableAreaSqm ?? area));
   }
   return 0;
-}
-
-function isCommercialUse(useType: FloorUseType): boolean {
-  return useType === "retail" || useType === "office";
 }
 
 function revenueMix(scenario: PlanningScenario): BuildingProgram["mix"] {
