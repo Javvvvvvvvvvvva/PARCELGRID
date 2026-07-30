@@ -117,7 +117,9 @@ export default function DashboardPage({
   const { projectId } = use(params);
   const router = useRouter();
   const data = useProjectStore((state) => state.data);
-  const setData = useProjectStore((state) => state.setData);
+  const saveStage3FeasibilitySnapshot = useProjectStore(
+    (state) => state.saveStage3FeasibilitySnapshot
+  );
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
   const representativeScenarioId = useProjectStore((state) => state.representativePlanningScenarioId);
   const representativeGeometry = useProjectStore((state) => state.representativeGeometrySnapshot);
@@ -324,9 +326,17 @@ export default function DashboardPage({
       calculation.parcel,
       scenario
     );
-    setData(nextData);
+    const savedAtIso = new Date().toISOString();
+    saveStage3FeasibilitySnapshot({
+      projectId,
+      representativeScenarioId: planningScenario.id,
+      representativeScenarioVersion: planningScenario.version,
+      geometryHash: geometry.geometryHash,
+      savedAt: savedAtIso,
+      data: nextData,
+    });
     setSavedAt(
-      new Date().toLocaleTimeString("ko-KR", {
+      new Date(savedAtIso).toLocaleTimeString("ko-KR", {
         hour: "2-digit",
         minute: "2-digit",
       })
