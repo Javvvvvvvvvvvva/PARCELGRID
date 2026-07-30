@@ -161,7 +161,7 @@ export default function ReportPage({
           <div className="rpt-sec">
             <div className="rpt-sec-h">대표 계획 매스 · Geometry Snapshot</div>
             <div className="rpt-ov">
-              <OvItem l="층수" v={`지상 ${geometry.building.aboveFloors.length}층 · 지하 ${geometry.building.basementFloors.length}층`} />
+              <OvItem l="층수" v={`지상 ${geometry.building.aboveGroundFloors.length}층 · 지하 ${geometry.building.basementFloors.length}층`} />
               <OvItem l="프로그램 면적" v={`${num(Math.round(geometry.building.totalProgramAreaSqm * 10) / 10)}㎡`} />
               <OvItem l="실현 용적률" v={`${geometry.building.preliminaryFarPct.toFixed(1)}%`} />
               <OvItem l="기하 검증" v={geometry.validation.status === "pass" ? "대표안 적격 · 고정" : "추가 검토"} />
