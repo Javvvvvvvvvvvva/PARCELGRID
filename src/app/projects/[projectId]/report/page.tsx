@@ -35,13 +35,13 @@ export default function ReportPage({
   const scenarios = data?.scenarios ?? [];
   const parcel = data?.parcel;
   const comps = data?.comps ?? [];
+  const geometry =
+    representativeGeometry?.projectId === projectId
+      ? representativeGeometry
+      : null;
 
   const evidenceGate = useMemo(() => {
     if (!data) return null;
-    const geometry =
-      representativeGeometry?.projectId === projectId
-        ? representativeGeometry
-        : null;
     return buildEvidenceGate({
       projectId,
       address: data.parcel.address,
@@ -57,7 +57,7 @@ export default function ReportPage({
       financeModelVersion: PROJECT_LEDGER_MODEL_VERSION,
       taxComplete: false,
     });
-  }, [comps.length, data, projectId, representativeGeometry]);
+  }, [comps.length, data, geometry, projectId]);
 
   const recommended = useMemo(
     () => scenarios.find((s) => s.recommended) ?? scenarios[0],
@@ -131,10 +131,10 @@ export default function ReportPage({
             <span className="rpt-reco-badge">예비 비교안</span>
           </div>
           <div className="rpt-reco-kpis">
-            <div className="rpt-reco-kpi"><div className="l">저장된 세전 손익</div><div className="v">{won(recommended.profit)}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">Low 공사비(-15%) 손익</div><div className="v">{won(recommended.profitAtLowCost ?? recommended.profit)}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">Base 저장 손익</div><div className="v">{won(recommended.profit)}</div></div>
+            <div className="rpt-reco-kpi"><div className="l">High 공사비(+20%) 손익</div><div className="v">{won(recommended.profitAtHighCost ?? recommended.profit)}</div></div>
             <div className="rpt-reco-kpi"><div className="l">저장된 세전 IRR</div><div className="v">{recommended.irrStatus === "calculated" ? `${recommended.irr.toFixed(1)}%` : "N/A"}</div></div>
-            <div className="rpt-reco-kpi"><div className="l">DSCR</div><div className="v">{recommended.dscr > 0 ? recommended.dscr.toFixed(2) : "N/A"}</div></div>
-            <div className="rpt-reco-kpi"><div className="l">예비 필요 자본</div><div className="v">{won(recommended.equity)}</div></div>
           </div>
         </div>
 
@@ -156,6 +156,19 @@ export default function ReportPage({
             <OvItem l="평당 검토 인수가" v={`${num(Math.round(parcel.acquiredPrice / pyeong))}만`} />
           </div>
         </div>
+
+        {geometry && (
+          <div className="rpt-sec">
+            <div className="rpt-sec-h">대표 계획 매스 · Geometry Snapshot</div>
+            <div className="rpt-ov">
+              <OvItem l="층수" v={`지상 ${geometry.building.aboveFloors.length}층 · 지하 ${geometry.building.basementFloors.length}층`} />
+              <OvItem l="프로그램 면적" v={`${num(Math.round(geometry.building.totalProgramAreaSqm * 10) / 10)}㎡`} />
+              <OvItem l="실현 용적률" v={`${geometry.building.preliminaryFarPct.toFixed(1)}%`} />
+              <OvItem l="기하 검증" v={geometry.validation.status === "pass" ? "대표안 적격 · 고정" : "추가 검토"} />
+              <OvItem l="Geometry hash" v={geometry.geometryHash} />
+            </div>
+          </div>
+        )}
 
         <div className="rpt-sec">
           <div className="rpt-sec-h">법규 수치 근거</div>
