@@ -16,6 +16,7 @@ import type {
   FinancialSourceRecord,
 } from "@/lib/finance/source-data-gate";
 import type { ProjectComputed } from "@/lib/services/compute-project";
+import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
@@ -412,7 +413,39 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
+          let nextData: ProjectComputed | null = null;
+          try {
+            nextData = recomputeFromPlanningScenarios(
+              parcel,
+              state.planningScenarios,
+              id,
+              state.data,
+              {
+                startDate: parcel.acquired,
+                calculateMaxAcquisition: true,
+              }
+            );
+          } catch (error) {
+            set(
+              representativeInvalidation(
+                error instanceof Error
+                  ? `대표 계획안 금융 재계산 실패: ${error.message}`
+                  : "대표 계획안 금융 재계산을 완료하지 못했습니다."
+              )
+            );
+            return false;
+          }
+          if (!nextData) {
+            set(
+              representativeInvalidation(
+                "대표 계획안을 금융 시나리오로 변환하지 못했습니다."
+              )
+            );
+            return false;
+          }
+
           set({
+            data: nextData,
             representativePlanningScenarioId: id,
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
