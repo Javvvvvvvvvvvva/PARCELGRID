@@ -512,6 +512,12 @@ export default function NewParcelPage() {
                   }
                   estimatedTotalWon={null}
                 />
+                {estimate?.houseEstimate && (
+                  <LandProxyNote
+                    estimate={estimate.houseEstimate}
+                    onApply={(priceManwon) => setAcquiredPrice(priceManwon)}
+                  />
+                )}
                 {estimate?.marketMedianManwon != null && estimate.marketMedianManwon > 0 && (
                   <div
                     style={{
@@ -589,6 +595,155 @@ export default function NewParcelPage() {
 }
 
 /* ─────────────────────────── 헬퍼 컴포넌트 ─────────────────────────── */
+
+function LandProxyNote({
+  estimate,
+  onApply,
+}: {
+  estimate: NonNullable<EstimateResult["houseEstimate"]>;
+  onApply: (priceManwon: number) => void;
+}) {
+  return (
+    <div
+      role="note"
+      style={{
+        marginTop: "var(--s3)",
+        padding: "12px",
+        border: "1px solid var(--accent)",
+        borderRadius: 8,
+        background: "var(--accent-soft)",
+        color: "var(--fg)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <strong style={{ display: "block", fontSize: 12.5 }}>
+            구축 단독·다가구 거래 기반 토지 proxy
+          </strong>
+          <div
+            className="mono"
+            style={{ marginTop: 4, fontSize: 11.5, fontWeight: 700 }}
+          >
+            사례 {estimate.count}건 · 중앙값{" "}
+            {estimate.medianPPPLand.toLocaleString()}만원/평 · 대상 부지 환산{" "}
+            {(estimate.estimateManwon / 10_000).toFixed(1)}억원
+          </div>
+          <div
+            style={{
+              marginTop: 4,
+              fontSize: 10.5,
+              color: "var(--fg-muted)",
+              lineHeight: 1.55,
+            }}
+          >
+            {estimate.basis} · {confidenceLabel(estimate.confidence)}
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="default"
+          onClick={() => onApply(estimate.estimateManwon)}
+          aria-label={`토지 proxy 환산가 ${(
+            estimate.estimateManwon / 10_000
+          ).toFixed(1)}억원을 총 취득대금으로 입력`}
+          style={{ flexShrink: 0 }}
+        >
+          이 값으로 입력
+        </Button>
+      </div>
+
+      <div
+        style={{
+          marginTop: 9,
+          paddingTop: 8,
+          borderTop: "1px solid var(--border)",
+          fontSize: 10,
+          color: "var(--fg-muted)",
+          lineHeight: 1.55,
+        }}
+      >
+        {estimate.caution}. 버튼을 눌러야만 총 취득대금 입력값이 변경되며,
+        감정평가나 계약금액을 대신하지 않습니다.
+      </div>
+
+      <details style={{ marginTop: 9 }}>
+        <summary
+          style={{
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 700,
+            color: "var(--accent-fg)",
+          }}
+        >
+          비교사례 {estimate.cases.length}건 펼쳐보기
+        </summary>
+        <div style={{ marginTop: 8, overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              minWidth: 620,
+              borderCollapse: "collapse",
+              fontSize: 10.5,
+            }}
+          >
+            <thead>
+              <tr style={{ color: "var(--fg-faint)", textAlign: "left" }}>
+                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)" }}>
+                  사례
+                </th>
+                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)" }}>
+                  거래일·연식
+                </th>
+                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
+                  대지
+                </th>
+                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
+                  거래가
+                </th>
+                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
+                  대지 평당
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {estimate.cases.map((item, index) => (
+                <tr key={`${item.address}-${item.date}-${index}`}>
+                  <td style={{ padding: "7px", borderBottom: "1px solid var(--border)" }}>
+                    <div style={{ fontWeight: 650 }}>{item.address || "주소 미확인"}</div>
+                    <div style={{ marginTop: 2, color: "var(--fg-faint)", fontSize: 9.5 }}>
+                      {item.sameDong ? "같은 동" : "같은 구"} · 유사도 점수 {item.score}
+                    </div>
+                  </td>
+                  <td style={{ padding: "7px", borderBottom: "1px solid var(--border)", color: "var(--fg-muted)" }}>
+                    {item.date || "거래일 미확인"} ·{" "}
+                    {item.buildYear ? `${item.buildYear}년 준공` : "연식 미확인"}
+                  </td>
+                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
+                    {sqmToPyeong(item.lotAreaSqm).toFixed(1)}평
+                  </td>
+                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
+                    {(item.priceManwon / 10_000).toFixed(1)}억
+                  </td>
+                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right", fontWeight: 700 }}>
+                    {item.pricePerPyeongLand.toLocaleString()}만원
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  );
+}
 
 function CurrentBuildingBox({
   info,
