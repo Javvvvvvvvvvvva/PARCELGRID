@@ -15,12 +15,8 @@ import type {
   FinancialSourceMap,
   FinancialSourceRecord,
 } from "@/lib/finance/source-data-gate";
-import {
-  computeProject,
-  type ProjectComputed,
-} from "@/lib/services/compute-project";
-import { defaultAssumptions } from "@/lib/finance/scenario";
-import { planningScenarioToFinanceScenario } from "@/lib/planning/finance-adapter";
+import type { ProjectComputed } from "@/lib/services/compute-project";
+import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
@@ -418,35 +414,32 @@ export const useProjectStore = create<ProjectStore>()(
           }
 
           const baseAssumptions =
-            state.data?.scenarios.find((candidate) => candidate.recommended)
-              ?._raw.assumptions ??
-            state.data?.scenarios[0]?._raw.assumptions ??
-            defaultAssumptions();
-
-          let nextData = state.data;
+            state.data?.scenarios          let nextData: ProjectComputed | null = null;
           try {
-            const financeScenario = planningScenarioToFinanceScenario(
-              scenario,
+            nextData = recomputeFromPlanningScenarios(
               parcel,
-              baseAssumptions
+              state.planningScenarios,
+              id,
+              state.data,
+              {
+                startDate: parcel.acquired,
+                calculateMaxAcquisition: true,
+              }
             );
-            const computed = computeProject(parcel, [financeScenario], {
-              startDate: parcel.acquired,
-              recommendedId: financeScenario.id,
-              calculateMaxAcquisition: true,
-            });
-            nextData = {
-              ...computed,
-              comps: state.data?.comps ?? [],
-              saleEstimate: state.data?.saleEstimate,
-              scenarioComparison: state.data?.scenarioComparison,
-            };
           } catch (error) {
             set(
               representativeInvalidation(
                 error instanceof Error
-                  ? `대표 계획안 금융 시나리오 생성 실패: ${error.message}`
-                  : "대표 계획안 금융 시나리오를 생성하지 못했습니다."
+                  ? `대표 계획안 금융 재계산 실패: ${error.message}`
+                  : "대표 계획안 금융 재계산을 완료하지 못했습니다."
+              )
+            );
+            return false;
+          }
+          if (!nextData) {
+            set(
+              representativeInvalidation(
+                "대표 계획안을 금융 시나리오로 변환하지 못했습니다."
               )
             );
             return false;
@@ -458,9 +451,7 @@ export const useProjectStore = create<ProjectStore>()(
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
           });
-          return true;
-        },
-        clearPlanningScenarios: () =>
+) =>
           set({
             planningScenarios: [],
             selectedPlanningScenarioId: null,
