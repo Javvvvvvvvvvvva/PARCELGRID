@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
 import {
   analyzeFrontage,
-  edgeSetbacksFromFrontage,
+  legalEdgeSetbacksFromFrontage,
 } from "@/lib/geo/road-frontage";
 import {
   assessPlanningPlacement,
@@ -25,7 +25,7 @@ import type {
   PlanningScenario,
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";
-import type { RoadLine, SetbackSpec } from "@/components/ui/MassingView";
+import type { RoadLine } from "@/components/ui/MassingView";
 import { num } from "@/lib/utils/format";
 
 interface PlacementPreviewData {
@@ -73,8 +73,7 @@ function buildPlacementPreviewData(
   boundary: LngLat[],
   zoning: string,
   scenario: PlanningScenario,
-  roads?: RoadLine[],
-  setback?: SetbackSpec
+  roads?: RoadLine[]
 ): PlacementPreviewData {
   const origin = ringCentroid(boundary);
   const groundShape = ringToLocalMeters(boundary, origin);
@@ -90,10 +89,9 @@ function buildPlacementPreviewData(
 
   const frontage =
     roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
-  );
+  // 화면의 통과/실패 외곽선은 Geometry Contract·3D·Export와 같은
+  // 법적 최대 기준을 사용한다. 프로젝트 설계 여유거리는 별도로 안내한다.
+  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
 
   const buildable = calcBuildableArea(
     boundary,
@@ -267,10 +265,29 @@ export function ScenarioPlacementWorkspace({
       parcel.boundary,
       parcel.zoning ?? "",
       scenario,
-      parcel.roads,
-      parcel.setback
+      parcel.roads
     );
   }, [parcel, scenario]);
+
+  const [previewFloorId, setPreviewFloorId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!preview) {
+      setPreviewFloorId(null);
+      return;
+    }
+    if (
+      previewFloorId &&
+      preview.model.floors.some((floor) => floor.id === previewFloorId)
+    ) {
+      return;
+    }
+    setPreviewFloorId(
+      preview.model.aboveGroundFloors[0]?.id ??
+        preview.model.basementFloors[0]?.id ??
+        null
+    );
+  }, [preview, previewFloorId]);
 
   if (!parcel || !scenario || !preview) return null;
 
@@ -282,7 +299,10 @@ export function ScenarioPlacementWorkspace({
 
   const status = statusTone(preview.assessment);
   const previewMass =
-    preview.model.aboveGroundFloors[0] ?? preview.model.basementFloors[0] ?? null;
+    preview.model.floors.find((floor) => floor.id === previewFloorId) ??
+    preview.model.aboveGroundFloors[0] ??
+    preview.model.basementFloors[0] ??
+    null;
   const previewEnvelope = previewMass
     ? preview.envelopeSteps.find((step) => step.level === previewMass.level) ?? null
     : null;
@@ -438,7 +458,13 @@ export function ScenarioPlacementWorkspace({
                     ? `${preview.frontEdgeAngleDeg.toFixed(1)}°`
                     : "미확인"}
                   <br />
-                  법규 외곽선이 이미 전면·측면·후면 이격을 반영합니다.
+                  법적 최대 외곽선은 도로측 추가 0m·인접대지측 0.5m 검토 기준입니다.
+                  <br />
+                  <span style={{ color: "var(--warn-fg)" }}>
+                    사용자 설계 여유 {parcel.setback
+                      ? `도로 ${parcel.setback.road}m · 측면 ${parcel.setback.side}m · 후면 ${parcel.setback.rear}m`
+                      : "미입력"} · 법규 판정과 분리
+                  </span>
                 </div>
               </div>
             </div>
@@ -460,7 +486,7 @@ export function ScenarioPlacementWorkspace({
                   updatePlacement({ rotationDeg: 0, offsetXM: 0, offsetZM: 0 })
                 }
               >
-                전면도로 기준 정렬
+                법적 외곽선 기준 복원
               </button>
               <button
                 type="button"
@@ -485,9 +511,34 @@ export function ScenarioPlacementWorkspace({
               <div>
                 <div style={{ fontSize: 12.5, fontWeight: 750 }}>평면 배치 미리보기</div>
                 <div style={{ marginTop: 3, fontSize: 10, color: "var(--fg-faint)" }}>
-                  대지 · 법규 외곽선 · {previewMass?.label ?? "계획층"}
+                  대지 · 법적 최대 외곽선 · {previewMass?.label ?? "계획층"}
                 </div>
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {preview.model.floors.length > 1 && (
+                  <select
+                    aria-label="미리보기 층 선택"
+                    value={previewMass?.id ?? ""}
+                    onChange={(event) => setPreviewFloorId(event.target.value)}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 7,
+                      padding: "5px 8px",
+                      background: "var(--bg-elev)",
+                      color: "var(--fg)",
+                      fontFamily: "inherit",
+                      fontSize: 10.5,
+                    }}
+                  >
+                    {[...preview.model.floors]
+                      .sort((a, b) => b.level - a.level)
+                      .map((floor) => (
+                        <option key={floor.id} value={floor.id}>
+                          {floor.label}
+                        </option>
+                      ))}
+                  </select>
+                )}
               {previewFloorAssessment && (
                 <span
                   style={{
@@ -501,6 +552,7 @@ export function ScenarioPlacementWorkspace({
                   {previewFloorAssessment.fits ? "외곽선 내부" : "배치 조정 필요"}
                 </span>
               )}
+              </div>
             </div>
 
             <div
@@ -553,7 +605,7 @@ export function ScenarioPlacementWorkspace({
 
             <div className="placement-legend">
               <span><i style={{ background: "#e2e8f0", borderColor: "#64748b" }} />대지</span>
-              <span><i style={{ background: "rgba(14,116,144,.1)", borderColor: "#0e7490" }} />법규 외곽선</span>
+              <span><i style={{ background: "rgba(14,116,144,.1)", borderColor: "#0e7490" }} />법적 최대 외곽선</span>
               <span><i style={{ background: "rgba(59,130,246,.48)", borderColor: "#2563eb" }} />계획 매스</span>
               <span><i style={{ background: "#f59e0b", borderColor: "#f59e0b" }} />전면 경계</span>
             </div>
