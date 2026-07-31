@@ -10,6 +10,7 @@ import {
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildSketchupExportPackage } from "@/lib/planning/sketchup-export-package";
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
+import { downloadPlanningCadPackage } from "@/lib/planning/planning-cad-export";
 import { downloadSketchupSiteDeliveryExport } from "@/lib/planning/sketchup-site-delivery-export";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
@@ -232,6 +233,52 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
     }
   };
 
+  const handleCadDownload = () => {
+    setMessage(null);
+    if (!audit.exportable || !basePackage.validation.exportable) {
+      setMessage({
+        tone: "fail",
+        text:
+          audit.checks.find((check) => check.status === "fail")?.message ??
+          basePackage.validation.blockingReasons[0] ??
+          "계획 매스 Geometry Contract를 먼저 수정하세요.",
+      });
+      return;
+    }
+    if (!locked) {
+      setMessage({
+        tone: "fail",
+        text: "대표 계획안을 확정해 Geometry Snapshot을 잠근 뒤 다운로드하세요.",
+      });
+      return;
+    }
+    if (loadState !== "ready" || parcels.length === 0) {
+      setMessage({ tone: "fail", text: "지적·도로 경계 조회가 끝난 뒤 다운로드하세요." });
+      return;
+    }
+
+    try {
+      const result = downloadPlanningCadPackage({
+        basePackage,
+        cadastral,
+        targetBoundary,
+        sourceParcels: parcels,
+      });
+      setMessage({
+        tone: "success",
+        text: `${result.filename} 다운로드를 시작했습니다. CAD에서는 ${result.dxfFilename} 파일을 열고 단위를 meter로 확인하세요.`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: "fail",
+        text:
+          error instanceof Error
+            ? error.message
+            : "CAD 설계 기준 패키지 생성 중 오류가 발생했습니다.",
+      });
+    }
+  };
+
   const rows: Array<[string, number, string]> = [
     ["PG_PARCEL", 1, "대상 필지 경계"],
     ["PG_PROPOSED_MASS", planning.building.floors.length, "검증된 계획 매스"],
@@ -258,8 +305,8 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
 
   return (
     <Panel
-      title="SketchUp 통합 사이트 패키지"
-      source="단일 통합 DAE · 분리 DAE · 지적 DXF · WGS84 GeoJSON"
+      title="설계 파일 내보내기"
+      source="SketchUp DAE · CAD DXF · WGS84 GeoJSON"
       bodyStyle={{ padding: "var(--s5)" }}
     >
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
@@ -290,10 +337,10 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           color: "var(--fg-muted)",
         }}
       >
-        ZIP의 권장 파일은 계획 매스·주변 건물·필지·도로 경계를 모두 포함한
-        <strong> combined.dae</strong>입니다. 모델과 사이트를 나눈 두 DAE는 좌표 정합을
-        별도로 검증할 때 사용하고, DXF와 GeoJSON은 2D 지적선 및 원좌표 확인용으로
-        유지합니다.
+        SketchUp 패키지는 계획 매스·주변 건물·필지·도로 경계를 동일 원점의 DAE로
+        제공합니다. CAD 패키지는 잠긴 대표안의 <strong>층별 실제 외곽선</strong>과
+        필지·도로·주변 건물을 AutoCAD R2000 DXF 레이어로 분리합니다. 두 패키지 모두
+        meter 단위와 같은 로컬 원점을 사용합니다.
       </p>
 
       <div
@@ -423,7 +470,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
           <thead>
             <tr style={{ color: "var(--fg-muted)" }}>
-              <th style={cell}>SketchUp 그룹</th>
+              <th style={cell}>공통 설계 레이어</th>
               <th style={cell}>객체 수</th>
               <th style={cell}>용도</th>
             </tr>
@@ -458,23 +505,42 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           UPIS 도로 경계는 개략설계용 도시계획 도형이며 현황측량을 대체하지 않습니다.
           확인 항목은 metadata와 README에도 기록됩니다.
         </div>
-        <button
-          type="button"
-          disabled={!canDownload}
-          onClick={handleDownload}
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            padding: "9px 12px",
-            background: canDownload ? "var(--fg)" : "var(--bg-sunken)",
-            color: canDownload ? "var(--bg)" : "var(--fg-faint)",
-            fontSize: 10.5,
-            fontWeight: 750,
-            cursor: canDownload ? "pointer" : "not-allowed",
-          }}
-        >
-          {canDownload ? "SketchUp 설계 전달 패키지 다운로드" : "대표안·도로 경계 확인 필요"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            disabled={!canDownload}
+            onClick={handleCadDownload}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "9px 12px",
+              background: canDownload ? "var(--bg-elev)" : "var(--bg-sunken)",
+              color: canDownload ? "var(--fg)" : "var(--fg-faint)",
+              fontSize: 10.5,
+              fontWeight: 750,
+              cursor: canDownload ? "pointer" : "not-allowed",
+            }}
+          >
+            {canDownload ? "CAD 설계 기준 패키지 다운로드 (DXF)" : "대표안·도로 경계 확인 필요"}
+          </button>
+          <button
+            type="button"
+            disabled={!canDownload}
+            onClick={handleDownload}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "9px 12px",
+              background: canDownload ? "var(--fg)" : "var(--bg-sunken)",
+              color: canDownload ? "var(--bg)" : "var(--fg-faint)",
+              fontSize: 10.5,
+              fontWeight: 750,
+              cursor: canDownload ? "pointer" : "not-allowed",
+            }}
+          >
+            {canDownload ? "SketchUp 설계 전달 패키지 다운로드" : "대표안·도로 경계 확인 필요"}
+          </button>
+        </div>
       </div>
     </Panel>
   );
