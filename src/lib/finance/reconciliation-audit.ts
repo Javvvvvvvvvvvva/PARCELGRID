@@ -3,7 +3,8 @@ import type { Scenario, ScenarioResult } from "@/lib/finance/types";
 
 export const FINANCIAL_RECONCILIATION_AUDIT_VERSION =
   "financial-reconciliation-audit-v1" as const;
-export const FINANCIAL_RECONCILIATION_TOLERANCE_MANWON = 0.1;
+/** ScenarioResult는 저장 경계에서 각 금액을 가장 가까운 1만원으로 반올림한다. */
+export const FINANCIAL_RECONCILIATION_ROUNDING_UNIT_MANWON = 1;
 
 export type FinancialReconciliationStatus = "pass" | "review" | "fail";
 
@@ -20,6 +21,7 @@ export interface FinancialReconciliationCheck {
   rightLabel: string;
   rightManwon: number;
   differenceManwon: number;
+  toleranceManwon: number;
   message: string;
 }
 
@@ -41,11 +43,17 @@ function difference(left: number, right: number): number {
   return left - right;
 }
 
-function withinTolerance(value: number): boolean {
+function roundingTolerance(roundedTermCount: number): number {
   return (
-    Number.isFinite(value) &&
-    Math.abs(value) <= FINANCIAL_RECONCILIATION_TOLERANCE_MANWON
+    ((Math.max(1, roundedTermCount) + 1) *
+      FINANCIAL_RECONCILIATION_ROUNDING_UNIT_MANWON) /
+      2 +
+    1e-9
   );
+}
+
+function withinTolerance(value: number, toleranceManwon: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= toleranceManwon;
 }
 
 function exactCheck(input: {
@@ -55,17 +63,20 @@ function exactCheck(input: {
   leftManwon: number;
   rightLabel: string;
   rightManwon: number;
+  roundedTermCount: number;
 }): FinancialReconciliationCheck {
   const gap = difference(input.leftManwon, input.rightManwon);
-  const status = withinTolerance(gap) ? "pass" : "fail";
+  const toleranceManwon = roundingTolerance(input.roundedTermCount);
+  const status = withinTolerance(gap, toleranceManwon) ? "pass" : "fail";
   return {
     ...input,
     differenceManwon: gap,
+    toleranceManwon,
     status,
     message:
       status === "pass"
-        ? `대사 일치 · 오차 ${Math.abs(gap).toFixed(2)}만원`
-        : `대사 불일치 · 오차 ${Math.abs(gap).toFixed(2)}만원. 숫자 표시와 저장을 재검토해야 합니다.`,
+        ? `대사 일치 · 반올림 오차 ${Math.abs(gap).toFixed(2)}만원 / 허용 ${toleranceManwon.toFixed(2)}만원`
+        : `대사 불일치 · 오차 ${Math.abs(gap).toFixed(2)}만원이 독립 반올림 최대치 ${toleranceManwon.toFixed(2)}만원을 넘었습니다. 숫자 표시와 저장을 재검토해야 합니다.`,
   };
 }
 
@@ -105,6 +116,7 @@ export function buildFinancialReconciliationAudit(input: {
     leftManwon: revenueComponents,
     rightLabel: "총매출",
     rightManwon: result.totalRevenue,
+    roundedTermCount: 3,
   });
   const costCheck = exactCheck({
     id: "cost-components",
@@ -113,6 +125,7 @@ export function buildFinancialReconciliationAudit(input: {
     leftManwon: costComponents,
     rightLabel: "총사업비",
     rightManwon: result.totalCost,
+    roundedTermCount: 6,
   });
   const profitCheck = exactCheck({
     id: "profit-identity",
@@ -121,6 +134,7 @@ export function buildFinancialReconciliationAudit(input: {
     leftManwon: profitIdentity,
     rightLabel: "총매출",
     rightManwon: result.totalRevenue,
+    roundedTermCount: 2,
   });
   const fundingGap = difference(fundingSources, result.totalCost);
   const fundingCheck: FinancialReconciliationCheck = usesEarlySaleReceipts
@@ -133,6 +147,7 @@ export function buildFinancialReconciliationAudit(input: {
         rightLabel: "총사업비",
         rightManwon: result.totalCost,
         differenceManwon: fundingGap,
+        toleranceManwon: roundingTolerance(2),
         message:
           "공사 중 분양대금이 PF 상환에 사용되는 모델이므로 자기자본 + PF 최고잔액은 총사업비 항등식이 아닙니다. 월별 통합 원장에서 자금조달을 확인하세요.",
       }
@@ -143,6 +158,7 @@ export function buildFinancialReconciliationAudit(input: {
         leftManwon: fundingSources,
         rightLabel: "총사업비",
         rightManwon: result.totalCost,
+        roundedTermCount: 2,
       });
 
   const checks = [revenueCheck, costCheck, profitCheck, fundingCheck];
