@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   calcBuildableArea,
   type LngLat,
@@ -16,6 +22,7 @@ import {
 import {
   buildPlanningMassModel,
   polygonAreaSqm,
+  polygonCentroid,
   type LocalPlanPoint,
   type PlanningEnvelopeStep,
   type PlanningMassModel,
@@ -24,9 +31,35 @@ import type {
   PlanningPlacement,
   PlanningScenario,
 } from "@/lib/planning/types";
+import {
+  normalizePlacementRotationDeg,
+  pointerDeltaToPlanMeters,
+  pointerRotationDeltaDeg,
+  snapPlacementValue,
+} from "@/lib/planning/placement-interaction";
 import { useProjectStore } from "@/lib/stores/project-store";
 import type { RoadLine } from "@/components/ui/MassingView";
 import { num } from "@/lib/utils/format";
+
+const PREVIEW_WIDTH = 440;
+const PREVIEW_HEIGHT = 260;
+
+interface MoveDragState {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startOffsetXM: number;
+  startOffsetZM: number;
+}
+
+interface RotationDragState {
+  pointerId: number;
+  centerClientX: number;
+  centerClientY: number;
+  startClientX: number;
+  startClientY: number;
+  startRotationDeg: number;
+}
 
 interface PlacementPreviewData {
   groundShape: LocalPlanPoint[];
@@ -200,19 +233,30 @@ function previewBounds(shapes: LocalPlanPoint[][]) {
   };
 }
 
+function svgPoint(
+  point: LocalPlanPoint,
+  bounds: ReturnType<typeof previewBounds>,
+  width = PREVIEW_WIDTH,
+  height = PREVIEW_HEIGHT
+): { x: number; y: number } {
+  const spanX = Math.max(1, bounds.maxX - bounds.minX);
+  const spanZ = Math.max(1, bounds.maxZ - bounds.minZ);
+  return {
+    x: ((point.x - bounds.minX) / spanX) * width,
+    y: ((point.z - bounds.minZ) / spanZ) * height,
+  };
+}
+
 function svgPoints(
   points: LocalPlanPoint[],
   bounds: ReturnType<typeof previewBounds>,
-  width = 440,
-  height = 260
+  width = PREVIEW_WIDTH,
+  height = PREVIEW_HEIGHT
 ): string {
-  const spanX = Math.max(1, bounds.maxX - bounds.minX);
-  const spanZ = Math.max(1, bounds.maxZ - bounds.minZ);
   return points
     .map((point) => {
-      const x = ((point.x - bounds.minX) / spanX) * width;
-      const y = ((point.z - bounds.minZ) / spanZ) * height;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      const projected = svgPoint(point, bounds, width, height);
+      return `${projected.x.toFixed(1)},${projected.y.toFixed(1)}`;
     })
     .join(" ");
 }
@@ -270,6 +314,11 @@ export function ScenarioPlacementWorkspace({
   }, [parcel, scenario]);
 
   const [previewFloorId, setPreviewFloorId] = useState<string | null>(null);
+  const moveDragRef = useRef<MoveDragState | null>(null);
+  const rotationDragRef = useRef<RotationDragState | null>(null);
+  const [activeGesture, setActiveGesture] = useState<"move" | "rotate" | null>(
+    null
+  );
 
   useEffect(() => {
     if (!preview) {
@@ -309,17 +358,130 @@ export function ScenarioPlacementWorkspace({
   const previewFloorAssessment = previewMass
     ? preview.assessment.floors.find((floor) => floor.floorId === previewMass.id) ?? null
     : null;
+  // Keep the viewport fixed while dragging. Including the moving mass would
+  // continuously rescale the SVG and make pointer-to-meter conversion unstable.
   const bounds = previewBounds([
     preview.groundShape,
     previewEnvelope?.shape ?? [],
-    previewMass?.shape ?? [],
   ]);
+  const previewMassCenter = previewMass
+    ? polygonCentroid(previewMass.shape)
+    : null;
+  const previewMassCenterSvg = previewMassCenter
+    ? svgPoint(previewMassCenter, bounds)
+    : null;
+  const rotationHandleRadius = 34;
+  const rotationHandleAngleRad =
+    ((scenario.placement.rotationDeg - 90) * Math.PI) / 180;
+  const rotationHandleSvg = previewMassCenterSvg
+    ? {
+        x:
+          previewMassCenterSvg.x +
+          Math.cos(rotationHandleAngleRad) * rotationHandleRadius,
+        y:
+          previewMassCenterSvg.y +
+          Math.sin(rotationHandleAngleRad) * rotationHandleRadius,
+      }
+    : null;
 
   const nudge = (x: number, z: number) =>
     updatePlacement({
       offsetXM: Number((scenario.placement.offsetXM + x).toFixed(1)),
       offsetZM: Number((scenario.placement.offsetZM + z).toFixed(1)),
     });
+
+  const beginMoveDrag = (event: ReactPointerEvent<SVGPolygonElement>) => {
+    if (event.button !== 0) return;
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    moveDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startOffsetXM: scenario.placement.offsetXM,
+      startOffsetZM: scenario.placement.offsetZM,
+    };
+    setActiveGesture("move");
+  };
+
+  const moveDraggedMass = (event: ReactPointerEvent<SVGPolygonElement>) => {
+    const drag = moveDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    event.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const delta = pointerDeltaToPlanMeters({
+      deltaClientX: event.clientX - drag.startClientX,
+      deltaClientY: event.clientY - drag.startClientY,
+      viewportWidthPx: rect.width,
+      viewportHeightPx: rect.height,
+      bounds,
+    });
+    updatePlacement({
+      offsetXM: snapPlacementValue(drag.startOffsetXM + delta.deltaXM, 0.1),
+      offsetZM: snapPlacementValue(drag.startOffsetZM + delta.deltaZM, 0.1),
+    });
+  };
+
+  const endMoveDrag = (event: ReactPointerEvent<SVGPolygonElement>) => {
+    if (moveDragRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    moveDragRef.current = null;
+    setActiveGesture(null);
+  };
+
+  const beginRotationDrag = (event: ReactPointerEvent<SVGCircleElement>) => {
+    if (event.button !== 0 || !previewMassCenterSvg) return;
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = svg.getBoundingClientRect();
+    rotationDragRef.current = {
+      pointerId: event.pointerId,
+      centerClientX:
+        rect.left + (previewMassCenterSvg.x / PREVIEW_WIDTH) * rect.width,
+      centerClientY:
+        rect.top + (previewMassCenterSvg.y / PREVIEW_HEIGHT) * rect.height,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startRotationDeg: scenario.placement.rotationDeg,
+    };
+    setActiveGesture("rotate");
+  };
+
+  const rotateDraggedMass = (event: ReactPointerEvent<SVGCircleElement>) => {
+    const drag = rotationDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const delta = pointerRotationDeltaDeg(
+      { x: drag.startClientX, y: drag.startClientY },
+      { x: event.clientX, y: event.clientY },
+      { x: drag.centerClientX, y: drag.centerClientY }
+    );
+    updatePlacement({
+      rotationDeg: snapPlacementValue(
+        normalizePlacementRotationDeg(drag.startRotationDeg + delta),
+        1
+      ),
+    });
+  };
+
+  const endRotationDrag = (event: ReactPointerEvent<SVGCircleElement>) => {
+    if (rotationDragRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    rotationDragRef.current = null;
+    setActiveGesture(null);
+  };
 
   return (
     <section
@@ -557,13 +719,33 @@ export function ScenarioPlacementWorkspace({
 
             <div
               style={{
+                marginBottom: 8,
+                padding: "7px 9px",
+                borderRadius: 8,
+                background: "var(--accent-soft)",
+                color: "var(--accent-fg)",
+                fontSize: 10,
+                lineHeight: 1.45,
+              }}
+            >
+              파란 계획 매스를 끌면 건물 전체가 이동합니다. 위쪽 원형 핸들을
+              끌면 1° 단위로 회전하며, 숫자 입력과 동일한 배치값에 저장됩니다.
+            </div>
+
+            <div
+              style={{
                 border: "1px solid var(--border)",
                 borderRadius: 11,
                 overflow: "hidden",
                 background: "var(--bg-sunken)",
               }}
             >
-              <svg viewBox="0 0 440 260" style={{ width: "100%", display: "block" }}>
+              <svg
+                viewBox={`0 0 ${PREVIEW_WIDTH} ${PREVIEW_HEIGHT}`}
+                role="img"
+                aria-label="건물 직접 배치 미리보기"
+                style={{ width: "100%", display: "block", touchAction: "none" }}
+              >
                 <polygon
                   points={svgPoints(preview.groundShape, bounds)}
                   fill="#e2e8f0"
@@ -597,8 +779,43 @@ export function ScenarioPlacementWorkspace({
                       ? "rgba(59, 130, 246, 0.48)"
                       : "rgba(239, 68, 68, 0.48)"}
                     stroke={previewFloorAssessment?.fits ? "#2563eb" : "#dc2626"}
-                    strokeWidth="2"
+                    strokeWidth={activeGesture === "move" ? 3 : 2}
+                    onPointerDown={beginMoveDrag}
+                    onPointerMove={moveDraggedMass}
+                    onPointerUp={endMoveDrag}
+                    onPointerCancel={endMoveDrag}
+                    style={{
+                      cursor: activeGesture === "move" ? "grabbing" : "grab",
+                      touchAction: "none",
+                    }}
                   />
+                )}
+                {previewMassCenterSvg && rotationHandleSvg && (
+                  <>
+                    <line
+                      x1={previewMassCenterSvg.x}
+                      y1={previewMassCenterSvg.y}
+                      x2={rotationHandleSvg.x}
+                      y2={rotationHandleSvg.y}
+                      stroke={previewFloorAssessment?.fits ? "#2563eb" : "#dc2626"}
+                      strokeWidth="1.5"
+                      strokeDasharray="4 3"
+                      pointerEvents="none"
+                    />
+                    <circle
+                      cx={rotationHandleSvg.x}
+                      cy={rotationHandleSvg.y}
+                      r={activeGesture === "rotate" ? 8 : 7}
+                      fill="var(--bg-elev)"
+                      stroke={previewFloorAssessment?.fits ? "#2563eb" : "#dc2626"}
+                      strokeWidth={activeGesture === "rotate" ? 3 : 2}
+                      onPointerDown={beginRotationDrag}
+                      onPointerMove={rotateDraggedMass}
+                      onPointerUp={endRotationDrag}
+                      onPointerCancel={endRotationDrag}
+                      style={{ cursor: "grab", touchAction: "none" }}
+                    />
+                  </>
                 )}
               </svg>
             </div>
