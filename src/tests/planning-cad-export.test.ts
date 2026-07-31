@@ -150,9 +150,9 @@ describe("Planning CAD export", () => {
     expect(result.dxfFilename).toMatch(/-CAD-design-base\.dxf$/);
     expect(result.dxfText).toContain("AC1015");
     expect(result.dxfText).toContain("$INSUNITS\n70\n6");
-    expect(result.dxfText).toContain("PG_SITE_BOUNDARY");
-    expect(result.dxfText).toContain("PG_PROPOSED_FLOOR_01");
-    expect(result.dxfText).toContain("PG_PROPOSED_FLOOR_02");
+    expect(result.dxfText).toContain("PG_PARCEL");
+    expect(result.dxfText).toContain("PG_PROPOSED_MASS_F01");
+    expect(result.dxfText).toContain("PG_PROPOSED_MASS_F02");
     expect(result.dxfText).toContain("PG_ROAD_BOUNDARY_UPIS");
     expect(result.dxfText).toContain("PG_ADJACENT_PARCELS");
     expect(result.dxfText).toContain("PG_NORTH");
@@ -164,7 +164,7 @@ describe("Planning CAD export", () => {
       northAxis: "+Y",
     });
     expect(
-      metadata.layers.find((layer) => layer.name === "PG_PROPOSED_FLOOR_01")
+      metadata.layers.find((layer) => layer.name === "PG_PROPOSED_MASS_F01")
         ?.entityCount
     ).toBe(1);
     expect(
