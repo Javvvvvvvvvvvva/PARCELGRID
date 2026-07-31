@@ -3,7 +3,7 @@ import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry"
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import type { ContextGeometrySnapshot } from "@/lib/planning/sketchup-export-package";
 
-export const SITE_DELIVERY_AUDIT_VERSION = "site-delivery-audit-v1" as const;
+export const SITE_DELIVERY_AUDIT_VERSION = "site-delivery-audit-v2" as const;
 
 export type SiteDeliveryCheckStatus = "pass" | "review" | "fail";
 
@@ -21,6 +21,9 @@ export interface SiteDeliveryAudit {
   checks: SiteDeliveryCheck[];
   roadOverlapFloorIds: string[];
   summary: {
+    projectIdentityMatches: boolean;
+    coordinateSystemMatches: boolean;
+    parcelBoundaryMatches: boolean;
     roadBoundaryCount: number;
     verifiedWidthFrontageCount: number;
     widthSampleCount: number;
@@ -35,6 +38,57 @@ function openRing(points: LocalPlanPoint[]): LocalPlanPoint[] {
   const first = points[0];
   const last = points[points.length - 1];
   return first.x === last.x && first.z === last.z ? points.slice(0, -1) : points;
+}
+
+const EXPORT_COORDINATE_TOLERANCE_M = 0.000001;
+const EXPORT_ORIGIN_TOLERANCE_DEG = 0.000000001;
+
+function pointMatches(
+  first: LocalPlanPoint,
+  second: LocalPlanPoint
+): boolean {
+  return (
+    Math.abs(first.x - second.x) <= EXPORT_COORDINATE_TOLERANCE_M &&
+    Math.abs(first.z - second.z) <= EXPORT_COORDINATE_TOLERANCE_M
+  );
+}
+
+function ringsMatch(
+  first: LocalPlanPoint[],
+  second: LocalPlanPoint[]
+): boolean {
+  const a = openRing(first);
+  const b = openRing(second);
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+
+  return b.some((candidate, startIndex) => {
+    if (!pointMatches(a[0], candidate)) return false;
+    return [1, -1].some((direction) =>
+      a.every((point, index) => {
+        const otherIndex =
+          (startIndex + direction * index + b.length * 2) % b.length;
+        return pointMatches(point, b[otherIndex]);
+      })
+    );
+  });
+}
+
+function coordinateSystemsMatch(
+  first: PlanningGeometrySnapshot["coordinateSystem"],
+  second: PlanningGeometrySnapshot["coordinateSystem"]
+): boolean {
+  return (
+    first.unit === second.unit &&
+    first.horizontalCrs === second.horizontalCrs &&
+    first.northAxis === second.northAxis &&
+    first.eastAxis === second.eastAxis &&
+    first.upAxis === second.upAxis &&
+    Math.abs(first.originLngLat[0] - second.originLngLat[0]) <=
+      EXPORT_ORIGIN_TOLERANCE_DEG &&
+    Math.abs(first.originLngLat[1] - second.originLngLat[1]) <=
+      EXPORT_ORIGIN_TOLERANCE_DEG
+  );
 }
 
 function orientation(
@@ -168,6 +222,49 @@ export function buildSiteDeliveryAudit(input: {
           ?.message ?? "계획 매스 Geometry Contract를 통과하지 못했습니다.",
   });
 
+  const projectIdentityMatches =
+    input.context.projectId === input.planning.projectId &&
+    input.cadastral.projectId === input.planning.projectId;
+  checks.push({
+    id: "export-project-identity",
+    status: projectIdentityMatches ? "pass" : "fail",
+    label: "프로젝트·대표안 연결",
+    message: projectIdentityMatches
+      ? `화면·SketchUp·CAD가 프로젝트 ${input.planning.projectId}의 동일 대표안을 사용합니다.`
+      : "계획·주변 건물·지적 데이터의 프로젝트 ID가 달라 export를 차단했습니다.",
+  });
+
+  const coordinateSystemMatches =
+    coordinateSystemsMatch(
+      input.planning.coordinateSystem,
+      input.context.coordinateSystem
+    ) &&
+    coordinateSystemsMatch(
+      input.planning.coordinateSystem,
+      input.cadastral.coordinateSystem
+    );
+  checks.push({
+    id: "export-coordinate-system",
+    status: coordinateSystemMatches ? "pass" : "fail",
+    label: "SketchUp·CAD 원점",
+    message: coordinateSystemMatches
+      ? `동일 WGS84 원점 ${input.planning.coordinateSystem.originLngLat.join(", ")} · meter · 동쪽 +X · 북쪽은 SketchUp -Z / CAD +Y`
+      : "계획·주변 건물·지적 데이터의 원점 또는 좌표축이 달라 export를 차단했습니다.",
+  });
+
+  const parcelBoundaryMatches = ringsMatch(
+    input.planning.parcel.polygon,
+    input.cadastral.targetParcel.polygon
+  );
+  checks.push({
+    id: "export-target-parcel",
+    status: parcelBoundaryMatches ? "pass" : "fail",
+    label: "대상 필지 외곽",
+    message: parcelBoundaryMatches
+      ? "화면·SketchUp·CAD가 동일한 대상 필지 외곽선을 사용합니다."
+      : "계획과 지적 export의 대상 필지 외곽선이 달라 export를 차단했습니다.",
+  });
+
   checks.push({
     id: "road-boundary",
     status: input.cadastral.roadParcels.length > 0 ? "pass" : "review",
@@ -259,6 +356,9 @@ export function buildSiteDeliveryAudit(input: {
     checks,
     roadOverlapFloorIds,
     summary: {
+      projectIdentityMatches,
+      coordinateSystemMatches,
+      parcelBoundaryMatches,
       roadBoundaryCount: input.cadastral.roadParcels.length,
       verifiedWidthFrontageCount:
         input.cadastral.summary.verifiedWidthFrontageCount,

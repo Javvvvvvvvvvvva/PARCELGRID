@@ -140,6 +140,10 @@ describe("Planning CAD export", () => {
       exportVersion: string;
       planningGeometryHash: string;
       coordinateSystem: { unit: string; northAxis: string };
+      deliveryAudit: {
+        exportable: boolean;
+        checks: Array<{ id: string; status: string }>;
+      };
       layers: Array<{
         name: string;
         defaultVisible: boolean;
@@ -163,6 +167,16 @@ describe("Planning CAD export", () => {
       unit: "meter",
       northAxis: "+Y",
     });
+    expect(metadata.deliveryAudit.exportable).toBe(true);
+    expect(
+      metadata.deliveryAudit.checks
+        .filter((check) => check.id.startsWith("export-"))
+        .map((check) => [check.id, check.status])
+    ).toEqual([
+      ["export-project-identity", "pass"],
+      ["export-coordinate-system", "pass"],
+      ["export-target-parcel", "pass"],
+    ]);
     expect(
       metadata.layers.find((layer) => layer.name === "PG_PROPOSED_MASS_F01")
         ?.entityCount
@@ -173,6 +187,37 @@ describe("Planning CAD export", () => {
     ).toBe(false);
     expect(result.readmeText).toContain("1000배");
     expect(result.readmeText).toContain("Save As로 DWG");
+    expect(result.readmeText).toContain("화면 · SketchUp · CAD 정합성");
+
+    expect(() =>
+      buildPlanningCadPackage({
+        basePackage,
+        cadastral: {
+          ...cadastral,
+          projectId: "different-project",
+        },
+        targetBoundary: targetBoundary(),
+        sourceParcels,
+      })
+    ).toThrow("프로젝트 ID가 달라");
+
+    expect(() =>
+      buildPlanningCadPackage({
+        basePackage,
+        cadastral: {
+          ...cadastral,
+          targetParcel: {
+            ...cadastral.targetParcel,
+            polygon: cadastral.targetParcel.polygon.map((point, index) =>
+              index === 0 ? { x: point.x + 0.01, z: point.z } : point
+            ),
+          },
+        },
+        targetBoundary: targetBoundary(),
+        sourceParcels,
+      })
+    ).toThrow("대상 필지 외곽선이 달라");
+
     expect(result.zipBytes[0]).toBe(0x50);
     expect(result.zipBytes[1]).toBe(0x4b);
   });
