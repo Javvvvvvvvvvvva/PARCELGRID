@@ -10,6 +10,10 @@ import {
 import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
+import {
+  buildFinancialReconciliationAudit,
+  type FinancialReconciliationAudit,
+} from "@/lib/finance/reconciliation-audit";
 import { findMaxAcquisitionForScenario } from "@/lib/finance/max-acquisition";
 import {
   acquisitionPricePerPyeong,
@@ -193,6 +197,10 @@ export default function DashboardPage({
     const acquisitionPrice = parcel.acquiredPrice;
     const sourceGate = buildSourceDataGate(scenario, projectFinancialSources);
     const result = calculateScenario({ parcel, scenario });
+    const reconciliation = buildFinancialReconciliationAudit({
+      result,
+      scenario,
+    });
     const taxes = calculateTaxes({
       parcel,
       result,
@@ -223,6 +231,7 @@ export default function DashboardPage({
       sensitivity,
       breakEven,
       sourceGate,
+      reconciliation,
     };
   }, [context, data?.parcel, draft, draftAcquisitionPrice, projectFinancialSources]);
 
@@ -256,6 +265,7 @@ export default function DashboardPage({
     sensitivity,
     breakEven,
     sourceGate,
+    reconciliation,
   } = calculation;
   const hasSaleRevenue = scenario.program.mix.residentialSale > 0;
   const hasLeaseRevenue =
@@ -496,6 +506,7 @@ export default function DashboardPage({
         <main className="stage3-main">
           <section className="dashboard-section">
             <SectionHeader eyebrow="PRELIMINARY PRO FORMA" title="예비 사업수지" description="공사비·금융·매출 가정을 한 원장에서 계산한 세전 결과입니다. 세금은 계산 가능한 항목만 별도 표시하며 미산정 항목이 있습니다." />
+            <FinancialReconciliationPanel audit={reconciliation} />
             <div className="metric-grid">
               <MetricCard label="세전 총사업비" value={won(result.totalCost)} note="세금·미확정 부대비 일부 별도" />
               <MetricCard label="가정상 매출·가치" value={won(result.totalRevenue)} />
@@ -1551,6 +1562,115 @@ function SectionHeader({ eyebrow, title, description }: { eyebrow: string; title
 function PricePoint({ label, value, note, tone = "default" }: { label: string; value: number; note: string; tone?: "default" | "market" | "active" | "safe" | "risk" }) {
   const edge = tone === "active" ? "var(--accent)" : tone === "safe" ? "var(--pos-fg)" : tone === "risk" ? "var(--neg-fg)" : "var(--border-faint)";
   return <div style={{ padding: "12px 13px", border: `1px solid ${edge}`, borderRadius: 9, background: tone === "active" ? "var(--accent-soft)" : "var(--bg-soft)" }}><span style={{ fontSize: 9.5, color: "var(--fg-muted)" }}>{label}</span><strong style={{ display: "block", marginTop: 6, fontFamily: "var(--font-mono)", fontSize: 16 }}>{won(value)}</strong><small style={{ display: "block", marginTop: 4, color: "var(--fg-faint)", fontSize: 9 }}>{note}</small></div>;
+}
+
+function FinancialReconciliationPanel({
+  audit,
+}: {
+  audit: FinancialReconciliationAudit;
+}) {
+  const tone: Tone =
+    audit.status === "pass"
+      ? "positive"
+      : audit.status === "fail"
+        ? "negative"
+        : "review";
+  const colors = toneColors(tone);
+  const statusLabel =
+    audit.status === "pass"
+      ? "숫자 대사 통과"
+      : audit.status === "fail"
+        ? "숫자 대사 실패"
+        : "자금조달 원장 확인";
+
+  return (
+    <div
+      role="status"
+      style={{
+        marginTop: 14,
+        padding: 12,
+        border: `1px solid ${colors.edge}`,
+        borderRadius: 9,
+        background: colors.bg,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 10,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <strong style={{ fontSize: 11.5 }}>사업수지 자동 대사</strong>
+        <span style={{ color: colors.fg, fontSize: 9.5, fontWeight: 800 }}>
+          {statusLabel}
+        </span>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+          gap: 7,
+          marginTop: 9,
+        }}
+      >
+        {audit.checks.map((check) => {
+          const checkTone: Tone =
+            check.status === "pass"
+              ? "positive"
+              : check.status === "fail"
+                ? "negative"
+                : "review";
+          const checkColors = toneColors(checkTone);
+          return (
+            <div
+              key={check.id}
+              title={check.message}
+              style={{
+                padding: "9px 10px",
+                borderRadius: 7,
+                background: "var(--bg-elev)",
+                border: "1px solid var(--border-faint)",
+              }}
+            >
+              <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+                {check.label}
+              </span>
+              <strong
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  fontSize: 9.5,
+                  color: checkColors.fg,
+                }}
+              >
+                {check.status === "pass"
+                  ? "일치"
+                  : check.status === "fail"
+                    ? `불일치 ${Math.abs(check.differenceManwon).toFixed(2)}만원`
+                    : "월별 원장 확인"}
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+      <p
+        style={{
+          margin: "8px 0 0",
+          color: "var(--fg-muted)",
+          fontSize: 8.5,
+          lineHeight: 1.5,
+        }}
+      >
+        매출·사업비·손익은 각 금액의 1만원 단위 독립 반올림에서 생길 수 있는
+        최대오차 이내로 자동 대사합니다. 자기자본은 누적 투입액, PF는 최고잔액이므로
+        둘의 합은 총사업비 항등식이 아닙니다. 조달과 상환은 분기 자금흐름에서
+        확인합니다.
+      </p>
+    </div>
+  );
 }
 
 function MetricCard({ label, value, note, tone = "neutral" }: { label: string; value: string; note?: string; tone?: Tone }) {
