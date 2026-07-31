@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildFinancialReconciliationAudit,
-  FINANCIAL_RECONCILIATION_TOLERANCE_MANWON,
-} from "@/lib/finance/reconciliation-audit";
+import { buildFinancialReconciliationAudit } from "@/lib/finance/reconciliation-audit";
 import {
   calculateScenario,
   defaultAssumptions,
@@ -55,9 +52,12 @@ describe("Stage 3 financial reconciliation audit", () => {
       ["profit-identity", "pass"],
       ["funding-sources", "pass"],
     ]);
-    expect(
-      Math.abs(audit.summary.fundingDifferenceManwon)
-    ).toBeLessThanOrEqual(FINANCIAL_RECONCILIATION_TOLERANCE_MANWON);
+    const fundingCheck = audit.checks.find(
+      (check) => check.id === "funding-sources"
+    );
+    expect(Math.abs(audit.summary.fundingDifferenceManwon)).toBeLessThanOrEqual(
+      fundingCheck?.toleranceManwon ?? 0
+    );
   });
 
   it("explains why peak PF plus equity is not a total-cost identity with early presale receipts", () => {
