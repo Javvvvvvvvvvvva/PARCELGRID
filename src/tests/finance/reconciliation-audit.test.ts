@@ -36,7 +36,7 @@ function scenario(type: BuildingProgram["type"]): Scenario {
 }
 
 describe("Stage 3 financial reconciliation audit", () => {
-  it("passes every accounting identity for a bulk-exit multi-family plan", () => {
+  it("passes exact operating identities and routes funding timing to the ledger", () => {
     const inputScenario = scenario("multi-family");
     const result = calculateScenario({ parcel, scenario: inputScenario });
     const audit = buildFinancialReconciliationAudit({
@@ -44,20 +44,17 @@ describe("Stage 3 financial reconciliation audit", () => {
       scenario: inputScenario,
     });
 
-    expect(audit.status).toBe("pass");
-    expect(audit.exact).toBe(true);
+    expect(audit.status).toBe("review");
+    expect(audit.exact).toBe(false);
     expect(audit.checks.map((check) => [check.id, check.status])).toEqual([
       ["revenue-components", "pass"],
       ["cost-components", "pass"],
       ["profit-identity", "pass"],
-      ["funding-sources", "pass"],
+      ["funding-sources", "review"],
     ]);
-    const fundingCheck = audit.checks.find(
-      (check) => check.id === "funding-sources"
-    );
-    expect(Math.abs(audit.summary.fundingDifferenceManwon)).toBeLessThanOrEqual(
-      fundingCheck?.toleranceManwon ?? 0
-    );
+    expect(
+      audit.checks.find((check) => check.id === "funding-sources")?.message
+    ).toContain("회수월 매출");
   });
 
   it("explains why peak PF plus equity is not a total-cost identity with early presale receipts", () => {
