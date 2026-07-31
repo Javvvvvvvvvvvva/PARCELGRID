@@ -65,14 +65,14 @@ function dxfPolyline(entity: CadEntity): string {
 function floorLayerName(level: number): string {
   const number = Math.abs(level).toString().padStart(2, "0");
   return level < 0
-    ? `PG_PROPOSED_BASEMENT_${number}`
-    : `PG_PROPOSED_FLOOR_${number}`;
+    ? `PG_PROPOSED_MASS_B${number}`
+    : `PG_PROPOSED_MASS_F${number}`;
 }
 
 function baseLayerDefinitions(): CadLayerDefinition[] {
   return [
     {
-      name: "PG_SITE_BOUNDARY",
+      name: "PG_PARCEL",
       color: 7,
       defaultVisible: true,
       purpose: "대상 필지 경계",
@@ -221,7 +221,7 @@ function buildCadEntities(input: {
   const { planning, context } = input.basePackage;
 
   entities.push({
-    layer: "PG_SITE_BOUNDARY",
+    layer: "PG_PARCEL",
     points: input.cadastral.targetParcel.polygon,
     closed: true,
   });
@@ -387,7 +387,7 @@ function buildReadme(input: {
     ),
     "",
     "정확도 원칙",
-    "- PG_PROPOSED_*는 잠긴 대표안 Geometry Snapshot의 실제 층별 외곽선입니다.",
+    "- PG_PROPOSED_MASS_*는 잠긴 대표안 Geometry Snapshot의 실제 층별 외곽선입니다.",
     "- PG_ADJACENT_PARCELS와 주변 건물은 참고용이며 혼동 방지를 위해 기본 OFF입니다.",
     "- PG_ROAD_PARCELS_CADASTRAL은 지목=도로 지적 필지입니다.",
     "- PG_ROAD_BOUNDARY_UPIS는 도시계획 도로 참고 경계이며 현황 포장면이나 측량 성과도가 아닙니다.",
