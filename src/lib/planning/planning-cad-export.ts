@@ -6,8 +6,9 @@ import { buildCadastralLineworkPackage } from "@/lib/planning/cadastral-linework
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import { createStoredZip } from "@/lib/planning/sketchup-dae-export";
 import type { SketchupExportPackageSnapshot } from "@/lib/planning/sketchup-export-package";
+import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
-export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v1" as const;
+export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v2" as const;
 
 interface CadLayerDefinition {
   name: string;
@@ -357,6 +358,7 @@ function buildReadme(input: {
   geojsonFilename: string;
   metadataFilename: string;
   layers: CadLayerDefinition[];
+  deliveryAudit: ReturnType<typeof buildSiteDeliveryAudit>;
 }): string {
   const origin = input.basePackage.planning.coordinateSystem.originLngLat;
   return [
@@ -386,6 +388,14 @@ function buildReadme(input: {
         `- ${layer.name}: ${layer.purpose} · ${layer.defaultVisible ? "기본 ON" : "기본 OFF"} · ${layer.accuracy}`
     ),
     "",
+    "화면 · SketchUp · CAD 정합성",
+    ...input.deliveryAudit.checks
+      .filter((check) => check.id.startsWith("export-"))
+      .map(
+        (check) =>
+          `- [${check.status.toUpperCase()}] ${check.label}: ${check.message}`
+      ),
+    "",
     "정확도 원칙",
     "- PG_PROPOSED_MASS_*는 잠긴 대표안 Geometry Snapshot의 실제 층별 외곽선입니다.",
     "- PG_ADJACENT_PARCELS와 주변 건물은 참고용이며 혼동 방지를 위해 기본 OFF입니다.",
@@ -402,6 +412,18 @@ export function buildPlanningCadPackage(input: {
   targetBoundary: [number, number][];
   sourceParcels: CadastralParcelFeature[];
 }): PlanningCadExportResult {
+  const deliveryAudit = buildSiteDeliveryAudit({
+    planning: input.basePackage.planning,
+    context: input.basePackage.context,
+    cadastral: input.cadastral,
+  });
+  if (!deliveryAudit.exportable) {
+    throw new Error(
+      deliveryAudit.checks.find((check) => check.status === "fail")?.message ??
+        "SketchUp·CAD 설계 전달 정합성 검사를 통과하지 못했습니다."
+    );
+  }
+
   const cad = buildPlanningCadDxf(input);
   const linework = buildCadastralLineworkPackage({
     snapshot: input.cadastral,
@@ -442,6 +464,7 @@ export function buildPlanningCadPackage(input: {
         ...layer,
         entityCount: cad.entityCountByLayer[layer.name] ?? 0,
       })),
+      deliveryAudit,
       validation: {
         planning: input.basePackage.planning.validation,
         context: input.basePackage.context.validation,
@@ -466,6 +489,7 @@ export function buildPlanningCadPackage(input: {
     geojsonFilename,
     metadataFilename,
     layers: cad.layers,
+    deliveryAudit,
   });
   const encoder = new TextEncoder();
   const zipBytes = createStoredZip([
