@@ -84,10 +84,10 @@ function exactCheck(input: {
  * Stage 3의 화면·저장·보고서가 사용하는 ScenarioResult 내부 조정 관계를
  * 하나의 감사 객체로 만든다. 금액 단위는 ScenarioResult와 동일한 만원이다.
  *
- * 자기자본 + PF 최고잔액은 회수 전까지 매출이 들어오지 않는 통매각/임대
- * 모델에서만 총사업비와 정확히 대사된다. 공사 중 분양대금이 유입되는
- * 10/60/30 모델에서는 해당 매출이 PF를 상환·재사용하므로 회계 항등식이
- * 아니며 REVIEW로 표시한다.
+ * 자기자본 투입액은 누적값이고 PF는 최고잔액이므로 둘의 합은
+ * 총사업비와 같은 시점의 회계 항등식이 아니다. 조기 분양대금뿐 아니라
+ * 통매각의 회수월 매출도 PF 상환과 마지막 금융비를 부담할 수 있어,
+ * 자금조달 관계는 REVIEW와 월별 원장으로 설명한다.
  */
 export function buildFinancialReconciliationAudit(input: {
   result: ScenarioResult;
@@ -137,29 +137,20 @@ export function buildFinancialReconciliationAudit(input: {
     roundedTermCount: 2,
   });
   const fundingGap = difference(fundingSources, result.totalCost);
-  const fundingCheck: FinancialReconciliationCheck = usesEarlySaleReceipts
-    ? {
-        id: "funding-sources",
-        label: "자기자본·PF",
-        status: "review",
-        leftLabel: "자기자본 + PF 최고잔액",
-        leftManwon: fundingSources,
-        rightLabel: "총사업비",
-        rightManwon: result.totalCost,
-        differenceManwon: fundingGap,
-        toleranceManwon: roundingTolerance(2),
-        message:
-          "공사 중 분양대금이 PF 상환에 사용되는 모델이므로 자기자본 + PF 최고잔액은 총사업비 항등식이 아닙니다. 월별 통합 원장에서 자금조달을 확인하세요.",
-      }
-    : exactCheck({
-        id: "funding-sources",
-        label: "자기자본·PF",
-        leftLabel: "자기자본 + PF 최고잔액",
-        leftManwon: fundingSources,
-        rightLabel: "총사업비",
-        rightManwon: result.totalCost,
-        roundedTermCount: 2,
-      });
+  const fundingCheck: FinancialReconciliationCheck = {
+    id: "funding-sources",
+    label: "자기자본·PF",
+    status: "review",
+    leftLabel: "누적 자기자본 + PF 최고잔액",
+    leftManwon: fundingSources,
+    rightLabel: "총사업비",
+    rightManwon: result.totalCost,
+    differenceManwon: fundingGap,
+    toleranceManwon: roundingTolerance(2),
+    message: usesEarlySaleReceipts
+      ? "공사 중 분양대금이 PF 상환·재사용에 투입되므로 누적 자기자본 + PF 최고잔액은 총사업비 항등식이 아닙니다. 월별 통합 원장에서 조달과 상환을 확인하세요."
+      : "회수월 매출이 PF 상환과 마지막 금융비를 함께 부담하므로 누적 자기자본 + PF 최고잔액은 총사업비 항등식이 아닙니다. 월별 통합 원장에서 조달과 상환을 확인하세요.",
+  };
 
   const checks = [revenueCheck, costCheck, profitCheck, fundingCheck];
   const status: FinancialReconciliationStatus = checks.some(
