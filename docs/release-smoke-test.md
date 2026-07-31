@@ -16,3 +16,11 @@ Use `서울 도봉구 쌍문동 281-23` as the primary end-to-end demo parcel.
 12. Open the Stage 5 preliminary report and confirm its saved profit range and Geometry Snapshot match Stage 3.
 13. Register the required source-backed inputs, continue to expert handoff, and confirm approval remains blocked until every required discipline is complete.
 14. Export the preliminary/final report as applicable and confirm sources, assumptions, warnings, geometry basis, and financial basis are readable.
+
+## CAD / SketchUp export
+
+15. Lock the representative Geometry Snapshot and wait for cadastral/road context to become ready.
+16. Download the CAD package and confirm the ZIP contains a meter-unit R2000 DXF, WGS84 GeoJSON, metadata, and Korean README.
+17. Open the DXF in AutoCAD-compatible software and confirm proposed floors, site boundary, road boundaries, frontage, north, context buildings, and adjacent parcels are separated by PG_* layers.
+18. Confirm PG_ADJACENT_PARCELS, context buildings, road centerlines, and width samples are OFF by default.
+19. Download the SketchUp package and confirm its DAE origin aligns with the DXF rule: DXF Y = - DAE Z.
