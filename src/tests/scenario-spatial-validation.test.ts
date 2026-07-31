@@ -116,6 +116,43 @@ describe("Stage 2 unified spatial validation", () => {
     ).toBe("pass");
   });
 
+  it("keeps legal placement geometry independent from user design margins", () => {
+    const roads = [
+      {
+        name: "남측 테스트 도로",
+        points: [
+          [126.9998, 37.4999],
+          [127.0002, 37.4999],
+        ] as [number, number][],
+      },
+    ];
+    const scenario = scenarioWithArea(20);
+    const legalDefault = calculatePlanningSpatialValidation(
+      boundary,
+      "일반상업지역",
+      scenario,
+      roads,
+      { road: 0, side: 0.5, rear: 0.5 }
+    );
+    const generousDesignMargin = calculatePlanningSpatialValidation(
+      boundary,
+      "일반상업지역",
+      scenario,
+      roads,
+      { road: 3, side: 3, rear: 3 }
+    );
+
+    expect(generousDesignMargin?.envelopeSteps[0].shape).toEqual(
+      legalDefault?.envelopeSteps[0].shape
+    );
+    expect(generousDesignMargin?.model.floors[0].shape).toEqual(
+      legalDefault?.model.floors[0].shape
+    );
+    expect(generousDesignMargin?.assessment).toEqual(
+      legalDefault?.assessment
+    );
+  });
+
   it("separates area-capacity failure from translated placement failure", () => {
     const oversized = calculatePlanningSpatialValidation(
       boundary,

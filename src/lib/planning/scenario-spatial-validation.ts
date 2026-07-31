@@ -4,7 +4,7 @@ import {
 } from "@/lib/finance/buildable-area";
 import {
   analyzeFrontage,
-  edgeSetbacksFromFrontage,
+  legalEdgeSetbacksFromFrontage,
 } from "@/lib/geo/road-frontage";
 import {
   assessPlanningPlacement,
@@ -162,7 +162,7 @@ export function calculatePlanningSpatialValidation(
   zoning: string,
   scenario: PlanningScenario,
   roads?: RoadLine[],
-  setback?: SetbackSpec
+  _setback?: SetbackSpec
 ): PlanningSpatialValidation | null {
   if (!boundary || boundary.length < 3) return null;
 
@@ -184,10 +184,10 @@ export function calculatePlanningSpatialValidation(
 
   const frontage =
     roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
-  );
+  // Stage 2의 통합 통과/실패 판정은 대표안·3D·Export와 같은
+  // 법적 최대 외곽선을 사용한다. 사용자 설계 여유거리는 별도 UI 안내값이며
+  // 법규 판정으로 섞지 않는다.
+  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
 
   const buildable = calcBuildableArea(
     boundary,
