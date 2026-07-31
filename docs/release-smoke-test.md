@@ -23,4 +23,5 @@ Use `서울 도봉구 쌍문동 281-23` as the primary end-to-end demo parcel.
 16. Download the CAD package and confirm the ZIP contains a meter-unit R2000 DXF, WGS84 GeoJSON, metadata, and Korean README.
 17. Open the DXF in AutoCAD-compatible software and confirm proposed floors, site boundary, road boundaries, frontage, north, context buildings, and adjacent parcels are separated by PG_* layers.
 18. Confirm PG_ADJACENT_PARCELS, context buildings, road centerlines, and width samples are OFF by default.
-19. Download the SketchUp package and confirm its DAE origin aligns with the DXF rule: DXF Y = - DAE Z.
+19. Confirm the SketchUp and CAD metadata record PASS for the same project identity, WGS84 origin/axes, and target parcel outline.
+20. Download the SketchUp package and confirm its DAE origin aligns with the DXF rule: DXF Y = - DAE Z.
