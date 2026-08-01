@@ -12,7 +12,7 @@ import {
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
 export const SKETCHUP_SITE_DELIVERY_EXPORT_VERSION =
-  "sketchup-site-delivery-export-v2" as const;
+  "sketchup-site-delivery-export-v3" as const;
 
 const CLEAN_HIDDEN_LAYER_NODE_IDS = [
   "PG_ADJACENT_PARCELS-node",
@@ -144,7 +144,7 @@ export function buildCleanSketchupSiteDae(fullContextDaeText: string): string {
   );
   return clean.replace(
     /<comments>[^<]*<\/comments>/,
-    "<comments>PARCELGRID design-base | proposed mass, site, context buildings, road boundary and frontage; optional guides excluded</comments>"
+    "<comments>PARCELGRID design-base | proposed mass, parking geometry, site, context buildings, road boundary and frontage; optional guides excluded</comments>"
   );
 }
 
@@ -245,7 +245,7 @@ function deliveryReadme(input: {
     "",
     "권장 가져오기 — 설계 작업",
     `1. ${input.cleanDaeFilename} 파일 하나를 COLLADA 형식으로 가져옵니다.`,
-    "2. 이 파일은 계획 매스·대상 필지·주변 건물·도로 경계·접도선만 표시합니다.",
+    "2. 이 파일은 계획 매스·실제 주차면·차량 통로·대상 필지·주변 건물·도로 경계·접도선을 표시합니다.",
     "3. 인접 필지선·도로 중심선·폭 샘플은 혼란을 줄이기 위해 제외했습니다.",
     "4. 모델 단위는 meter이며 가져온 직후 이동·회전하지 마세요.",
     "",
@@ -281,6 +281,8 @@ function deliveryReadme(input: {
     "",
     "주의",
     "- PG_PROPOSED_MASS만 Geometry Contract를 통과한 설계 시작 기준 매스입니다.",
+    "- PG_PARKING_STALLS와 PG_PARKING_AISLE은 화면·CAD와 같은 Parking Geometry Hash 좌표입니다.",
+    "- PG_PARKING_COLUMNS_REFERENCE는 구조설계 확정 기둥이 아닙니다.",
     "- PG_ROAD_BOUNDARY_UPIS는 도시계획 도로 도형이며 현황측량이나 경계측량을 대체하지 않습니다.",
     "- REVIEW 항목은 export를 허용하지만 건축사와 측량 자료로 재확인해야 합니다.",
     "",
@@ -328,6 +330,8 @@ export function buildSketchupSiteDeliveryExport(input: {
     {
       ...parsedMetadata,
       deliveryExportVersion: SKETCHUP_SITE_DELIVERY_EXPORT_VERSION,
+      parkingGeometryHash: input.basePackage.parkingGeometryHash,
+      parking: input.basePackage.parking,
       preferredImportFile: cleanDaeFilename,
       fullContextImportFile: combinedDaeFilename,
       tagSetupFile: tagSetupFilename,
