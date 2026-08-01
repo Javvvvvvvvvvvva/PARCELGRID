@@ -343,19 +343,21 @@ function ParkingPolygon({
 }
 
 function ParkingAccessLine({ points }: { points: LocalPlanPoint[] }) {
-  const geometry = useMemo(
-    () =>
-      new THREE.BufferGeometry().setFromPoints(
-        points.map((point) => new THREE.Vector3(point.x, 0.095, point.z))
-      ),
-    [points]
-  );
+  const line = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map((point) => new THREE.Vector3(point.x, 0.095, point.z))
+    );
+    const material = new THREE.LineBasicMaterial({
+      color: "#f59e0b",
+      depthTest: false,
+    });
+    const object = new THREE.Line(geometry, material);
+    object.renderOrder = 12;
+    return object;
+  }, [points]);
+
   if (points.length < 2) return null;
-  return (
-    <line geometry={geometry} renderOrder={12}>
-      <lineBasicMaterial color="#f59e0b" depthTest={false} />
-    </line>
-  );
+  return <primitive object={line} />;
 }
 
 function ParkingGeometryLayer({
