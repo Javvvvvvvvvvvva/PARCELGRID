@@ -12,6 +12,7 @@ import {
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
 import type { PlanningScenario } from "@/lib/planning/types";
+import { resolvePlanningGeometrySource } from "@/lib/planning/geometry-source";
 
 export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v2" as const;
 export const GEOMETRY_AREA_PASS_TOLERANCE_PCT = 0.1;
@@ -363,6 +364,64 @@ function buildValidation(
   };
 }
 
+function applyGeometrySourceValidation(
+  baseValidation: PlanningGeometrySnapshot["validation"],
+  scenario: PlanningScenario,
+  geometryHash: string
+): PlanningGeometrySnapshot["validation"] {
+  const source = resolvePlanningGeometrySource(scenario);
+  const issues = [...baseValidation.issues];
+
+  if (source.mode !== "engine-generated") {
+    if (!source.exactGeometryAvailable) {
+      issues.push({
+        code: "geometry-source-exact-missing",
+        severity: "fail",
+        message:
+          source.mode === "reference-image"
+            ? "기준 이미지와 JSON만으로는 정확한 평면 좌표를 복원할 수 없습니다. 원본 3D/CAD 좌표를 연결하기 전에는 대표안과 내보내기를 확정할 수 없습니다."
+            : "외부 설계 모델의 정확한 좌표 검증이 완료되지 않았습니다. DAE·GLB·DXF 원본을 연결하고 Geometry Hash를 확인해야 합니다.",
+      });
+    } else if (!source.sourceGeometryHash) {
+      issues.push({
+        code: "geometry-source-hash-missing",
+        severity: "fail",
+        message:
+          "외부 형상의 좌표는 표시됐지만 검증된 Geometry Hash가 없습니다. 원본 파일 검증을 완료해야 합니다.",
+      });
+    } else if (source.sourceGeometryHash !== geometryHash) {
+      issues.push({
+        code: "geometry-source-hash-mismatch",
+        severity: "fail",
+        message:
+          "연결된 외부 형상의 Geometry Hash가 현재 계획 매스와 다릅니다. 좌표계·층 외곽선·대지 배치를 다시 확인해야 합니다.",
+      });
+    }
+  }
+
+  if (
+    source.locked &&
+    (!source.lockedGeometryHash || source.lockedGeometryHash !== geometryHash)
+  ) {
+    issues.push({
+      code: "geometry-lock-mismatch",
+      severity: "fail",
+      message:
+        "잠금 당시 Geometry Hash와 현재 형상이 다릅니다. 변경 원인을 확인한 뒤 원래 형상으로 복구하거나 명시적으로 잠금을 해제하세요.",
+    });
+  }
+
+  const hasFail = issues.some((issue) => issue.severity === "fail");
+  const hasReview = issues.some((issue) => issue.severity === "review");
+  return {
+    ...baseValidation,
+    status: hasFail ? "fail" : hasReview ? "review" : "pass",
+    representativeEligible: !hasFail,
+    exportable: !hasFail,
+    issues,
+  };
+}
+
 export function buildPlanningGeometry(
   input: BuildPlanningGeometryInput
 ): PlanningGeometryBuildResult {
@@ -477,7 +536,7 @@ export function buildPlanningGeometry(
           officialArea) *
         100
       : 0;
-  const validation = buildValidation(floors, officialArea, measuredArea);
+  const baseValidation = buildValidation(floors, officialArea, measuredArea);
   const roads = (input.roads ?? []).map((road) => ({
     name: road.name,
     points: lineToLocalMeters(road.points, origin),
@@ -488,7 +547,6 @@ export function buildPlanningGeometry(
     version: PLANNING_GEOMETRY_VERSION,
     projectId: input.projectId,
     scenarioId: scenario.id,
-    scenarioVersion: scenario.version,
     origin: origin.map((value) => round(value, 8)),
     parcel: groundShape.map(canonicalPoint),
     floors: floors.map((floor) => ({
@@ -506,6 +564,11 @@ export function buildPlanningGeometry(
     })),
   };
   const geometryHash = stableGeometryHash(hashPayload);
+  const validation = applyGeometrySourceValidation(
+    baseValidation,
+    scenario,
+    geometryHash
+  );
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const snapshot: PlanningGeometrySnapshot = {
     version: PLANNING_GEOMETRY_VERSION,
@@ -548,7 +611,8 @@ export function buildPlanningGeometry(
       "대지 경계와 도로 중심선은 VWorld WGS84 좌표를 로컬 미터 좌표로 변환합니다.",
       "정북일조는 원본 북측 필지 경계를 진남으로 평행 이동한 절대 기준선으로 계산해 측·후면 이격과 중복 적용하지 않습니다.",
       "법적 최대 외곽선은 도로측 추가 0m, 인접대지측 0.5m 검토 기본값을 사용하며 사용자 설계 여유거리와 분리합니다.",
-      "대표안과 SketchUp export는 프로그램 면적과 실제 매스 면적이 허용오차 안에 있을 때만 가능합니다.",
+      "대표안과 SketchUp·CAD export는 프로그램 면적과 실제 매스 면적이 허용오차 안에 있을 때만 가능합니다.",
+      "기준 이미지와 검증되지 않은 외부 모델은 정확한 평면 좌표와 Geometry Hash가 연결될 때까지 시각 참고자료로만 사용합니다.",
     ],
   };
 
