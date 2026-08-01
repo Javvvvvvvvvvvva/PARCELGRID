@@ -22,6 +22,7 @@ import {
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
 import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
+import type { PlanningParkingGeometrySnapshot } from "@/lib/planning/planning-parking-geometry";
 import {
   planningMaterialAppearance,
   type PlanningMaterialAppearance,
@@ -306,6 +307,105 @@ function ParcelPlate({ shape }: { shape: LocalPlanPoint[] }) {
   );
 }
 
+function ParkingPolygon({
+  points,
+  color,
+  bottomY,
+  opacity = 0.8,
+}: {
+  points: LocalPlanPoint[];
+  color: string;
+  bottomY: number;
+  opacity?: number;
+}) {
+  const geometry = useMemo(
+    () => shapeGeometry(points, bottomY, bottomY + 0.025),
+    [points, bottomY]
+  );
+  if (!hasRenderableShape(points)) return null;
+  return (
+    <group renderOrder={10}>
+      <mesh geometry={geometry}>
+        <meshStandardMaterial
+          color={color}
+          transparent
+          opacity={opacity}
+          roughness={0.82}
+          depthTest={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
+        <lineBasicMaterial color={color} depthTest={false} />
+      </lineSegments>
+    </group>
+  );
+}
+
+function ParkingAccessLine({ points }: { points: LocalPlanPoint[] }) {
+  const geometry = useMemo(
+    () =>
+      new THREE.BufferGeometry().setFromPoints(
+        points.map((point) => new THREE.Vector3(point.x, 0.095, point.z))
+      ),
+    [points]
+  );
+  if (points.length < 2) return null;
+  return (
+    <line geometry={geometry} renderOrder={12}>
+      <lineBasicMaterial color="#f59e0b" depthTest={false} />
+    </line>
+  );
+}
+
+function ParkingGeometryLayer({
+  parking,
+}: {
+  parking: PlanningParkingGeometrySnapshot;
+}) {
+  return (
+    <group>
+      <ParkingPolygon
+        points={parking.layout.aisleShape}
+        color="#64748b"
+        bottomY={0.01}
+        opacity={0.42}
+      />
+      {parking.layout.stalls.map((stall) => (
+        <ParkingPolygon
+          key={stall.id}
+          points={stall.corners}
+          color="#10b981"
+          bottomY={0.04}
+          opacity={0.72}
+        />
+      ))}
+      <ParkingPolygon
+        points={parking.layout.coreShape}
+        color="#ef4444"
+        bottomY={0.065}
+        opacity={0.62}
+      />
+      {parking.layout.columns.map((column, index) => (
+        <mesh
+          key={`parking-column-${index}`}
+          position={[column.x, 0.12, column.z]}
+          renderOrder={11}
+        >
+          <cylinderGeometry args={[0.18, 0.18, 0.2, 12]} />
+          <meshStandardMaterial
+            color="#334155"
+            transparent
+            opacity={0.8}
+            depthTest={false}
+          />
+        </mesh>
+      ))}
+      <ParkingAccessLine points={parking.layout.entryPath} />
+    </group>
+  );
+}
+
 function NorthArrow({ extent }: { extent: number }) {
   return (
     <group position={[0, 0.08, -extent * 0.86]}>
@@ -330,6 +430,8 @@ function PlanningScene({
   selectedFloorId,
   hoveredFloorId,
   appearance,
+  parkingGeometry,
+  showParking,
   onSelect,
   onHover,
 }: {
@@ -340,6 +442,8 @@ function PlanningScene({
   selectedFloorId: string | null;
   hoveredFloorId: string | null;
   appearance: PlanningMaterialAppearance | null;
+  parkingGeometry: PlanningParkingGeometrySnapshot | null;
+  showParking: boolean;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
 }) {
@@ -359,6 +463,9 @@ function PlanningScene({
         intensity={0.35}
       />
       <ParcelPlate shape={groundShape} />
+      {showParking && parkingGeometry && (
+        <ParkingGeometryLayer parking={parkingGeometry} />
+      )}
       {visibleFloors.map((mass) => (
         <FloorMassMesh
           key={mass.id}
@@ -550,6 +657,7 @@ export function PlanningMassingView({
   scenario,
   roads,
   setback,
+  parkingGeometry = null,
   height = 430,
 }: {
   boundary?: LngLat[];
@@ -557,11 +665,13 @@ export function PlanningMassingView({
   scenario: PlanningScenario;
   roads?: RoadLine[];
   setback?: SetbackSpec;
+  parkingGeometry?: PlanningParkingGeometrySnapshot | null;
   height?: number;
 }) {
   const [selectedFloorId, setSelectedFloorId] = useState<string | null>(null);
   const [hoveredFloorId, setHoveredFloorId] = useState<string | null>(null);
   const [showBasements, setShowBasements] = useState(true);
+  const [showParking, setShowParking] = useState(true);
 
   const data = useMemo(
     () =>
@@ -605,6 +715,40 @@ export function PlanningMassingView({
     <div>
       <CapacityNotice model={data.model} />
 
+      {parkingGeometry && parkingGeometry.strategy !== "none" && (
+        <div
+          role={parkingGeometry.validation.status === "fail" ? "alert" : "status"}
+          style={{
+            marginBottom: 10,
+            padding: "9px 11px",
+            borderRadius: 9,
+            background:
+              parkingGeometry.validation.status === "fail"
+                ? "var(--neg-soft)"
+                : "var(--pos-soft)",
+            color:
+              parkingGeometry.validation.status === "fail"
+                ? "var(--neg-fg)"
+                : "var(--pos-fg)",
+            fontSize: 10.5,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>
+            실제 주차 배치 {parkingGeometry.layout.capacityCars}대 / 요구{" "}
+            {parkingGeometry.layout.requiredCars}대
+          </strong>
+          <span style={{ marginLeft: 7 }}>
+            면·통로·진입선 · {parkingGeometry.parkingGeometryHash}
+          </span>
+          {parkingGeometry.validation.issues[0] && (
+            <span style={{ display: "block", marginTop: 3 }}>
+              {parkingGeometry.validation.issues[0].message}
+            </span>
+          )}
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
@@ -618,7 +762,25 @@ export function PlanningMassingView({
         <div style={{ fontSize: 10.5, color: "var(--fg-faint)" }}>
           프로그램 면적 자동 맞춤 · 층고 · 평면 축척 · 북측 후퇴 · 계획 위치 반영
         </div>
-        {data.model.basementFloors.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {parkingGeometry && parkingGeometry.layout.stalls.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowParking((value) => !value)}
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                padding: "5px 8px",
+                background: showParking ? "var(--pos-soft)" : "var(--bg-elev)",
+                color: showParking ? "var(--pos-fg)" : "var(--fg-muted)",
+                fontSize: 10.5,
+                cursor: "pointer",
+              }}
+            >
+              {showParking ? "주차 배치 숨기기" : "주차 배치 보기"}
+            </button>
+          )}
+          {data.model.basementFloors.length > 0 && (
           <button
             type="button"
             onClick={() => setShowBasements((value) => !value)}
@@ -636,7 +798,8 @@ export function PlanningMassingView({
           >
             {showBasements ? "지하 숨기기" : "지하 보기"}
           </button>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="planning-massing-layout">
@@ -672,6 +835,8 @@ export function PlanningMassingView({
                 selectedFloorId={selectedFloorId}
                 hoveredFloorId={hoveredFloorId}
                 appearance={appearance}
+                parkingGeometry={parkingGeometry}
+                showParking={showParking}
                 onSelect={(id) =>
                   setSelectedFloorId((current) =>
                     current === id ? null : id
@@ -903,7 +1068,7 @@ export function PlanningMassingView({
           color: "var(--fg-faint)",
         }}
       >
-        프로그램 면적이 법규 외곽선 안에 들어오면 3D를 해당 면적에 자동 맞춥니다. 상층 실제 다각형 전체가 바로 아래층 내부에 포함되지 않으면 빨간 와이어프레임으로 표시하고 자동 확정·내보내기를 차단합니다. 필로티·캔틸레버·전이 구조는 별도 구조 모델과 구조기술자 계산이 입력되기 전까지 미확정입니다.
+        프로그램 면적이 법규 외곽선 안에 들어오면 3D를 해당 면적에 자동 맞춥니다. 주차면·통로는 Parking Geometry Hash로 SketchUp·CAD와 같은 좌표를 사용합니다. 상층 실제 다각형 전체가 바로 아래층 내부에 포함되지 않으면 빨간 와이어프레임으로 표시하고 자동 확정·내보내기를 차단합니다. 필로티·캔틸레버·전이 구조와 기둥 참고점은 구조기술자 계산 전까지 미확정입니다.
       </p>
 
       <style jsx>{`
