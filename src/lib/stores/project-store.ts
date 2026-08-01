@@ -20,6 +20,7 @@ import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-pl
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { protectLockedPlanningGeometryPatch } from "@/lib/planning/geometry-source";
 import {
   clonePlanningScenario,
   touchPlanningScenario,
@@ -306,8 +307,12 @@ export const useProjectStore = create<ProjectStore>()(
             return {
               planningScenarios: state.planningScenarios.map((scenario) => {
                 if (scenario.id !== id) return scenario;
+                const protectedPatch = protectLockedPlanningGeometryPatch(
+                  scenario,
+                  patch
+                );
                 const patchedEconomics: PlanningScenario["economicsPreview"] =
-                  patch.economicsPreview ?? {
+                  protectedPatch.economicsPreview ?? {
                     ...scenario.economicsPreview,
                     status:
                       scenario.economicsPreview.status === "not-calculated"
@@ -316,7 +321,7 @@ export const useProjectStore = create<ProjectStore>()(
                   };
                 return {
                   ...scenario,
-                  ...patch,
+                  ...protectedPatch,
                   id: scenario.id,
                   createdAt: scenario.createdAt,
                   version: scenario.version,
@@ -341,7 +346,10 @@ export const useProjectStore = create<ProjectStore>()(
             return {
               planningScenarios: state.planningScenarios.map((scenario) =>
                 scenario.id === id
-                  ? touchPlanningScenario(scenario, patch)
+                  ? touchPlanningScenario(
+                      scenario,
+                      protectLockedPlanningGeometryPatch(scenario, patch)
+                    )
                   : scenario
               ),
               ...(invalidatesRepresentative

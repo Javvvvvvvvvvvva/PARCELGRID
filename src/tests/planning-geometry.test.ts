@@ -145,6 +145,102 @@ describe("Planning Geometry Contract", () => {
     expect(changed.geometryHash).not.toBe(first.geometryHash);
   });
 
+  it("keeps the geometry hash stable when only the scenario version changes", () => {
+    const boundary = squareBoundary();
+    const origin = planningRingCentroid(boundary);
+    const lotAreaSqm = polygonAreaSqm(
+      planningRingToLocalMeters(boundary, origin)
+    );
+    const scenario = scenarioWithArea(100);
+    const input = {
+      projectId: "parcel-1",
+      scenario,
+      boundary,
+      lotAreaSqm,
+      zoning: "일반상업지역",
+      roads: [],
+      setback: { road: 0, side: 0, rear: 0 },
+    };
+
+    const first = buildPlanningGeometry(input).snapshot;
+    scenario.version += 1;
+    scenario.name = "비형상 정보만 변경";
+    const second = buildPlanningGeometry(input).snapshot;
+
+    expect(second.scenarioVersion).toBe(first.scenarioVersion + 1);
+    expect(second.geometryHash).toBe(first.geometryHash);
+  });
+
+  it("treats a reference image without exact coordinates as visual-only", () => {
+    const boundary = squareBoundary();
+    const origin = planningRingCentroid(boundary);
+    const scenario = scenarioWithArea(100);
+    scenario.geometrySource = {
+      mode: "reference-image",
+      exactGeometryAvailable: false,
+      sourceName: "parcelgrid-reference.png",
+      locked: false,
+    };
+
+    const snapshot = buildPlanningGeometry({
+      projectId: "parcel-1",
+      scenario,
+      boundary,
+      lotAreaSqm: polygonAreaSqm(
+        planningRingToLocalMeters(boundary, origin)
+      ),
+      zoning: "제2종일반주거지역",
+      roads: [],
+      setback: { road: 0, side: 0, rear: 0 },
+    }).snapshot;
+
+    expect(snapshot.validation.representativeEligible).toBe(false);
+    expect(snapshot.validation.exportable).toBe(false);
+    expect(
+      snapshot.validation.issues.some(
+        (issue) => issue.code === "geometry-source-exact-missing"
+      )
+    ).toBe(true);
+  });
+
+  it("accepts a matching geometry lock and rejects a changed hash", () => {
+    const boundary = squareBoundary();
+    const origin = planningRingCentroid(boundary);
+    const lotAreaSqm = polygonAreaSqm(
+      planningRingToLocalMeters(boundary, origin)
+    );
+    const scenario = scenarioWithArea(100);
+    const input = {
+      projectId: "parcel-1",
+      scenario,
+      boundary,
+      lotAreaSqm,
+      zoning: "일반상업지역",
+      roads: [],
+      setback: { road: 0, side: 0, rear: 0 },
+    };
+    const unlocked = buildPlanningGeometry(input).snapshot;
+    scenario.geometrySource = {
+      mode: "engine-generated",
+      exactGeometryAvailable: true,
+      locked: true,
+      lockedGeometryHash: unlocked.geometryHash,
+      lockedAt: "2026-07-31T00:00:00.000Z",
+    };
+
+    const matching = buildPlanningGeometry(input).snapshot;
+    expect(matching.validation.exportable).toBe(true);
+
+    scenario.geometrySource.lockedGeometryHash = "pg-geometry-changed";
+    const mismatched = buildPlanningGeometry(input).snapshot;
+    expect(mismatched.validation.exportable).toBe(false);
+    expect(
+      mismatched.validation.issues.some(
+        (issue) => issue.code === "geometry-lock-mismatch"
+      )
+    ).toBe(true);
+  });
+
   it("does not shrink the legal-max envelope with legacy design setback values", () => {
     const boundary = squareBoundary();
     const origin = planningRingCentroid(boundary);

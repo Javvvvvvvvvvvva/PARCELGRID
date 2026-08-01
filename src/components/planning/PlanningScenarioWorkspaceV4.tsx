@@ -4,10 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
 import { PlanningGuidedEditor } from "@/components/planning/PlanningGuidedEditor";
+import { PlanningGeometrySourcePanel } from "@/components/planning/PlanningGeometrySourcePanel";
 import { PlanningMassingView } from "@/components/planning/PlanningMassingView";
 import { PlanningMaterialEditor } from "@/components/planning/PlanningMaterialEditor";
 import { Panel, SectionTitle } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
+import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import {
   calculatePlanningScenario,
   planningEconomicsAssumptionsFromLegacy,
@@ -510,6 +513,27 @@ export function PlanningScenarioWorkspaceV4({
   const representativeScenario = projectScenarios.find(
     (scenario) => scenario.id === representativePlanningScenarioId
   );
+  const selectedGeometry = useMemo(() => {
+    if (
+      !selectedScenario ||
+      !parcel?.boundary ||
+      parcel.boundary.length < 3
+    ) {
+      return null;
+    }
+    return buildPlanningGeometry({
+      projectId: selectedScenario.projectId ?? parcel.id,
+      scenario: selectedScenario,
+      boundary: parcel.boundary,
+      lotAreaSqm: parcel.lotArea,
+      zoning: parcel.zoning ?? "",
+      roads: parcel.roads,
+      setback: parcel.setback,
+    }).snapshot;
+  }, [selectedScenario, parcel]);
+  const geometryLocked = selectedScenario
+    ? isPlanningGeometryLocked(selectedScenario)
+    : false;
 
   if (!data || !parcel) return null;
 
@@ -538,6 +562,16 @@ export function PlanningScenarioWorkspaceV4({
 
   const confirmRepresentative = () => {
     if (!selectedScenario || !selectedCalculation) return;
+    if (!selectedGeometry?.validation.representativeEligible) {
+      const failure = selectedGeometry?.validation.issues.find(
+        (issue) => issue.severity === "fail"
+      );
+      window.alert(
+        failure?.message ??
+          "Geometry 검증을 통과하지 못해 대표 계획안으로 확정할 수 없습니다."
+      );
+      return;
+    }
     const health = planHealth(selectedCalculation);
     if (health.fail > 0) {
       window.alert(
@@ -560,8 +594,10 @@ export function PlanningScenarioWorkspaceV4({
         economicsPreview: selectedCalculation.economicsPreview,
       });
     }
-    setRepresentativePlanningScenarioId(selectedScenario.id);
-    setActiveScenarioId(selectedScenario.id);
+    const confirmed = setRepresentativePlanningScenarioId(
+      selectedScenario.id
+    );
+    if (confirmed) setActiveScenarioId(selectedScenario.id);
   };
 
   const deleteSelected = () => {
@@ -831,7 +867,11 @@ export function PlanningScenarioWorkspaceV4({
                       type="button"
                       style={{
                         ...confirmButtonStyle,
-                        opacity: selectedHealth.fail > 0 ? 0.55 : 1,
+                        opacity:
+                          selectedHealth.fail > 0 ||
+                          !selectedGeometry?.validation.representativeEligible
+                            ? 0.55
+                            : 1,
                       }}
                       onClick={confirmRepresentative}
                     >
@@ -843,6 +883,16 @@ export function PlanningScenarioWorkspaceV4({
                 <UnifiedStatusBanner
                   calculation={selectedCalculation}
                   representative={isRepresentative}
+                />
+
+                <PlanningGeometrySourcePanel
+                  scenario={selectedScenario}
+                  geometry={selectedGeometry}
+                  onChange={(geometrySource) =>
+                    editPlanningScenarioDraft(selectedScenario.id, {
+                      geometrySource,
+                    })
+                  }
                 />
 
                 <section className="editor-mode-switch" aria-label="계획 편집 방식">
@@ -1020,7 +1070,26 @@ export function PlanningScenarioWorkspaceV4({
                   }
                   bodyStyle={{ padding: "var(--s4)" }}
                 >
-                  {editorMode === "guided" ? (
+                  {geometryLocked ? (
+                    <div
+                      role="status"
+                      style={{
+                        padding: "18px",
+                        borderRadius: 10,
+                        background: "var(--pos-soft)",
+                        color: "var(--pos-fg)",
+                        fontSize: 11.5,
+                        lineHeight: 1.65,
+                      }}
+                    >
+                      <strong style={{ display: "block", marginBottom: 4 }}>
+                        현재 계획 형상이 Geometry Hash로 잠겨 있습니다.
+                      </strong>
+                      층수·층별 외곽선·배치·회전·주차·주용도 편집은
+                      차단됩니다. 외장 재료는 계속 바꿀 수 있으며, 형상을
+                      수정하려면 위의 ‘잠금 해제’를 먼저 선택하세요.
+                    </div>
+                  ) : editorMode === "guided" ? (
                     <PlanningGuidedEditor
                       scenario={selectedScenario}
                       calculation={selectedCalculation}
