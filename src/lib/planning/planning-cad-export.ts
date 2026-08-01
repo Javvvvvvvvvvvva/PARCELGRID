@@ -8,7 +8,7 @@ import { createStoredZip } from "@/lib/planning/sketchup-dae-export";
 import type { SketchupExportPackageSnapshot } from "@/lib/planning/sketchup-export-package";
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
-export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v2" as const;
+export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v3" as const;
 
 interface CadLayerDefinition {
   name: string;
@@ -78,6 +78,41 @@ function baseLayerDefinitions(): CadLayerDefinition[] {
       defaultVisible: true,
       purpose: "대상 필지 경계",
       accuracy: "verified",
+    },
+    {
+      name: "PG_PARKING_STALLS",
+      color: 3,
+      defaultVisible: true,
+      purpose: "화면·SketchUp과 같은 실제 주차면",
+      accuracy: "exact-plan",
+    },
+    {
+      name: "PG_PARKING_AISLE",
+      color: 4,
+      defaultVisible: true,
+      purpose: "주차 차량 통로 외곽",
+      accuracy: "exact-plan",
+    },
+    {
+      name: "PG_PARKING_CORE",
+      color: 1,
+      defaultVisible: true,
+      purpose: "필로티 주차 불가 코어",
+      accuracy: "exact-plan",
+    },
+    {
+      name: "PG_PARKING_COLUMNS_REFERENCE",
+      color: 8,
+      defaultVisible: false,
+      purpose: "구조설계 전 주차 효율 검토용 기둥 참고점",
+      accuracy: "reference",
+    },
+    {
+      name: "PG_PARKING_ACCESS_REFERENCE",
+      color: 2,
+      defaultVisible: true,
+      purpose: "도로 접면 방향 기반 차량 진입 참고선",
+      accuracy: "reference",
     },
     {
       name: "PG_CONTEXT_BUILDINGS_VERIFIED",
@@ -219,7 +254,7 @@ function buildCadEntities(input: {
   cadastral: CadastralContextSnapshot;
 }): CadEntity[] {
   const entities: CadEntity[] = [];
-  const { planning, context } = input.basePackage;
+  const { planning, parking, context } = input.basePackage;
 
   entities.push({
     layer: "PG_PARCEL",
@@ -233,6 +268,50 @@ function buildCadEntities(input: {
       points: floor.shape,
       closed: true,
     });
+  }
+
+  if (parking) {
+    for (const stall of parking.layout.stalls) {
+      entities.push({
+        layer: "PG_PARKING_STALLS",
+        points: stall.corners,
+        closed: true,
+      });
+    }
+    if (parking.layout.aisleShape.length >= 3) {
+      entities.push({
+        layer: "PG_PARKING_AISLE",
+        points: parking.layout.aisleShape,
+        closed: true,
+      });
+    }
+    if (parking.layout.coreShape.length >= 3) {
+      entities.push({
+        layer: "PG_PARKING_CORE",
+        points: parking.layout.coreShape,
+        closed: true,
+      });
+    }
+    for (const column of parking.layout.columns) {
+      const half = 0.18;
+      entities.push({
+        layer: "PG_PARKING_COLUMNS_REFERENCE",
+        points: [
+          { x: column.x - half, z: column.z - half },
+          { x: column.x + half, z: column.z - half },
+          { x: column.x + half, z: column.z + half },
+          { x: column.x - half, z: column.z + half },
+        ],
+        closed: true,
+      });
+    }
+    if (parking.layout.entryPath.length >= 2) {
+      entities.push({
+        layer: "PG_PARKING_ACCESS_REFERENCE",
+        points: parking.layout.entryPath,
+        closed: false,
+      });
+    }
   }
 
   for (const building of context.buildings) {
@@ -367,6 +446,7 @@ function buildReadme(input: {
     `Project: ${input.basePackage.projectId}`,
     `Scenario: ${input.basePackage.scenarioId} v${input.basePackage.scenarioVersion}`,
     `Geometry hash: ${input.basePackage.planningGeometryHash}`,
+    `Parking hash: ${input.basePackage.parkingGeometryHash ?? "none"}`,
     `Cadastral hash: ${input.cadastral.cadastralHash}`,
     "",
     "파일",
@@ -398,6 +478,9 @@ function buildReadme(input: {
     "",
     "정확도 원칙",
     "- PG_PROPOSED_MASS_*는 잠긴 대표안 Geometry Snapshot의 실제 층별 외곽선입니다.",
+    "- PG_PARKING_STALLS와 PG_PARKING_AISLE은 화면·SketchUp과 같은 Parking Geometry Hash 좌표입니다.",
+    "- PG_PARKING_COLUMNS_REFERENCE는 구조설계 확정 기둥이 아닌 주차 효율 검토용 참고점입니다.",
+    "- PG_PARKING_ACCESS_REFERENCE는 도로 접면 방향 참고선이며 도로 폭을 뜻하지 않습니다.",
     "- PG_ADJACENT_PARCELS와 주변 건물은 참고용이며 혼동 방지를 위해 기본 OFF입니다.",
     "- PG_ROAD_PARCELS_CADASTRAL은 지목=도로 지적 필지입니다.",
     "- PG_ROAD_BOUNDARY_UPIS는 도시계획 도로 참고 경계이며 현황 포장면이나 측량 성과도가 아닙니다.",
@@ -445,6 +528,7 @@ export function buildPlanningCadPackage(input: {
       scenarioVersion: input.basePackage.scenarioVersion,
       generatedAt: input.basePackage.generatedAt,
       planningGeometryHash: input.basePackage.planningGeometryHash,
+      parkingGeometryHash: input.basePackage.parkingGeometryHash,
       contextGeometryHash: input.basePackage.contextGeometryHash,
       cadastralHash: input.cadastral.cadastralHash,
       coordinateSystem: {
@@ -465,13 +549,16 @@ export function buildPlanningCadPackage(input: {
         entityCount: cad.entityCountByLayer[layer.name] ?? 0,
       })),
       deliveryAudit,
+      parking: input.basePackage.parking,
       validation: {
         planning: input.basePackage.planning.validation,
+        parking: input.basePackage.parking?.validation ?? null,
         context: input.basePackage.context.validation,
         cadastral: input.cadastral.validation,
       },
       sourceNotes: [
         ...input.basePackage.planning.sourceNotes,
+        ...(input.basePackage.parking?.sourceNotes ?? []),
         ...input.basePackage.context.sourceNotes,
         ...input.cadastral.sourceNotes,
       ],

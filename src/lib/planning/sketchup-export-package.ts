@@ -9,9 +9,10 @@ import {
   type PlanningGeometrySnapshot,
 } from "@/lib/planning/planning-geometry";
 import { polygonAreaSqm, type LocalPlanPoint } from "@/lib/planning/planning-massing";
+import type { PlanningParkingGeometrySnapshot } from "@/lib/planning/planning-parking-geometry";
 
 export const CONTEXT_GEOMETRY_VERSION = "context-geometry-v1" as const;
-export const SKETCHUP_EXPORT_PACKAGE_VERSION = "sketchup-export-package-v1" as const;
+export const SKETCHUP_EXPORT_PACKAGE_VERSION = "sketchup-export-package-v2" as const;
 export const DEFAULT_CONTEXT_FLOOR_HEIGHT_M = 3;
 
 export type ContextHeightSource =
@@ -72,6 +73,11 @@ export interface ContextGeometrySnapshot {
 export type SketchupLayerName =
   | "PG_PARCEL"
   | "PG_PROPOSED_MASS"
+  | "PG_PARKING_STALLS"
+  | "PG_PARKING_AISLE"
+  | "PG_PARKING_CORE"
+  | "PG_PARKING_COLUMNS_REFERENCE"
+  | "PG_PARKING_ACCESS_REFERENCE"
   | "PG_CONTEXT_BUILDINGS_VERIFIED"
   | "PG_CONTEXT_BUILDINGS_ESTIMATED"
   | "PG_ROADS"
@@ -81,7 +87,7 @@ export type SketchupLayerName =
 export interface SketchupExportLayer {
   name: SketchupLayerName;
   objectCount: number;
-  accuracy: "verified" | "mixed" | "reference";
+  accuracy: "exact-plan" | "verified" | "mixed" | "reference";
   purpose: string;
 }
 
@@ -92,9 +98,11 @@ export interface SketchupExportPackageSnapshot {
   scenarioVersion: number;
   generatedAt: string;
   planningGeometryHash: string;
+  parkingGeometryHash: string | null;
   contextGeometryHash: string;
   exportPackageHash: string;
   planning: PlanningGeometrySnapshot;
+  parking: PlanningParkingGeometrySnapshot | null;
   context: ContextGeometrySnapshot;
   layers: SketchupExportLayer[];
   validation: {
@@ -319,6 +327,7 @@ export function buildContextGeometry(
 
 export function buildSketchupExportPackage(input: {
   planning: PlanningGeometrySnapshot;
+  parking?: PlanningParkingGeometrySnapshot | null;
   existingGeometry?: ExistingBuildingGeometry | null;
   generatedAt?: string;
   defaultFloorHeightM?: number;
@@ -346,6 +355,40 @@ export function buildSketchupExportPackage(input: {
       accuracy: "verified",
       purpose: "건축가 설계 시작 기준 계획 매스",
     },
+    ...(input.parking
+      ? [
+          {
+            name: "PG_PARKING_STALLS" as const,
+            objectCount: input.parking.layout.stalls.length,
+            accuracy: "exact-plan" as const,
+            purpose: "실제 배치된 주차면 외곽",
+          },
+          {
+            name: "PG_PARKING_AISLE" as const,
+            objectCount: input.parking.layout.aisleShape.length >= 3 ? 1 : 0,
+            accuracy: "exact-plan" as const,
+            purpose: "주차 차량 통로 외곽",
+          },
+          {
+            name: "PG_PARKING_CORE" as const,
+            objectCount: input.parking.layout.coreShape.length >= 3 ? 1 : 0,
+            accuracy: "exact-plan" as const,
+            purpose: "필로티 주차 불가 코어",
+          },
+          {
+            name: "PG_PARKING_COLUMNS_REFERENCE" as const,
+            objectCount: input.parking.layout.columns.length,
+            accuracy: "reference" as const,
+            purpose: "구조설계 전 주차 효율 검토용 기둥 참고점",
+          },
+          {
+            name: "PG_PARKING_ACCESS_REFERENCE" as const,
+            objectCount: input.parking.layout.entryPath.length >= 2 ? 1 : 0,
+            accuracy: "reference" as const,
+            purpose: "도로 접면 방향 기반 차량 진입 참고선",
+          },
+        ]
+      : []),
     {
       name: "PG_CONTEXT_BUILDINGS_VERIFIED",
       objectCount: verifiedContextCount,
@@ -378,16 +421,26 @@ export function buildSketchupExportPackage(input: {
     },
   ];
 
-  const blockingReasons = input.planning.validation.issues
-    .filter((issue) => issue.severity === "fail")
-    .map((issue) => issue.message);
+  const blockingReasons = [
+    ...input.planning.validation.issues
+      .filter((issue) => issue.severity === "fail")
+      .map((issue) => issue.message),
+    ...(input.parking?.validation.issues ?? [])
+      .filter((issue) => issue.severity === "fail")
+      .map((issue) => issue.message),
+  ];
   const warnings = [
     ...input.planning.validation.issues
       .filter((issue) => issue.severity === "review")
       .map((issue) => issue.message),
     ...context.validation.issues.map((issue) => issue.message),
+    ...(input.parking?.validation.issues ?? [])
+      .filter((issue) => issue.severity === "review")
+      .map((issue) => issue.message),
   ];
-  const exportable = input.planning.validation.exportable;
+  const exportable =
+    input.planning.validation.exportable &&
+    (input.parking?.validation.exportable ?? true);
   const status = !exportable
     ? "blocked"
     : warnings.length > 0
@@ -399,6 +452,7 @@ export function buildSketchupExportPackage(input: {
     scenarioId: input.planning.scenarioId,
     scenarioVersion: input.planning.scenarioVersion,
     planningGeometryHash: input.planning.geometryHash,
+    parkingGeometryHash: input.parking?.parkingGeometryHash ?? null,
     contextGeometryHash: context.contextHash,
     layers: layers.map((layer) => ({ name: layer.name, count: layer.objectCount })),
   });
@@ -410,9 +464,11 @@ export function buildSketchupExportPackage(input: {
     scenarioVersion: input.planning.scenarioVersion,
     generatedAt,
     planningGeometryHash: input.planning.geometryHash,
+    parkingGeometryHash: input.parking?.parkingGeometryHash ?? null,
     contextGeometryHash: context.contextHash,
     exportPackageHash,
     planning: input.planning,
+    parking: input.parking ?? null,
     context,
     layers,
     validation: {

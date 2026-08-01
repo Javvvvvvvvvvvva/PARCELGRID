@@ -2,12 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/ui/primitives";
+import { defaultAssumptions } from "@/lib/finance/scenario";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 import {
   buildCadastralContext,
   type CadastralParcelFeature,
 } from "@/lib/geo/cadastral-context";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-geometry";
+import {
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
 import { buildSketchupExportPackage } from "@/lib/planning/sketchup-export-package";
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 import { downloadPlanningCadPackage } from "@/lib/planning/planning-cad-export";
@@ -141,8 +147,38 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       roads: parcel.roads,
       setback: parcel.setback,
     }).snapshot;
+    const legacyAssumptions =
+      data?.scenarios.find((candidate) => candidate.recommended)?._raw
+        .assumptions ??
+      data?.scenarios[0]?._raw.assumptions ??
+      defaultAssumptions();
+    const calculation = calculatePlanningScenario(scenario, {
+      parcel: {
+        lotAreaSqm: parcel.lotArea,
+        maxFARPct: parcel.maxFAR,
+        maxBCRPct: parcel.maxBCR,
+        heightLimitM: parcel.heightLimit ?? 0,
+        regulatoryConstraints: parcel.regulatoryConstraints,
+        roofAllowanceM: 1.4,
+        acquisitionCostManwon: parcel.acquiredPrice,
+        demolitionCostManwon: parcel.demolitionCost ?? 0,
+      },
+      assumptions: planningEconomicsAssumptionsFromLegacy(
+        legacyAssumptions,
+        `stage2-${data?.meta.version ?? "local"}`
+      ),
+      calculatedAt: data?.meta.lastSyncedAt,
+    });
+    const parking = buildPlanningParkingGeometry({
+      scenario,
+      planning,
+      requiredCars: calculation.parking.requiredCars,
+      boundary: targetBoundary,
+      roads: parcel.roads,
+    });
     const basePackage = buildSketchupExportPackage({
       planning,
+      parking,
       existingGeometry: getExistingBuildingGeometry(parcel.currentBuilding),
     });
     const cadastral = buildCadastralContext({
@@ -156,12 +192,12 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       cadastral,
     });
 
-    return { planning, basePackage, cadastral, audit };
-  }, [parcel, parcels, projectId, scenario, targetBoundary, targetPnu]);
+    return { planning, parking, basePackage, cadastral, audit };
+  }, [data, parcel, parcels, projectId, scenario, targetBoundary, targetPnu]);
 
   if (!parcel || !targetBoundary || !scenario || !packageData) return null;
 
-  const { planning, basePackage, cadastral, audit } = packageData;
+  const { planning, parking, basePackage, cadastral, audit } = packageData;
   const locked =
     representativeGeometry?.scenarioId === planning.scenarioId &&
     representativeGeometry?.geometryHash === planning.geometryHash;
@@ -282,6 +318,27 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   const rows: Array<[string, number, string]> = [
     ["PG_PARCEL", 1, "대상 필지 경계"],
     ["PG_PROPOSED_MASS", planning.building.floors.length, "검증된 계획 매스"],
+    ["PG_PARKING_STALLS", parking.layout.stalls.length, "실제 주차면"],
+    [
+      "PG_PARKING_AISLE",
+      parking.layout.aisleShape.length >= 3 ? 1 : 0,
+      "차량 통로 외곽",
+    ],
+    [
+      "PG_PARKING_CORE",
+      parking.layout.coreShape.length >= 3 ? 1 : 0,
+      "필로티 주차 불가 코어",
+    ],
+    [
+      "PG_PARKING_COLUMNS_REFERENCE",
+      parking.layout.columns.length,
+      "구조설계 전 기둥 참고점",
+    ],
+    [
+      "PG_PARKING_ACCESS_REFERENCE",
+      parking.layout.entryPath.length >= 2 ? 1 : 0,
+      "차량 진입 참고선",
+    ],
     [
       "PG_CONTEXT_BUILDINGS_VERIFIED",
       basePackage.context.summary.verifiedHeightBuildings,
@@ -327,6 +384,9 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
         <span className="ui-tag">도로 경계 {cadastral.roadParcels.length}개</span>
         <span className="ui-tag">주변 건물 {basePackage.context.summary.totalBuildings}동</span>
         {locked && <span className="ui-tag">대표 계획 매스 잠김</span>}
+        <span className="ui-tag">
+          주차 {parking.layout.capacityCars}대 · {parking.parkingGeometryHash}
+        </span>
       </div>
 
       <p
@@ -337,10 +397,11 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           color: "var(--fg-muted)",
         }}
       >
-        SketchUp 패키지는 계획 매스·주변 건물·필지·도로 경계를 동일 원점의 DAE로
-        제공합니다. CAD 패키지는 잠긴 대표안의 <strong>층별 실제 외곽선</strong>과
-        필지·도로·주변 건물을 AutoCAD R2000 DXF 레이어로 분리합니다. 두 패키지 모두
-        meter 단위와 같은 로컬 원점을 사용합니다.
+        SketchUp 패키지는 계획 매스·실제 주차면·차량 통로·주변 건물·필지·도로를
+        동일 원점의 DAE로 제공합니다. CAD 패키지는 잠긴 대표안의
+        <strong> 층별 실제 외곽선과 같은 주차 배치</strong>를 AutoCAD R2000 DXF
+        레이어로 분리합니다. 화면·SketchUp·CAD는 같은 Parking Geometry Hash와
+        로컬 meter 좌표를 사용합니다.
       </p>
 
       <div
@@ -351,6 +412,11 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
           marginTop: 14,
         }}
       >
+        <Metric
+          label="실제 주차 배치"
+          value={`${parking.layout.capacityCars}대 / 요구 ${parking.layout.requiredCars}대`}
+          sub={parking.parkingGeometryHash}
+        />
         <Metric
           label="도로 경계 출처"
           value={sourceLabel}
