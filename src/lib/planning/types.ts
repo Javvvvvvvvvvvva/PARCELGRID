@@ -73,6 +73,31 @@ export interface PlanningPlacement {
   northSetbackM: number;
 }
 
+export type PlanningGeometrySourceMode =
+  | "engine-generated"
+  | "external-model"
+  | "reference-image";
+
+export type PlanningExternalGeometryFormat = "dae" | "glb" | "dxf";
+
+/**
+ * 계획 매스가 어디에서 왔고 정확한 좌표로 검증됐는지 보존한다.
+ * 과거 저장값은 엔진 생성 매스로 해석한다.
+ */
+export interface PlanningGeometrySource {
+  mode: PlanningGeometrySourceMode;
+  exactGeometryAvailable: boolean;
+  sourceName?: string;
+  sourceFormat?: PlanningExternalGeometryFormat;
+  /** 외부 importer가 동일 좌표계로 검증한 경우에만 기록한다. */
+  sourceGeometryHash?: string;
+  locked: boolean;
+  /** 잠금 당시의 geometryHash. 현재 hash와 다르면 대표안·내보내기를 차단한다. */
+  lockedGeometryHash?: string;
+  lockedAt?: string;
+  note?: string;
+}
+
 export interface PlanningParking {
   strategy: ParkingStrategy;
   /** 사용자가 저장한 계획 주차대수. 실제 배치 엔진 결과와 비교한다. */
@@ -253,6 +278,11 @@ export interface PlanningScenario {
   floorPrograms: FloorProgram[];
   placement: PlanningPlacement;
   parking: PlanningParking;
+  /**
+   * 형상 출처와 좌표 검증·잠금 상태.
+   * 값이 없는 기존 계획안은 정확한 엔진 생성 매스이자 편집 가능한 상태로 처리한다.
+   */
+  geometrySource?: PlanningGeometrySource;
   /** 기존 저장 계획안은 값이 없을 수 있으며 미선택 계획 매스로 처리한다. */
   materials?: PlanningMaterialSelection;
   checks: PlanningCheck[];
