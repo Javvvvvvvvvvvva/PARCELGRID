@@ -6,7 +6,7 @@ import type {
   SketchupLayerName,
 } from "@/lib/planning/sketchup-export-package";
 
-export const SKETCHUP_DAE_EXPORT_VERSION = "sketchup-dae-export-v1" as const;
+export const SKETCHUP_DAE_EXPORT_VERSION = "sketchup-dae-export-v2" as const;
 
 interface MeshData {
   id: string;
@@ -43,6 +43,11 @@ export class SketchupExportBlockedError extends Error {
 const MATERIALS = {
   parcel: { id: "mat-parcel", color: [0.77, 0.71, 0.61, 1] },
   proposed: { id: "mat-proposed", color: [0.72, 0.82, 0.9, 1] },
+  parkingStall: { id: "mat-parking-stall", color: [0.18, 0.72, 0.52, 0.92] },
+  parkingAisle: { id: "mat-parking-aisle", color: [0.37, 0.47, 0.57, 0.55] },
+  parkingCore: { id: "mat-parking-core", color: [0.88, 0.36, 0.28, 0.75] },
+  parkingColumn: { id: "mat-parking-column", color: [0.25, 0.3, 0.36, 0.85] },
+  parkingAccess: { id: "mat-parking-access", color: [0.96, 0.62, 0.12, 0.9] },
   contextVerified: { id: "mat-context-verified", color: [0.62, 0.66, 0.7, 0.68] },
   contextEstimated: { id: "mat-context-estimated", color: [0.76, 0.79, 0.82, 0.42] },
   roads: { id: "mat-roads", color: [0.29, 0.33, 0.38, 1] },
@@ -256,6 +261,96 @@ function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
     if (mesh) meshes.push(mesh);
   }
 
+  const parking = snapshot.parking;
+  if (parking) {
+    parking.layout.stalls.forEach((stall, index) => {
+      const mesh = prismMesh({
+        id: `PG_PARKING_STALLS-${index + 1}`,
+        name: `Parking Stall ${index + 1}`,
+        layer: "PG_PARKING_STALLS",
+        materialId: MATERIALS.parkingStall.id,
+        outer: stall.corners,
+        bottomY: 0.025,
+        topY: 0.045,
+      });
+      if (mesh) meshes.push(mesh);
+    });
+
+    if (parking.layout.aisleShape.length >= 3) {
+      const mesh = prismMesh({
+        id: "PG_PARKING_AISLE-01",
+        name: "Parking Vehicle Aisle",
+        layer: "PG_PARKING_AISLE",
+        materialId: MATERIALS.parkingAisle.id,
+        outer: parking.layout.aisleShape,
+        bottomY: 0.005,
+        topY: 0.02,
+      });
+      if (mesh) meshes.push(mesh);
+    }
+
+    if (parking.layout.coreShape.length >= 3) {
+      const mesh = prismMesh({
+        id: "PG_PARKING_CORE-01",
+        name: "Parking Core Exclusion",
+        layer: "PG_PARKING_CORE",
+        materialId: MATERIALS.parkingCore.id,
+        outer: parking.layout.coreShape,
+        bottomY: 0.03,
+        topY: 0.07,
+      });
+      if (mesh) meshes.push(mesh);
+    }
+
+    parking.layout.columns.forEach((column, index) => {
+      const half = 0.18;
+      const mesh = prismMesh({
+        id: `PG_PARKING_COLUMNS_REFERENCE-${index + 1}`,
+        name: `Parking Column Reference ${index + 1}`,
+        layer: "PG_PARKING_COLUMNS_REFERENCE",
+        materialId: MATERIALS.parkingColumn.id,
+        outer: [
+          { x: column.x - half, z: column.z - half },
+          { x: column.x + half, z: column.z - half },
+          { x: column.x + half, z: column.z + half },
+          { x: column.x - half, z: column.z + half },
+        ],
+        bottomY: 0.03,
+        topY: 0.09,
+      });
+      if (mesh) meshes.push(mesh);
+    });
+
+    const accessMeshes: Array<MeshData | null> = [];
+    for (let index = 0; index < parking.layout.entryPath.length - 1; index += 1) {
+      const ribbon = ribbonPolygon(
+        parking.layout.entryPath[index],
+        parking.layout.entryPath[index + 1],
+        0.18
+      );
+      if (!ribbon) continue;
+      accessMeshes.push(
+        prismMesh({
+          id: `parking-access-${index}`,
+          name: "Parking Access Reference",
+          layer: "PG_PARKING_ACCESS_REFERENCE",
+          materialId: MATERIALS.parkingAccess.id,
+          outer: ribbon,
+          bottomY: 0.05,
+          topY: 0.075,
+        })
+      );
+    }
+    const accessMesh = mergeMeshes({
+      id: "PG_PARKING_ACCESS_REFERENCE-01",
+      name: "Parking Access Reference",
+      layer: "PG_PARKING_ACCESS_REFERENCE",
+      materialId: MATERIALS.parkingAccess.id,
+      meshes: accessMeshes,
+    });
+    if (accessMesh) meshes.push(accessMesh);
+  }
+
   for (const building of snapshot.context.buildings) {
     const mesh = contextBuildingMesh(building);
     if (mesh) meshes.push(mesh);
@@ -368,6 +463,11 @@ function visualSceneXml(
   const layerOrder: SketchupLayerName[] = [
     "PG_PARCEL",
     "PG_PROPOSED_MASS",
+    "PG_PARKING_STALLS",
+    "PG_PARKING_AISLE",
+    "PG_PARKING_CORE",
+    "PG_PARKING_COLUMNS_REFERENCE",
+    "PG_PARKING_ACCESS_REFERENCE",
     "PG_CONTEXT_BUILDINGS_VERIFIED",
     "PG_CONTEXT_BUILDINGS_ESTIMATED",
     "PG_ROADS",
@@ -385,7 +485,7 @@ function visualSceneXml(
       return `<node id="${layer}-node" name="${layer}" type="NODE">${children}</node>`;
     })
     .join("");
-  const metadata = `<node id="PG_METADATA-node" name="PG_METADATA" type="NODE"><extra><technique profile="PARCELGRID"><package_hash>${snapshot.exportPackageHash}</package_hash><planning_hash>${snapshot.planningGeometryHash}</planning_hash><context_hash>${snapshot.contextGeometryHash}</context_hash><unit>meter</unit><north_axis>-Z</north_axis><east_axis>+X</east_axis><origin_lng>${snapshot.planning.coordinateSystem.originLngLat[0]}</origin_lng><origin_lat>${snapshot.planning.coordinateSystem.originLngLat[1]}</origin_lat></technique></extra></node>`;
+  const metadata = `<node id="PG_METADATA-node" name="PG_METADATA" type="NODE"><extra><technique profile="PARCELGRID"><package_hash>${snapshot.exportPackageHash}</package_hash><planning_hash>${snapshot.planningGeometryHash}</planning_hash><parking_hash>${snapshot.parkingGeometryHash ?? ""}</parking_hash><context_hash>${snapshot.contextGeometryHash}</context_hash><unit>meter</unit><north_axis>-Z</north_axis><east_axis>+X</east_axis><origin_lng>${snapshot.planning.coordinateSystem.originLngLat[0]}</origin_lng><origin_lat>${snapshot.planning.coordinateSystem.originLngLat[1]}</origin_lat></technique></extra></node>`;
   return `<library_visual_scenes><visual_scene id="ParcelGridScene" name="PARCELGRID ${snapshot.exportPackageHash}"><node id="PARCELGRID_PACKAGE" name="PARCELGRID_${snapshot.exportPackageHash}" type="NODE">${layerNodes}${metadata}</node></visual_scene></library_visual_scenes>`;
 }
 
@@ -412,12 +512,24 @@ function metadataFor(snapshot: SketchupExportPackageSnapshot) {
     generatedAt: snapshot.generatedAt,
     hashes: {
       planning: snapshot.planningGeometryHash,
+      parking: snapshot.parkingGeometryHash,
       context: snapshot.contextGeometryHash,
       package: snapshot.exportPackageHash,
     },
     coordinateSystem: snapshot.planning.coordinateSystem,
     validation: snapshot.validation,
     layers: snapshot.layers,
+    parking: snapshot.parking
+      ? {
+          version: snapshot.parking.version,
+          parkingGeometryHash: snapshot.parking.parkingGeometryHash,
+          strategy: snapshot.parking.strategy,
+          frontage: snapshot.parking.frontage,
+          layout: snapshot.parking.layout,
+          validation: snapshot.parking.validation,
+          sourceNotes: snapshot.parking.sourceNotes,
+        }
+      : null,
     planning: {
       scenarioName: snapshot.planning.scenarioName,
       parcel: snapshot.planning.parcel,
@@ -476,6 +588,7 @@ function buildReadme(snapshot: SketchupExportPackageSnapshot): string {
     "======================================",
     `Package hash: ${snapshot.exportPackageHash}`,
     `Planning hash: ${snapshot.planningGeometryHash}`,
+    `Parking hash: ${snapshot.parkingGeometryHash ?? "none"}`,
     `Context hash: ${snapshot.contextGeometryHash}`,
     `Scenario: ${snapshot.planning.scenarioName} v${snapshot.scenarioVersion}`,
     "",
@@ -498,6 +611,9 @@ function buildReadme(snapshot: SketchupExportPackageSnapshot): string {
     "",
     "정확도 주의",
     "- PG_PROPOSED_MASS는 Geometry Contract를 통과한 설계 시작 기준 매스입니다.",
+    "- PG_PARKING_STALLS와 PG_PARKING_AISLE은 화면·CAD와 같은 Parking Geometry Hash 좌표입니다.",
+    "- PG_PARKING_COLUMNS_REFERENCE는 구조설계 확정 기둥이 아니라 주차 효율 검토용 참고점입니다.",
+    "- PG_PARKING_ACCESS_REFERENCE는 도로 중심선 접면 방향 기반이며 도로 폭을 뜻하지 않습니다.",
     "- PG_CONTEXT_BUILDINGS_VERIFIED는 GIS 외곽과 등록 높이를 사용합니다.",
     "- PG_CONTEXT_BUILDINGS_ESTIMATED는 GIS 외곽에 층수/기본 층고 기반 추정 높이를 사용합니다.",
     "- PG_ROADS는 실제 도로 경계나 폭이 아니라 VWorld 도로 중심선 참고 표현입니다.",
