@@ -9,6 +9,10 @@ import type {
   PlanningScenarioSummary,
 } from "./types";
 import { createDefaultPlanningMaterials } from "./materials";
+import {
+  createPlanningGeometrySource,
+  resolvePlanningGeometrySource,
+} from "./geometry-source";
 
 function uid(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -117,6 +121,7 @@ export function createBlankPlanningScenario(input?: {
       strategy: "none",
       providedCars: 0,
     },
+    geometrySource: createPlanningGeometrySource("engine-generated"),
     materials: createDefaultPlanningMaterials(),
     checks: [],
     economicsPreview: emptyEconomicsPreview(input?.acquisitionCostManwon ?? 0),
@@ -145,6 +150,15 @@ export function clonePlanningScenario(
     })),
     placement: { ...source.placement },
     parking: { ...source.parking },
+    geometrySource: {
+      ...resolvePlanningGeometrySource(source),
+      locked: false,
+      lockedGeometryHash: undefined,
+      lockedAt: undefined,
+      note: source.geometrySource?.locked
+        ? "잠긴 원본에서 복제한 편집 가능 계획안"
+        : source.geometrySource?.note,
+    },
     materials: source.materials
       ? {
           ...source.materials,
