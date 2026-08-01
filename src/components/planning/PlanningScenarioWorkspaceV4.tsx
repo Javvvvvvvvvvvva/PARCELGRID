@@ -12,6 +12,7 @@ import { Panel, SectionTitle } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildParkingAlternativePatch } from "@/lib/planning/parking-sequence-advisor";
+import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-geometry";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import {
   calculatePlanningScenario,
@@ -533,6 +534,24 @@ export function PlanningScenarioWorkspaceV4({
       setback: parcel.setback,
     }).snapshot;
   }, [selectedScenario, parcel]);
+  const selectedParkingGeometry = useMemo(() => {
+    if (
+      !selectedScenario ||
+      !selectedCalculation ||
+      !selectedGeometry ||
+      !parcel?.boundary ||
+      parcel.boundary.length < 3
+    ) {
+      return null;
+    }
+    return buildPlanningParkingGeometry({
+      scenario: selectedScenario,
+      planning: selectedGeometry,
+      requiredCars: selectedCalculation.parking.requiredCars,
+      boundary: parcel.boundary,
+      roads: parcel.roads,
+    });
+  }, [selectedScenario, selectedCalculation, selectedGeometry, parcel]);
   const geometryLocked = selectedScenario
     ? isPlanningGeometryLocked(selectedScenario)
     : false;
@@ -972,6 +991,7 @@ export function PlanningScenarioWorkspaceV4({
                   scenario={selectedScenario}
                   roads={parcel.roads}
                   setback={parcel.setback}
+                  parkingGeometry={selectedParkingGeometry}
                   height={430}
                 />
 
