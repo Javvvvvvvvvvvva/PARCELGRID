@@ -91,6 +91,11 @@ export interface PlanningGeometrySource {
   sourceFormat?: PlanningExternalGeometryFormat;
   /** 외부 importer가 동일 좌표계로 검증한 경우에만 기록한다. */
   sourceGeometryHash?: string;
+  /** 선택한 원본 파일의 재연결·감사용 식별 정보. 파일 내용 자체는 브라우저 저장소에 넣지 않는다. */
+  sourceFileSizeBytes?: number;
+  sourceFileSha256?: string;
+  verificationVersion?: string;
+  verifiedAt?: string;
   locked: boolean;
   /** 잠금 당시의 geometryHash. 현재 hash와 다르면 대표안·내보내기를 차단한다. */
   lockedGeometryHash?: string;
