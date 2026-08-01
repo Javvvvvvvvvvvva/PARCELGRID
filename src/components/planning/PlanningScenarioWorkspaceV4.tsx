@@ -5,11 +5,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
 import { PlanningGuidedEditor } from "@/components/planning/PlanningGuidedEditor";
 import { PlanningGeometrySourcePanel } from "@/components/planning/PlanningGeometrySourcePanel";
+import { PlanningParkingSequencePanel } from "@/components/planning/PlanningParkingSequencePanel";
 import { PlanningMassingView } from "@/components/planning/PlanningMassingView";
 import { PlanningMaterialEditor } from "@/components/planning/PlanningMaterialEditor";
 import { Panel, SectionTitle } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { buildParkingAlternativePatch } from "@/lib/planning/parking-sequence-advisor";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import {
   calculatePlanningScenario,
@@ -551,6 +553,34 @@ export function PlanningScenarioWorkspaceV4({
     setNewPlanName(`계획안 ${projectScenarios.length + 2}`);
   };
 
+  const createParkingAlternative = (
+    strategy: "surface" | "piloti",
+    capacityCars: number
+  ) => {
+    if (!selectedScenario) return;
+    const copyName = `${selectedScenario.name} · ${
+      strategy === "piloti" ? "필로티 대안" : "지상주차 대안"
+    }`;
+    const copyId = duplicatePlanningScenario(selectedScenario.id, copyName);
+    if (!copyId) return;
+    const copy = useProjectStore
+      .getState()
+      .planningScenarios.find((scenario) => scenario.id === copyId);
+    if (!copy) return;
+    const alternative = buildParkingAlternativePatch(
+      copy,
+      strategy,
+      capacityCars
+    );
+    if (!alternative) {
+      window.alert(
+        "기준 이미지형 계획안에는 원본에 없는 주차 또는 필로티를 추가할 수 없습니다."
+      );
+      return;
+    }
+    editPlanningScenarioDraft(copyId, alternative.patch);
+  };
+
   const saveSelected = () => {
     if (!selectedScenario || !selectedCalculation) return;
     updatePlanningScenario(selectedScenario.id, {
@@ -894,6 +924,18 @@ export function PlanningScenarioWorkspaceV4({
                     })
                   }
                 />
+
+                {selectedGeometry && (
+                  <PlanningParkingSequencePanel
+                    scenario={selectedScenario}
+                    calculation={selectedCalculation}
+                    geometry={selectedGeometry}
+                    boundary={parcel.boundary}
+                    roads={parcel.roads}
+                    onCreateAlternative={createParkingAlternative}
+                    onEditProgram={() => setEditorMode("expert")}
+                  />
+                )}
 
                 <section className="editor-mode-switch" aria-label="계획 편집 방식">
                   <div>
