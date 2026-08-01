@@ -25,3 +25,12 @@ Use `서울 도봉구 쌍문동 281-23` as the primary end-to-end demo parcel.
 18. Confirm PG_ADJACENT_PARCELS, context buildings, road centerlines, and width samples are OFF by default.
 19. Confirm the SketchUp and CAD metadata record PASS for the same project identity, WGS84 origin/axes, and target parcel outline.
 20. Download the SketchUp package and confirm its DAE origin aligns with the DXF rule: DXF Y = - DAE Z.
+
+
+## 외부 형상 재연결
+
+21. Plan Studio에서 형상 출처를 외부 설계 모델로 변경한다.
+22. 원본 PARCELGRID DAE를 선택하고 단위·원점·축·층 외곽선·높이·Geometry Hash 검증이 PASS인지 확인한다.
+23. CAD DXF를 선택할 때 같은 패키지의 metadata.json도 함께 선택하고 모든 층 레이어가 현재 계획과 일치하는지 확인한다.
+24. DAE 좌표 하나 또는 DXF 층 외곽선을 변경한 사본은 검증 실패하며 대표안·SketchUp·CAD 내보내기가 차단되는지 확인한다.
+25. 검증 통과 파일은 SHA-256 지문과 검증 버전을 남기고 해당 Geometry Hash로 자동 잠기는지 확인한다.
