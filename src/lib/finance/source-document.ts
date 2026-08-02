@@ -49,6 +49,13 @@ const CANONICAL_CONTENT_TYPE: Record<SourceDocumentExtension, string> = {
   csv: "text/csv",
 };
 
+export function sourceDocumentContentType(fileName: string): string {
+  const extension = sourceDocumentExtension(fileName);
+  return extension
+    ? CANONICAL_CONTENT_TYPE[extension]
+    : "application/octet-stream";
+}
+
 export function sourceDocumentExtension(
   fileName: string,
 ): SourceDocumentExtension | null {
@@ -142,6 +149,20 @@ export function buildSourceDocumentPath(
   fileName: string,
 ): string {
   return `${sourceDocumentProjectPrefix(projectId)}${normalizeSourceDocumentSegment(field)}/${normalizeSourceDocumentSegment(fileName)}`;
+}
+
+export function buildVersionedSourceDocumentPath(
+  projectId: string,
+  field: string,
+  fileName: string,
+  sha256: string,
+): string {
+  const basePath = buildSourceDocumentPath(projectId, field, fileName);
+  const suffix = sha256.slice(0, 12).toLowerCase();
+  const dot = basePath.lastIndexOf(".");
+  return dot > basePath.lastIndexOf("/")
+    ? `${basePath.slice(0, dot)}-${suffix}${basePath.slice(dot)}`
+    : `${basePath}-${suffix}`;
 }
 
 export function isProjectSourceDocumentPath(

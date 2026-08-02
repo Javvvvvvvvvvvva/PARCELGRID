@@ -21,7 +21,7 @@
  * cites the coefficient that produced it.
  */
 
-import { D, ZERO, ONE, HUNDRED, toManWon, toPct, Decimal } from "./math";
+import { D, ONE, HUNDRED, toPct } from "./math";
 
 export interface Comp {
   id: string;

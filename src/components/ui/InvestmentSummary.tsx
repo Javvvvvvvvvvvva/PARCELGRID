@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ScenarioVM } from "@/lib/adapters/view-model";
-import { won, pct } from "@/lib/utils/format";
+import { won } from "@/lib/utils/format";
 
 interface Props {
   scenarios: ScenarioVM[];
@@ -23,17 +23,6 @@ export function InvestmentSummary({ scenarios, defaultScenarioId }: Props) {
 
   const [activeId, setActiveId] = useState(initialId);
   const active = scenarios.find((s) => s.id === activeId) ?? scenarios[0];
-
-  // DEBUG: 매출 0 진단 (작업 후 제거 예정)
-  if (typeof window !== "undefined" && active) {
-    console.log("[InvestmentSummary] active scenario:", active.id, active.name);
-    console.log("  revenueSale:", active.revenueSale);
-    console.log("  revenueLease:", active.revenueLease);
-    console.log("  revenueRetail:", active.revenueRetail);
-    console.log("  revenue (total):", active.revenue);
-    console.log("  gfa:", active.gfa, "effectiveGFA:", (active as any).effectiveGFA);
-    console.log("  parkingSpaces:", (active as any).parkingSpaces, "coreArea:", (active as any).coreArea);
-  }
 
   if (!active) return null;
 

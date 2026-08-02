@@ -72,7 +72,7 @@ export const orgs = pgTable("orgs", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** Users (NextAuth-compatible). */
+/** Users (future organization/role authentication compatible). */
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: uuid("org_id")

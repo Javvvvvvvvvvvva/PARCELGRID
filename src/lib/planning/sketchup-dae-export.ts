@@ -1,7 +1,6 @@
 import { ShapeUtils, Vector2 } from "three";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import type {
-  LocalContextPolygon,
   SketchupExportPackageSnapshot,
   SketchupLayerName,
 } from "@/lib/planning/sketchup-export-package";

@@ -1885,10 +1885,6 @@ function SourceDataPanel({
   };
 
   const uploadSourceDocument = async () => {
-    if (!uploadKey.trim()) {
-      setError("서버에 설정한 원문 보관함 접근 키를 입력하세요.");
-      return;
-    }
     if (!selectedFile) {
       setError("업로드할 PDF·Excel·CSV 원문을 선택하세요.");
       return;
@@ -1904,7 +1900,9 @@ function SourceDataPanel({
         `/api/projects/${encodeURIComponent(projectId)}/source-documents`,
         {
           method: "POST",
-          headers: { "x-parcelgrid-upload-key": uploadKey },
+          headers: uploadKey.trim()
+            ? { "x-parcelgrid-upload-key": uploadKey }
+            : undefined,
           body: form,
         },
       );
@@ -1933,10 +1931,6 @@ function SourceDataPanel({
   };
 
   const openSourceDocument = async (document: SourceDocumentMetadata) => {
-    if (!uploadKey.trim()) {
-      setError("원문을 열려면 보관함 접근 키를 입력하세요.");
-      return;
-    }
     setError(null);
     try {
       const query = new URLSearchParams({
@@ -1945,7 +1939,11 @@ function SourceDataPanel({
       });
       const response = await fetch(
         `/api/projects/${encodeURIComponent(projectId)}/source-documents?${query}`,
-        { headers: { "x-parcelgrid-upload-key": uploadKey } },
+        {
+          headers: uploadKey.trim()
+            ? { "x-parcelgrid-upload-key": uploadKey }
+            : undefined,
+        },
       );
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
@@ -2118,12 +2116,12 @@ function SourceDataPanel({
             비공개 원문 보관함
           </legend>
           <label style={sourceLabelStyle}>
-            접근 키 · 브라우저에 저장하지 않음
+            접근 키 · 로컬 개발은 선택, 공유 서버는 필수
             <input
               type="password"
               autoComplete="off"
               value={uploadKey}
-              placeholder="SOURCE_DOCUMENT_UPLOAD_KEY"
+              placeholder="로컬에서는 비워도 됩니다"
               onChange={(event) => setUploadKey(event.target.value)}
               style={sourceInputStyle}
             />

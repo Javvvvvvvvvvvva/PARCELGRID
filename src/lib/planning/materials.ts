@@ -188,7 +188,7 @@ export interface PlanningMaterialCostAdjustment {
 }
 
 function optionalRate(value: number | undefined): number | null {
-  if (value == null || !Number.isFinite(value) || value < 0) return null;
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
   return value;
 }
 

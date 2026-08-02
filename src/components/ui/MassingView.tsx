@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useState, Suspense } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { calcBuildableArea, type LngLat, type SunStep } from "@/lib/finance/buildable-area";
@@ -134,11 +134,11 @@ function FloorBox({
     <group>
       <mesh
         geometry={geometry}
-        onClick={(e: any) => {
+        onClick={(e: ThreeEvent<MouseEvent>) => {
           e.stopPropagation();
           onSelect(mass.floor);
         }}
-        onPointerOver={(e: any) => {
+        onPointerOver={(e: ThreeEvent<PointerEvent>) => {
           e.stopPropagation();
           onHover(mass.floor);
           document.body.style.cursor = "pointer";
@@ -290,7 +290,7 @@ function Scene({
   onHover: (floor: number | null) => void;
   onData: (infos: FloorInfo[]) => void;
 }) {
-  const { masses, groundShape, extent, parkingShapes, pilotiOn } = useMemo(() => {
+  const { masses, groundShape, extent, parkingShapes } = useMemo(() => {
     const sunApplies = /주거/.test(zoning);
     // 변별 이격 (엔진과 동일 로직 — 도로 접면 기반, 가정값 + 민법 0.5m 하한)
     const frontage =

@@ -45,6 +45,20 @@ export function MassingScene({ boundary, height = 280, massing, showNorth = true
     [boundary]
   );
 
+  const orientation = useMemo(
+    () => (boundary && boundary.length >= 4 ? analyzeOrientation(boundary) : null),
+    [boundary]
+  );
+
+  const frontage = useMemo(
+    () =>
+      boundary && boundary.length >= 4 && roads && roads.length > 0
+        ? analyzeFrontage(boundary, roads)
+        : null,
+    [boundary, roads]
+  );
+  const [compassAngle, setCompassAngle] = useState(0);
+
   if (!projected) {
     return (
       <div
@@ -63,22 +77,8 @@ export function MassingScene({ boundary, height = 280, massing, showNorth = true
     );
   }
 
-  const orientation = useMemo(
-    () => (boundary && boundary.length >= 4 ? analyzeOrientation(boundary) : null),
-    [boundary]
-  );
-
-  const frontage = useMemo(
-    () =>
-      boundary && boundary.length >= 4 && roads && roads.length > 0
-        ? analyzeFrontage(boundary, roads)
-        : null,
-    [boundary, roads]
-  );
-
   const span = Math.max(projected.widthM, projected.depthM);
   const camDist = span * 2.4;
-  const [compassAngle, setCompassAngle] = useState(0);
 
   // 건물 높이: 층수 × 3m (층고). massing 없으면 0 (바닥만)
   const buildingHeight = massing ? Math.max(1, massing.floorsAbove) * 3 : 0;

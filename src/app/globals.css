@@ -592,6 +592,28 @@ html, body {
 .rpt-foot { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 10px; color: var(--fg-subtle); display: flex; justify-content: space-between; }
 .rpt-actions { max-width: 760px; margin: 16px auto 0; display: flex; justify-content: flex-end; }
 
+@media (max-width: 900px) {
+  .ui-topbar { gap: 9px; padding: 0 12px; }
+  .ui-topbar__product, .ui-topbar__divider { display: none; }
+  .ui-crumb { overflow: hidden; white-space: nowrap; }
+  .ui-crumb span { text-overflow: ellipsis; overflow: hidden; }
+  .readiness-check-row { grid-template-columns: 1fr !important; gap: 6px !important; }
+  .handoff-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .handoff-lanes-grid { grid-template-columns: 1fr !important; }
+  .rpt-wrap { padding: 12px; }
+  .rpt-page { padding: 26px 22px; overflow-x: auto; }
+  .rpt-reco-kpis, .rpt-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .ui-topbar__name { display: none; }
+  .ui-topbar__right { display: none; }
+  .readiness-summary-grid { grid-template-columns: 1fr !important; }
+  .handoff-summary-grid { grid-template-columns: 1fr !important; }
+  .rpt-head, .rpt-foot { flex-direction: column; gap: 10px; }
+  .rpt-meta { text-align: left; }
+}
+
 @media print {
   .rpt-wrap { padding: 0; background: #fff; }
   .rpt-page { box-shadow: none; max-width: none; padding: 0; }

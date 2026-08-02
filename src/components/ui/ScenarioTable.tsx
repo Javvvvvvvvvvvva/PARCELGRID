@@ -13,7 +13,6 @@
 import Link from "next/link";
 import type { ScenarioVM } from "@/lib/adapters/view-model";
 import { won, num, pct, scenarioViable } from "@/lib/utils/format";
-import { Tag } from "@/components/ui/Tag";
 
 interface ScenarioTableProps {
   scenarios: ScenarioVM[];

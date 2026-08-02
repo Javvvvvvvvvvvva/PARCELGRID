@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { won, pct } from "@/lib/utils/format";
+import { won } from "@/lib/utils/format";
 import { Tag } from "./Tag";
 import { Icons } from "./Icons";
 import type { ScenarioVM } from "@/lib/adapters/view-model";

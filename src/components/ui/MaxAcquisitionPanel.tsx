@@ -79,7 +79,7 @@ export function MaxAcquisitionPanel({
           borderBottom: "1px solid var(--border-faint)",
         }}
       >
-        "이 부지를 얼마에 사야 시행 가능한가?" 시장 평균 인수가는 시행 가능 인수가와 다를 수 있습니다.
+        “이 부지를 얼마에 사야 시행 가능한가?” 시장 평균 인수가는 시행 가능 인수가와 다를 수 있습니다.
       </div>
 
       {/* Table */}

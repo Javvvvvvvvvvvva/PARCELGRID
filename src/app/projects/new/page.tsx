@@ -20,6 +20,7 @@ import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Tag, Dot } from "@/components/ui/Tag";
 import { TopBar } from "@/components/ui/TopBar";
 import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui/primitives";
@@ -130,8 +131,15 @@ export default function NewParcelPage() {
       });
 
       if (!lookupRes.ok) {
-        const err = await lookupRes.json().catch(() => ({}));
-        throw new Error(err.error ?? `lookup 실패 (${lookupRes.status})`);
+        const err = (await lookupRes.json().catch(() => ({}))) as {
+          error?: string;
+          nextAction?: string;
+        };
+        throw new Error(
+          [err.error ?? `부지 조회 실패 (${lookupRes.status})`, err.nextAction]
+            .filter(Boolean)
+            .join(" ")
+        );
       }
 
       const lookupData: LookupResult = await lookupRes.json();
@@ -389,6 +397,11 @@ export default function NewParcelPage() {
               }}
             >
               {lookupError}
+              <div style={{ marginTop: 6 }}>
+                <Link href="/system/readiness" style={{ color: "inherit", fontWeight: 700 }}>
+                  환경 연결 상태 확인 →
+                </Link>
+              </div>
             </div>
           )}
         </Panel>
@@ -843,13 +856,4 @@ function confidenceLabel(c: "high" | "medium" | "low"): string {
   if (c === "high") return "표본 근거 충분";
   if (c === "medium") return "표본 근거 보통";
   return "표본 근거 부족";
-}
-
-function methodLabel(
-  m: "house-comps" | "by-comps" | "by-publicvalue" | "hybrid"
-): string {
-  if (m === "house-comps") return "구축 단독·다가구 사례 기반 참고";
-  if (m === "by-comps") return "토지 실거래 기반 참고";
-  if (m === "by-publicvalue") return "공시지가 자체 보정 참고";
-  return "실거래·공시지가 혼합 참고";
 }

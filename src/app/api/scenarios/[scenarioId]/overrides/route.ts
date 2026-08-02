@@ -9,8 +9,8 @@
  * to match the scenario's project's org_id (multi-tenant safety), and
  * writes both rows in a single transaction.
  *
- * Auth: This is a draft. Production wraps it with the NextAuth session
- * guard and asserts caller has `analyst` or higher role.
+ * Auth: the current shared workspace gate protects this route. A future
+ * organization/role layer should assert `analyst` or higher before shared hosting.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -21,7 +21,7 @@ import {
   assumptionOverrides,
   auditLog,
 } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const overridesPayload = z.object({
   overrides: z.array(

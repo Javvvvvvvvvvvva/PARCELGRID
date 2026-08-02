@@ -450,7 +450,7 @@ function SceneContent({
     currentBuilding?.buildings[0];
   const geometry = getExistingBuildingGeometry(currentBuilding);
   const local = useMemo(() => boundaryToLocalRing(boundary), [boundary]);
-  const lotRing = local?.ring ?? [];
+  const lotRing = useMemo(() => local?.ring ?? [], [local]);
   const primaryRoad = useMemo(() => findPrimaryRoad(boundary, roads), [boundary, roads]);
   const floorHeight = currentBuilding ? estimateFloorHeightM(currentBuilding) ?? 3 : 3;
 
@@ -848,7 +848,7 @@ function NorthUpMiniMap({
     });
 
     return { local, subjectPolygons, contextPolygons, roadPoints, project };
-  }, [boundary, currentBuilding, geometry, road, showContext]);
+  }, [boundary, geometry, road, showContext]);
 
   if (!drawing) return null;
 

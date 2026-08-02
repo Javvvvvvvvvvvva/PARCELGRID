@@ -10,9 +10,15 @@
 import { use, useMemo } from "react";
 import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
+import { useReviewStore } from "@/lib/stores/review-store";
 import { won, num, scenarioViable } from "@/lib/utils/format";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import { buildEvidenceGate } from "@/lib/handoff/evidence-gate";
+import {
+  buildExpertReviewSummary,
+  validateExpertReview,
+} from "@/lib/handoff/review-workflow";
+import { validateFinancialSourceEvidence } from "@/lib/finance/source-data-gate";
 import {
   constraintStatusLabel,
   coreRegulatoryConstraintsVerified,
@@ -31,14 +37,48 @@ export default function ReportPage({
   const representativeGeometry = useProjectStore(
     (state) => state.representativeGeometrySnapshot
   );
+  const financialSources = useProjectStore(
+    (state) => state.financialSources[projectId] ?? {}
+  );
+  const priceVerifications = useReviewStore(
+    (state) => state.priceVerifications[projectId] ?? {}
+  );
+  const expertReviews = useReviewStore(
+    (state) => state.expertReviews[projectId] ?? {}
+  );
 
-  const scenarios = data?.scenarios ?? [];
+  const scenarios = useMemo(() => data?.scenarios ?? [], [data?.scenarios]);
   const parcel = data?.parcel;
-  const comps = data?.comps ?? [];
+  const comps = useMemo(() => data?.comps ?? [], [data?.comps]);
   const geometry =
     representativeGeometry?.projectId === projectId
       ? representativeGeometry
       : null;
+  const constructionSource = financialSources.constCostPerSqM;
+  const ltcSource = financialSources.ltcTarget;
+  const interestSource = financialSources.interestRate;
+  const validConstructionQuote = Boolean(
+    constructionSource &&
+      constructionSource.sourceKind === "professional-quote" &&
+      validateFinancialSourceEvidence(constructionSource).valid
+  );
+  const validTermSheet = Boolean(
+    ltcSource &&
+      interestSource &&
+      ltcSource.sourceKind === "lender-term-sheet" &&
+      interestSource.sourceKind === "lender-term-sheet" &&
+      validateFinancialSourceEvidence(ltcSource).valid &&
+      validateFinancialSourceEvidence(interestSource).valid
+  );
+  const financeTaxReview = expertReviews["finance-tax"];
+  const taxComplete = Boolean(
+    financeTaxReview?.status === "approved" &&
+      validateExpertReview(financeTaxReview).valid
+  );
+  const reviewSummary = useMemo(
+    () => buildExpertReviewSummary(expertReviews),
+    [expertReviews]
+  );
 
   const evidenceGate = useMemo(() => {
     if (!data) return null;
@@ -55,9 +95,22 @@ export default function ReportPage({
       acquisitionEstimateVersion:
         data.parcel.acquisitionEstimate?.modelVersion ?? null,
       financeModelVersion: PROJECT_LEDGER_MODEL_VERSION,
-      taxComplete: false,
+      taxComplete,
+      hasConstructionQuote: validConstructionQuote,
+      hasTermSheet: validTermSheet,
+      hasExternalPriceOpinion:
+        priceVerifications.acquisition?.status === "verified",
     });
-  }, [comps.length, data, geometry, projectId]);
+  }, [
+    comps.length,
+    data,
+    geometry,
+    priceVerifications.acquisition?.status,
+    projectId,
+    taxComplete,
+    validConstructionQuote,
+    validTermSheet,
+  ]);
 
   const recommended = useMemo(
     () => scenarios.find((s) => s.recommended) ?? scenarios[0],
@@ -78,6 +131,8 @@ export default function ReportPage({
   const analysisDate = data.meta?.lastSyncedAt
     ? new Date(data.meta.lastSyncedAt).toLocaleDateString("ko-KR")
     : new Date().toLocaleDateString("ko-KR");
+  const finalReady =
+    evidenceGate.criticalBlockerCount === 0 && reviewSummary.ready;
 
   return (
     <div className="rpt-wrap">
@@ -117,8 +172,8 @@ export default function ReportPage({
             lineHeight: 1.55,
           }}
         >
-          <strong>Stage 5 예비 모델 · 전문가 검토 전</strong><br />
-          아래 값은 저장 시점의 세전 비교값입니다. Stage 4 Evidence Gate 필수 미확인 {evidenceGate.criticalBlockerCount}건이 남아 있습니다. 금융기관 약정·시공사 견적·감정평가·세무 검토 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.{" "}
+          <strong>{finalReady ? "Stage 5 · 필수 근거와 전문가 승인 기록 완료" : "Stage 5 예비 모델 · 전문가 검토 진행 중"}</strong><br />
+          아래 값은 저장 시점의 세전 비교값입니다. Stage 4 필수 미확인 {evidenceGate.criticalBlockerCount}건 · 전문가 승인 {reviewSummary.approvedCount}/{reviewSummary.requiredDisciplines.length}개 분야입니다. 금융기관 약정·시공사 견적·감정평가·세무 원문을 별도로 대조하기 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.{" "}
           <Link href={`/projects/${projectId}/handoff`} style={{ color: "inherit", fontWeight: 700 }}>
             검증·인계 보드 확인
           </Link>

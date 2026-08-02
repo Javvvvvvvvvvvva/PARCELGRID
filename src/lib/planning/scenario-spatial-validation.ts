@@ -164,6 +164,8 @@ export function calculatePlanningSpatialValidation(
   roads?: RoadLine[],
   _setback?: SetbackSpec
 ): PlanningSpatialValidation | null {
+  // 사용자 디자인 이격은 법적 envelope를 바꾸지 않는다는 계약을 유지한다.
+  void _setback;
   if (!boundary || boundary.length < 3) return null;
 
   const origin = ringCentroid(boundary);

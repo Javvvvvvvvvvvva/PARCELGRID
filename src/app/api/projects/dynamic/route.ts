@@ -39,17 +39,35 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json(
+      {
+        code: "INVALID_JSON",
+        error: "프로젝트 요청 형식을 읽을 수 없습니다.",
+        nextAction: "주소 등록 단계에서 다시 시작하세요.",
+      },
+      { status: 400 },
+    );
   }
 
   const { parcel, lawdCd, parcelDong } = body;
   if (!parcel) {
-    return NextResponse.json({ error: "parcel 필수" }, { status: 400 });
+    return NextResponse.json(
+      {
+        code: "PARCEL_REQUIRED",
+        error: "계산할 부지 정보가 없습니다.",
+        nextAction: "주소 등록 단계에서 부지를 다시 조회하세요.",
+      },
+      { status: 400 },
+    );
   }
 
   if (!parcel.lotArea || !parcel.zoning || !parcel.acquiredPrice) {
     return NextResponse.json(
-      { error: "parcel.lotArea, zoning, acquiredPrice는 필수" },
+      {
+        code: "PARCEL_INPUT_INCOMPLETE",
+        error: "대지면적·용도지역·검토 인수가가 모두 필요합니다.",
+        nextAction: "주소 등록 화면에서 총 취득대금을 입력하세요.",
+      },
       { status: 400 }
     );
   }
@@ -60,7 +78,11 @@ export async function POST(req: NextRequest) {
 
     if (scenarios.length === 0) {
       return NextResponse.json(
-        { error: "이 용도지역에서 가능한 시나리오가 없습니다" },
+        {
+          code: "NO_ELIGIBLE_SCENARIO",
+          error: "현재 확인된 조건으로 생성할 수 있는 예비 시나리오가 없습니다.",
+          nextAction: "용도지역 원문과 사용자 입력값을 확인하세요.",
+        },
         { status: 422 }
       );
     }
@@ -133,10 +155,9 @@ export async function POST(req: NextRequest) {
     console.error("dynamic project 계산 실패:", err);
     return NextResponse.json(
       {
-        error:
-          err instanceof Error
-            ? err.message
-            : "시나리오 계산 중 예상치 못한 오류",
+        code: "PROJECT_COMPUTE_FAILED",
+        error: "프로젝트 시나리오 계산을 완료하지 못했습니다.",
+        nextAction: "저장된 부지 입력을 다시 확인하고 재시도하세요.",
       },
       { status: 500 }
     );

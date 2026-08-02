@@ -24,22 +24,6 @@ const KEY = process.env.VWORLD_API_KEY;
 const DATA_BASE = "https://api.vworld.kr/req/data";
 const NED_BASE = "https://api.vworld.kr/ned/data";
 
-/* ─────────────────────────── XML helpers ─────────────────────────── */
-
-function extractXmlAll(xml: string, tag: string): string[] {
-  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g");
-  const out: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) out.push(m[1].trim());
-  return out;
-}
-
-function extractXmlField(xml: string, tag: string): string | null {
-  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`);
-  const m = xml.match(re);
-  return m ? m[1].trim() : null;
-}
-
 async function fetchText(url: string): Promise<string> {
   if (!KEY) throw new Error("VWORLD_API_KEY not set");
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
