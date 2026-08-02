@@ -7,6 +7,7 @@ import type {
   PlanningScenario,
   PlanningScenarioCalculation,
 } from "./types";
+import { resolvePlanningGeometrySource } from "./geometry-source";
 
 export const PLANNING_DESIGN_INTENT_VERSION =
   "parcelgrid-design-intent-2026.1";
@@ -25,6 +26,7 @@ export function buildPlanningDesignIntent(
   calculation?: PlanningScenarioCalculation
 ) {
   const materials = resolvePlanningMaterials(scenario.materials);
+  const geometrySource = resolvePlanningGeometrySource(scenario);
   const materialCost = calculatePlanningMaterialAdjustment(scenario);
   const primaryLabel =
     PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial];
@@ -67,8 +69,15 @@ export function buildPlanningDesignIntent(
       origin: scenario.origin,
     },
     geometryLock: {
-      source: "parcelgrid-planning-scenario",
+      source: geometrySource.mode,
+      sourceName: geometrySource.sourceName ?? null,
+      exactGeometryAvailable: geometrySource.exactGeometryAvailable,
       referenceImageRequired: true,
+      warning:
+        geometrySource.mode === "reference-image" &&
+        !geometrySource.exactGeometryAvailable
+          ? "정확한 평면 좌표가 없으므로 기준 이미지 없이 원래 매스를 복원하지 않는다."
+          : null,
       placement: scenario.placement,
       floors,
       calculatedMetrics: calculation
@@ -87,6 +96,16 @@ export function buildPlanningDesignIntent(
         "parcel-placement",
         "building-rotation",
         "camera-angle",
+      ],
+      mustNotAdd: [
+        "extra-floor",
+        "rooftop-room",
+        "balcony",
+        "cantilever",
+        "exposed-basement",
+        "additional-building",
+        "unverified-external-stair",
+        "unverified-parking",
       ],
     },
     materials: {

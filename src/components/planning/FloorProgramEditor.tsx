@@ -69,7 +69,7 @@ function floorArea(floor: FloorProgram): number {
   );
 }
 
-function useLabel(useType: FloorUseType): string {
+function floorUseLabel(useType: FloorUseType): string {
   return (
     USE_OPTIONS.find((option) => option.value === useType)?.label ?? useType
   );
@@ -223,7 +223,7 @@ export function FloorProgramEditor({
                     {floor.zones.length > 0 ? (
                       floor.zones.slice(0, 4).map((zone) => (
                         <span key={zone.id} className="ui-tag">
-                          {useLabel(zone.useType)} {num(zone.areaSqm, 0)}㎡
+                          {floorUseLabel(zone.useType)} {num(zone.areaSqm, 0)}㎡
                           {zone.unitCount > 0
                             ? ` · ${zone.unitCount}${
                                 zone.useType === "residential" ? "세대" : "실"

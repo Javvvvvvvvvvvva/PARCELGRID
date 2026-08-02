@@ -47,7 +47,7 @@ function planning(): PlanningGeometrySnapshot {
     selfIntersects: false,
   };
   return {
-    version: "planning-geometry-v1",
+    version: "planning-geometry-v2",
     projectId: "delivery-audit",
     scenarioId: "scenario-1",
     scenarioVersion: 1,
@@ -115,7 +115,7 @@ function context(): ContextGeometrySnapshot {
 
 function cadastral(roadPolygon: Array<{ x: number; z: number }>): CadastralContextSnapshot {
   return {
-    version: "cadastral-context-v1",
+    version: "cadastral-context-v2",
     projectId: "delivery-audit",
     generatedAt: "2026-07-15T00:00:00.000Z",
     cadastralHash: "CAD-TEST0001",
@@ -159,10 +159,14 @@ function cadastral(roadPolygon: Array<{ x: number; z: number }>): CadastralConte
         widthMinM: 6,
         widthAvgM: 6,
         widthMaxM: 6,
+        plannedWidthMinM: null,
+        plannedWidthAvgM: null,
+        plannedWidthMaxM: null,
         status: "verified-cadastral-width",
         source: "VWorld continuous cadastral road parcel",
       },
     ],
+    roadClearances: [],
     summary: {
       adjacentParcelCount: 0,
       roadParcelCount: 1,
@@ -170,6 +174,11 @@ function cadastral(roadPolygon: Array<{ x: number; z: number }>): CadastralConte
       primaryWidthMinM: 6,
       primaryWidthAvgM: 6,
       primaryWidthMaxM: 6,
+      primaryPlannedWidthMinM: null,
+      primaryPlannedWidthAvgM: null,
+      primaryPlannedWidthMaxM: null,
+      primaryMassRoadClearanceM: null,
+      roadIntrusionCount: 0,
     },
     validation: { status: "pass", usable: true, issues: [] },
     sourceNotes: [],

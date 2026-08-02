@@ -130,8 +130,15 @@ export function useDynamicProject(projectId: string) {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
+        const err = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          nextAction?: string;
+        };
+        throw new Error(
+          [err.error ?? `프로젝트 계산 실패 (${res.status})`, err.nextAction]
+            .filter(Boolean)
+            .join(" ")
+        );
       }
 
       return res.json();

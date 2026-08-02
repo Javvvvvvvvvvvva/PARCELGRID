@@ -1,14 +1,18 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { get, put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { FINANCIAL_SOURCE_FIELD_META, type FinancialSourceField } from "@/lib/finance/source-data-gate";
 import {
-  buildSourceDocumentPath,
+  buildVersionedSourceDocumentPath,
   isProjectSourceDocumentPath,
+  sourceDocumentContentType,
   validateSourceDocumentBytes,
   validateSourceDocumentFile,
   type SourceDocumentMetadata,
 } from "@/lib/finance/source-document";
+import {
+  loadSourceDocument,
+  saveSourceDocument,
+} from "@/lib/runtime/source-document-storage";
 
 export const runtime = "nodejs";
 
@@ -19,6 +23,7 @@ interface RouteContext {
 function hasWorkspaceAccess(request: NextRequest): boolean {
   const expected = process.env.SOURCE_DOCUMENT_UPLOAD_KEY?.trim();
   const supplied = request.headers.get("x-parcelgrid-upload-key")?.trim();
+  if (!expected && process.env.NODE_ENV !== "production") return true;
   if (!expected || expected.length < 16 || !supplied) return false;
   const expectedHash = createHash("sha256").update(expected).digest();
   const suppliedHash = createHash("sha256").update(supplied).digest();
@@ -70,17 +75,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   try {
-    const blob = await put(
-      buildSourceDocumentPath(projectId, field, file.name),
-      file,
-      {
-        access: "private",
-        addRandomSuffix: true,
-        contentType: fileValidation.contentType,
-      },
+    const pathname = buildVersionedSourceDocumentPath(
+      projectId,
+      field,
+      file.name,
+      sha256,
     );
+    await saveSourceDocument(pathname, bytes);
     const document: SourceDocumentMetadata = {
-      pathname: blob.pathname,
+      pathname,
       fileName: file.name,
       contentType: fileValidation.contentType,
       size: file.size,
@@ -91,7 +94,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   } catch (error) {
     console.error("source document upload failed", error);
     return NextResponse.json(
-      { error: "비공개 원문 저장소가 연결되지 않았거나 업로드에 실패했습니다." },
+      { error: "로컬 비공개 원문 저장소에 파일을 쓰지 못했습니다." },
       { status: 503 },
     );
   }
@@ -107,14 +110,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
   }
 
   try {
-    const result = await get(pathname, { access: "private" });
-    if (!result || result.statusCode !== 200) {
-      return new NextResponse("Not found", { status: 404 });
-    }
+    const bytes = await loadSourceDocument(pathname);
     const safeName = requestedName.replace(/[\r\n]/g, "").slice(0, 180) || "source-document";
-    return new NextResponse(result.stream, {
+    return new NextResponse(Uint8Array.from(bytes).buffer, {
       headers: {
-        "Content-Type": result.blob.contentType || "application/octet-stream",
+        "Content-Type": sourceDocumentContentType(safeName),
         "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}`,
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-store",
@@ -125,4 +125,3 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return new NextResponse("Not found", { status: 404 });
   }
 }
-

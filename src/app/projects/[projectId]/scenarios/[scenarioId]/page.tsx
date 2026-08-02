@@ -11,9 +11,15 @@ import { KPI } from "@/components/ui/KPI";
 import { Tag } from "@/components/ui/Tag";
 import { Icons } from "@/components/ui/Icons";
 import { PFChart } from "@/components/ui/PFChart";
-import { won, num, pct } from "@/lib/utils/format";
+import { won, num } from "@/lib/utils/format";
 
-type Tab = "pf" | "risk" | "massing";
+type Tab =
+  | "pf"
+  | "tax"
+  | "risk"
+  | "sensitivity"
+  | "assumptions"
+  | "massing";
 
 const MassingView = dynamic(
   () => import("@/components/ui/MassingView").then((m) => m.MassingView),
@@ -117,7 +123,7 @@ export default function ScenarioDetailPage({
 
       {/* Tabs */}
       <div className="ui-tabs">
-        {(["pf", "risk", "massing"] as Tab[]).map((t) => (
+        {(["pf", "tax", "risk", "sensitivity", "assumptions", "massing"] as Tab[]).map((t) => (
           <div
             key={t}
             className={"ui-tab" + (tab === t ? " ui-tab--active" : "")}
@@ -151,6 +157,15 @@ export default function ScenarioDetailPage({
           )
         )}
         {tab === "risk" && <RiskView risks={data.parcelRisks} />}
+        {tab === "tax" && (
+          <TaxView scenario={scenario} parcel={data.parcel} />
+        )}
+        {tab === "sensitivity" && (
+          <SensitivityView scenario={scenario} parcel={data.parcel} />
+        )}
+        {tab === "assumptions" && (
+          <AssumptionsView scenario={scenario} projectId={projectId} />
+        )}
         {tab === "massing" && (
           <div>
             <MassingView
@@ -270,8 +285,7 @@ function PFView({
         <div className="ui-panel__head">
           <span className="ui-panel__title">분기별 현금흐름</span>
           <span className="ui-panel__sub">
-            {pfRows[0]?.quarter} ~ {pfRows[pfRows.length - 1]?.quarter} ·{" "}
-            {pfRows.length} 분기
+            최대 노출 {won(maxExposure)} · 손익분기 {breakEven ?? "미도달"} · EM {scenario.equityMultiple.toFixed(2)}x
           </span>
           <div className="ui-panel__actions">
             <button className="ui-btn ui-btn--sm ui-btn--ghost">{Icons.download()}</button>

@@ -36,19 +36,40 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json(
+      {
+        code: "INVALID_JSON",
+        error: "주소 요청 형식을 읽을 수 없습니다.",
+        nextAction: "페이지를 새로고침한 뒤 다시 조회하세요.",
+        retryable: true,
+      },
+      { status: 400 },
+    );
   }
 
   const address = body.address?.trim();
   if (!address) {
-    return NextResponse.json({ error: "address가 필요합니다" }, { status: 400 });
+    return NextResponse.json(
+      {
+        code: "ADDRESS_REQUIRED",
+        error: "조회할 주소가 필요합니다.",
+        nextAction: "지번 또는 도로명 주소를 입력하세요.",
+        retryable: false,
+      },
+      { status: 400 },
+    );
   }
 
   try {
     const geo = await geocodeAddress(address);
     if (!geo) {
       return NextResponse.json(
-        { error: `주소를 찾을 수 없습니다: ${address}` },
+        {
+          code: "ADDRESS_NOT_FOUND",
+          error: `주소를 찾을 수 없습니다: ${address}`,
+          nextAction: "지번 주소를 포함해 다시 입력하고 Kakao REST 키 상태를 확인하세요.",
+          retryable: true,
+        },
         { status: 404 }
       );
     }
@@ -60,7 +81,12 @@ export async function POST(req: NextRequest) {
     });
     if (!cadastral) {
       return NextResponse.json(
-        { error: "V월드 지적 정보 조회 실패" },
+        {
+          code: "CADASTRAL_UNAVAILABLE",
+          error: "V월드 지적 정보를 조회하지 못했습니다.",
+          nextAction: "V월드 키·등록 도메인을 확인한 뒤 다시 시도하세요.",
+          retryable: true,
+        },
         { status: 502 }
       );
     }
@@ -97,7 +123,12 @@ export async function POST(req: NextRequest) {
     if (zoningResult.status === "rejected") {
       console.error("V월드 용도지역 조회 실패:", zoningResult.reason);
       return NextResponse.json(
-        { error: "용도지역 정보 조회 실패" },
+        {
+          code: "ZONING_UNAVAILABLE",
+          error: "용도지역 정보를 조회하지 못했습니다.",
+          nextAction: "V월드 연결 상태를 확인하세요. 규제 수치를 임의값으로 대체하지 않았습니다.",
+          retryable: true,
+        },
         { status: 502 }
       );
     }
@@ -179,10 +210,10 @@ export async function POST(req: NextRequest) {
     console.error("lookup 실패:", err);
     return NextResponse.json(
       {
-        error:
-          err instanceof Error
-            ? err.message
-            : "부지 조회 중 예상치 못한 오류 발생",
+        code: "PARCEL_LOOKUP_FAILED",
+        error: "부지 조회 중 외부 데이터 연결 오류가 발생했습니다.",
+        nextAction: "환경 점검 화면에서 API 연결을 확인한 뒤 다시 조회하세요.",
+        retryable: true,
       },
       { status: 500 }
     );

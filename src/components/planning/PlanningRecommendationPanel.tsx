@@ -55,16 +55,6 @@ function uniqueRecommendationScenario(
   };
 }
 
-function recommendationSlot(
-  scenario: PlanningScenario
-): "safe" | "profit" | "max" | null {
-  const objective = scenario.recommendation?.objective;
-  if (objective === "architectural-feasibility") return "safe";
-  if (objective === "profit") return "profit";
-  if (objective === "legal-ceiling") return "max";
-  return null;
-}
-
 function RecommendationCard({
   scenario,
   calculation,

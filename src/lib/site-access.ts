@@ -46,6 +46,14 @@ export function isSiteAccessConfigured(): boolean {
   return configuredPassword().length >= 12;
 }
 
+/** 로컬 개발은 형제·협업자가 env 없이 바로 확인할 수 있게 연다. */
+export function isLocalDevelopmentAccessOpen(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const passwordLength = environment.SITE_ACCESS_PASSWORD?.trim().length ?? 0;
+  return environment.NODE_ENV !== "production" && passwordLength < 12;
+}
+
 export async function matchesSitePassword(candidate: string): Promise<boolean> {
   const expected = configuredPassword();
   if (expected.length < 12 || typeof candidate !== "string") return false;

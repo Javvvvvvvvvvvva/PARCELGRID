@@ -56,6 +56,8 @@ function baseCalculation(): PlanningScenarioCalculation {
       preliminaryFarAreaSqm: 20,
       preliminaryBcrPct: 20,
       preliminaryFarPct: 20,
+      occupiedFloorHeightM: 3,
+      roofAllowanceM: 0,
       totalHeightM: 3,
       requiredCars: 0,
       parkingShortfallCars: 0,

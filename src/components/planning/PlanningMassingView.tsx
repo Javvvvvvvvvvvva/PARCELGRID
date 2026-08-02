@@ -506,6 +506,8 @@ function createPlanningMassData(
   extent: number;
   warnings: string[];
 } {
+  // 화면 여유 이격은 법적 매스 외곽을 자동 변경하지 않는다.
+  void setback;
   const origin = ringCentroid(boundary);
   const groundShape = ringToLocalMeters(boundary, origin);
   const groundFloors = scenario.floorPrograms.filter((floor) => floor.level > 0);

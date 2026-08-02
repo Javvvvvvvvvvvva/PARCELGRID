@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
+  isLocalDevelopmentAccessOpen,
   isSiteAccessConfigured,
   siteAccessCookie,
   verifySiteAccessToken,
@@ -29,6 +30,8 @@ function accessUrl(request: NextRequest): URL {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
+
+  if (isLocalDevelopmentAccessOpen()) return NextResponse.next();
 
   if (!isSiteAccessConfigured()) {
     if (pathname.startsWith("/api/")) {

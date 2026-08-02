@@ -61,7 +61,7 @@ function context(shape: LocalPlanPoint[]): ContextGeometrySnapshot {
 
 function cadastral(adjacent: LocalPlanPoint[]): CadastralContextSnapshot {
   return {
-    version: "cadastral-context-v1",
+    version: "cadastral-context-v2",
     projectId: "alignment-test",
     generatedAt: "2026-07-16T00:00:00.000Z",
     cadastralHash: "CAD-ALIGN",
@@ -85,6 +85,7 @@ function cadastral(adjacent: LocalPlanPoint[]): CadastralContextSnapshot {
     ],
     roadParcels: [],
     frontages: [],
+    roadClearances: [],
     summary: {
       adjacentParcelCount: 1,
       roadParcelCount: 0,
@@ -92,6 +93,11 @@ function cadastral(adjacent: LocalPlanPoint[]): CadastralContextSnapshot {
       primaryWidthMinM: null,
       primaryWidthAvgM: null,
       primaryWidthMaxM: null,
+      primaryPlannedWidthMinM: null,
+      primaryPlannedWidthAvgM: null,
+      primaryPlannedWidthMaxM: null,
+      primaryMassRoadClearanceM: null,
+      roadIntrusionCount: 0,
     },
     validation: { status: "pass", usable: true, issues: [] },
     sourceNotes: [],

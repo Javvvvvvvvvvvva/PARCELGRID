@@ -753,7 +753,10 @@ export function ExistingBuildingMass({
       .map((footprint) => modelFromFootprint(footprint, local.center, 3))
       .filter((model): model is BuildingModel => model !== null);
   }, [geometry, local]);
-  const contextModels = showContext ? allContextModels : [];
+  const contextModels = useMemo(
+    () => (showContext ? allContextModels : []),
+    [allContextModels, showContext]
+  );
   const road = useMemo(
     () => (openBoundary ? findPrimaryRoad(openBoundary, resolvedRoads) : null),
     [openBoundary, resolvedRoads]

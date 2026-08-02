@@ -33,7 +33,7 @@ export default function CompsPage({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedType, setExpandedType] = useState<string | null>(null);
 
-  const allComps: CompVM[] = data?.comps ?? [];
+  const allComps: CompVM[] = useMemo(() => data?.comps ?? [], [data?.comps]);
   const parcel = data?.parcel;
 
   // 대상지 평당가 (인수가 ÷ 대지평수)
@@ -148,7 +148,7 @@ export default function CompsPage({
     return () => {
       cancelled = true;
     };
-  }, [filtered]);
+  }, [data?.saleEstimate?.cases, filtered]);
 
   if (!data) return null;
 

@@ -183,14 +183,14 @@ export default function HandoffPage({
         </span>
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
+      <section className="handoff-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
         <Summary label="시스템 재현 가능" value={gate.confirmedCount} note="자동 재현 가능한 근거" />
         <Summary label="필수 근거 차단" value={gate.criticalBlockerCount} note="승인 전 보완" danger />
         <Summary label="검토 요청 중" value={reviewSummary.requestedCount} note="답변 대기" />
         <Summary label="전문가 승인" value={reviewSummary.approvedCount} note="4개 분야 필요" positive />
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
+      <section className="handoff-lanes-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
         {gate.lanes.map((lane) => {
           const unresolvedBlockers = lane.items.filter(
             (item) =>

@@ -70,7 +70,7 @@ export default function HomePage() {
       </div>
 
       {/* CTA */}
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 12 }}>
         <Link
           href="/projects/new"
           style={{
@@ -107,6 +107,22 @@ export default function HomePage() {
           }}
         >
           데모 프로젝트 (역삼동)
+        </Link>
+        <Link
+          href="/system/readiness"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "0 16px",
+            height: 36,
+            color: "var(--fg-muted)",
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            fontSize: 13,
+            textDecoration: "none",
+          }}
+        >
+          환경 점검
         </Link>
       </div>
     </div>

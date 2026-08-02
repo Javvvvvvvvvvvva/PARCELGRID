@@ -72,23 +72,9 @@ export function computeProject(
   options: ComputeOptions = {}
 ): ProjectComputed {
   // Compute each scenario
-  const computed = scenarios.map((scenario) => {
-    const result = calculateScenario({ parcel, scenario });
-    const compliance = checkCompliance({ parcel, program: scenario.program });
-    const score = complianceScore(compliance);
-    const taxes = calculateTaxes({
-      parcel,
-      result,
-      residentialSaleShare: scenario.program.mix.residentialSale,
-    });
-    const schedule = generatePFSchedule({
-      parcel,
-      scenario,
-      result,
-      startDate: options.startDate ?? parcel.acquired,
-    });
-    return { scenario, result, compliance, score, taxes, schedule };
-  });
+  const computed = scenarios.map((scenario) =>
+    computeOne(parcel, scenario, options.startDate)
+  );
 
   // Decide the recommended scenario.
   // Composite score = 0.5 × profit_rank + 0.3 × dscr_health + 0.2 × regulatory.
@@ -163,7 +149,7 @@ function pickRecommended(
 }
 
 // Type helper so pickRecommended's parameter type is inferable
-function computeOne(p: Parcel, s: Scenario) {
+function computeOne(p: Parcel, s: Scenario, startDate?: string) {
   const r = calculateScenario({ parcel: p, scenario: s });
   const c = checkCompliance({ parcel: p, program: s.program });
   return {
@@ -171,12 +157,16 @@ function computeOne(p: Parcel, s: Scenario) {
     result: r,
     compliance: c,
     score: complianceScore(c),
-    taxes: calculateTaxes({ parcel: p, result: r }),
+    taxes: calculateTaxes({
+      parcel: p,
+      result: r,
+      residentialSaleShare: s.program.mix.residentialSale,
+    }),
     schedule: generatePFSchedule({
       parcel: p,
       scenario: s,
       result: r,
-      startDate: p.acquired,
+      startDate: startDate ?? p.acquired,
     }),
   };
 }

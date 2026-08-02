@@ -21,6 +21,7 @@ export function WorkRail({ projectId }: WorkRailProps) {
   const pathname = usePathname();
   return (
     <div
+      className="ui-workrail"
       style={{
         width: 48,
         borderRight: "1px solid var(--border)",

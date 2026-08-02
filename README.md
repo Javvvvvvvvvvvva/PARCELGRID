@@ -1,136 +1,74 @@
 # PARCELGRID
 
-서울 강남권 부동산 개발 타당성 분석 도구. 한국 시행사·건축·투자팀을 위한
-부지 분석 / 시나리오 비교 / PF·세무·리스크 / 실거래 / 보고서 워크플로우.
+한국 저층 개발 부지를 주소 입력부터 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 한 흐름으로 검토하는 로컬 우선 도구입니다.
 
-**상태: 운영 가능한 풀스택 MVP** — 6개 화면 + 6개 API + 41개 테스트 통과 + Next 빌드 성공 + 라이브 서버 검증.
+현재 기준은 서울 도봉구 쌍문동 281-23 프로젝트이며, 계획 스튜디오는 화면·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 Geometry Hash와 로컬 미터 좌표를 사용하도록 구성돼 있습니다.
 
----
+## 5분 실행
 
-## 빠른 시작
+필수 환경은 Node.js 24와 pnpm 11.1입니다.
 
 ```bash
-pnpm install                    # 의존성
-docker compose up -d postgres   # 로컬 DB
-cp .env.example .env.local      # 환경변수
-pnpm db:generate && pnpm db:migrate
-pnpm dev                        # http://localhost:3000/projects/sample
-pnpm test                       # 41/41 passing
+corepack enable
+corepack prepare pnpm@11.1.0 --activate
+pnpm install --frozen-lockfile
+cp .env.example .env.local
+pnpm dev
 ```
 
-DB 없이도 동작 — `DATABASE_URL` 미설정 시 시드 데이터로 fallback.
+브라우저에서 [http://localhost:3000](http://localhost:3000)을 엽니다. DB와 비밀번호가 없어도 로컬 개발 모드와 데모 프로젝트는 동작합니다. 실제 주소·지적·실거래 조회에는 `.env.local`의 공공 API 키가 필요합니다.
 
----
+설정 상태는 [http://localhost:3000/system/readiness](http://localhost:3000/system/readiness) 또는 아래 API에서 비밀 값을 노출하지 않고 확인할 수 있습니다.
 
-## 동작 검증 (실제 서버 응답)
-
-```
-부지: 서울특별시 강남구 역삼동 824-11
-용도: 제3종일반주거지역 (FAR 250%, BCR 60%, 645.3m²)
-
-시나리오 4개:
-   S1 오피스텔 + 근생       이익 123.5억 | IRR 144.2% | DSCR 0.48
-   S2 도시형생활주택        이익 110.2억 | IRR 135.1% | DSCR 0.16
-   S3 근린생활시설         이익  31.5억 | IRR  45.9% | DSCR 2.88
-★ S4 공유주거 (코리빙)     이익 138.5억 | IRR 158.3% | DSCR 4.01
-
-PF 분기 (9개):
-  2025-Q3 토지비   유출 26.8억              누적  -26.8억
-  2026-Q2 골조1    유출  9.1억              누적  -44.2억 ← 최대 노출
-  2026-Q3 골조2    유출  9.9억 유입  10.0억  누적  -44.1억
-  2026-Q4 마감1    유출  8.3억 유입  35.2억  누적  -17.2억
-  2027-Q1 마감2    유출  6.6억 유입  57.8억  누적  +34.0억 ← 손익분기
-  2027-Q3 잔여     유출  0.8억 유입  45.2억  누적 +178.9억
+```bash
+curl http://localhost:3000/api/system/readiness
 ```
 
-권장이 S4 코리빙인 이유: 단순 이익이 아니라 **0.5 × 이익 + 0.3 × DSCR + 0.2 × 규제** 가중 합.
-S1 IRR 144%는 매력적이지만 DSCR 0.48 — 임대 NOI 거의 없어 PF 상환능력 위험.
+## 제품 흐름
 
----
-
-## 모듈 인벤토리
-
-### 재무 엔진 (`src/lib/finance/`)
-
-| 모듈 | 역할 |
-|---|---|
-| `math.ts` | Decimal NPV, IRR (Newton + bisection 폴백), DSCR, annuity |
-| `scenario.ts` | 입력 → 매출/사업비/이익/IRR/DSCR/EM 일괄 계산 |
-| `cashflow.ts` | 분기 PF 스케줄 (토지비→인허가→철거→골조→마감→준공→잔여) |
-| `tax.ts` | 취득세/재산세/법인세/부가세 분개 (rate 출처 인용 포함) |
-| `compliance.ts` | GFA-01/02/03 + SUN-02 + PRK-04 + CUL-01 + ENV-03 |
-| `sensitivity.ts` | 2D 그리드 (자유 조합 가능) |
-| `comps.ts` | 헤도닉 회귀 (거리/FAR/규모/시점) |
-
-순수 함수. 같은 입력 → 같은 출력. 5년 뒤 같은 보고서 재생성 가능.
-
-### DB (`src/lib/db/schema.ts`)
-10개 테이블, Drizzle ORM, PostgreSQL. `orgs`/`users`/`projects`/`scenarios`/
-`assumption_overrides`/`comps`/`risk_findings`/`reports`/`audit_log`.
-JSONB로 가변 shape + 핫 필드 denormalized. Append-only 감사 추적.
-
-### API
-| Endpoint | Method | 역할 |
+| 단계 | 화면 | 결과 |
 |---|---|---|
-| `/api/projects/[id]` | GET | 프로젝트 풀 (4개 시나리오 + PF + 리스크) |
-| `/api/scenarios/calculate` | POST | 단일 풀 계산 |
-| `/api/scenarios/sensitivity` | POST | 2D 그리드 |
-| `/api/scenarios/[id]/overrides` | POST | 가정 편집 저장 (append-only) |
-| `/api/comps/analyze` | POST | 헤도닉 조정 |
-| `/api/cron/sync-molit` | POST | 일별 국토교통부 동기화 |
+| 0 | `/projects/new` | 주소, PNU, 필지, 규제 출처 확인 |
+| 1 | `/projects/[id]/status` | 기존 건축물·도로·실거래 현황 |
+| 2 | `/projects/[id]/envelope` | 층별 프로그램, 배치, 주차, 3D, 대표 계획안 |
+| 3 | `/projects/[id]` | 인수가·공사비·금융비·매출·수익성 재계산 |
+| 4 | `/projects/[id]/handoff` | 건축·시공·금융·세무 근거와 승인 기록 |
+| 5 | `/projects/[id]/report` | 화면 인쇄 기반 예비 PDF 보고서 |
 
-### 화면 (`src/app/projects/[id]/`)
-| URL | 역할 |
-|---|---|
-| `/` | 대시보드 — Decision banner + 5 KPI + 4안 표 + PF 미니 차트 + 규제 매트릭스 |
-| `/comparison` | 4개 안 비교 — 헤더 카드 + 4섹션 (수익성/자본/건축/세무) + 자동 diff% |
-| `/scenarios/[sid]` | 상세 — 6 KPI + 5 탭 (PF/세무/리스크/민감도/가정) |
-| `/comps` | 실거래 — 필터 + 8건 + 헤도닉 4인자 패널 |
-| `/overrides` | 가정 편집 — 3열 라이브 재계산 |
-| `/report` | 투자 보고서 — 10섹션 + window.print() PDF |
+## 계획·내보내기 계약
 
-### 외부 연동
-- `src/lib/integrations/molit.ts` — 국토교통부 실거래가 어댑터
-- Vercel Cron 03:00 KST 자동 동기화
+- 계획 매스, 주차, 도로, 주변 건물은 출처와 신뢰도를 분리합니다.
+- V월드 도로 중심선은 방향·접도 참고이며 확인되지 않은 폭을 임의 생성하지 않습니다.
+- 대표안 확정과 내보내기는 Geometry Hash, 면적 오차, 층 지지, 도로 침범 검사를 통과해야 합니다.
+- SketchUp 패키지는 DAE와 메타데이터를 제공합니다.
+- CAD 패키지는 AutoCAD R2000 ASCII DXF, 레이어, 메타데이터, 한국어 안내문을 제공합니다. DWG가 필요하면 CAD에서 DXF를 연 뒤 Save As로 변환합니다.
+- 기준 이미지 기반 디자인은 원본 층수·실루엣·후퇴·위치·회전·도로 관계·카메라를 잠그며, 좌표 원본이 없으면 형상을 새로 추정하지 않습니다.
 
-### 인프라
-- `Dockerfile` (3-stage, non-root), `docker-compose.yml`, `vercel.json`, `.env.example`
+## 로컬 데이터와 보안
 
----
-
-## 아키텍처 핵심
-
-**Decimal everywhere.** `Number` 누적 오차로 IRR이 0.3% 어긋남 → 투자위 신뢰 박살. Decimal은 8x 느리지만 한 계산 sub-ms.
-
-**순수 함수 엔진.** `calculateScenario(input) → output` — I/O 없음, Date.now() 없음. Reproducible, 테스트 trivial, 어디든 이동 가능.
-
-**JSONB + 핫 필드.** 가변 shape는 JSONB, 정렬·필터 쓰는 profit/IRR/DSCR만 numeric 컬럼. Zod로 shape drift 차단.
-
-**Append-only 감사.** 가정 편집 history는 update 아니라 insert. 보고서는 시점 스냅샷 JSONB로 박제 → 5년 뒤도 같은 결과.
-
-**한국 LTC 구조 정확 반영.** equity = 토지비 + (1−LTC) × 건축비, pfLoan = LTC × 건축비.
-
----
-
-## 미완성 (정직)
-
-| 영역 | 상태 | 다음 단계 |
-|---|---|---|
-| NextAuth 로그인 | 스키마만 | 어댑터 + 로그인 페이지 |
-| 권한 (org/role) | DB 컬럼만 | 미들웨어 |
-| MOLIT 실연동 | 어댑터 완성 | API 키 발급 (1-2일) |
-| V월드 지적도 | — | 어댑터 |
-| Playwright PDF | window.print() | 백그라운드 잡 |
-| Sentry/OTel | DSN 슬롯만 | 통합 |
-| 백업/DR | — | 정책 |
-
-각 미완성은 인터페이스가 깔려 있어 다음 작업 단순.
-
----
+- `.env.local`은 Git에 포함되지 않습니다. 이메일이나 메신저로 전달할 때도 저장소 ZIP과 분리하세요.
+- 원문 PDF/Excel/CSV는 기본적으로 `.parcelgrid-data/source-documents`에 저장되고 Git에서 제외됩니다.
+- 로컬 개발에서는 `SITE_ACCESS_PASSWORD`와 `SOURCE_DOCUMENT_UPLOAD_KEY`를 비워 둘 수 있습니다.
+- 다른 사람에게 공개되는 서버에서는 각각 12자, 16자 이상으로 반드시 설정해야 합니다.
+- PostgreSQL이 없으면 브라우저 세션과 시드 데이터로 동작하므로 다른 PC와 프로젝트가 자동 동기화되지는 않습니다.
 
 ## 검증
 
-- ✅ `pnpm tsc --noEmit` — 깨끗
-- ✅ `pnpm vitest run` — 41/41
-- ✅ `pnpm next build` — 12 라우트 모두 빌드
-- ✅ `pnpm next start` + curl — 모든 API 200, 모든 페이지 200, 의미 있는 JSON
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+# 또는 한 번에
+pnpm verify
+```
+
+GitHub Actions도 동일한 네 단계를 실행합니다. Vercel 배포 구성은 사용하지 않습니다.
+
+## 협업
+
+형에게 넘길 때는 [로컬 실행 안내](docs/PARTNER-LOCAL-SETUP-KO.md)를 그대로 전달하세요. 변경은 기능 브랜치와 Pull Request로 합치고, `.env.local`과 `.parcelgrid-data`는 커밋하지 않습니다. 상세 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 따릅니다.
+
+## 면책
+
+PARCELGRID 결과는 AI·공공데이터 기반 콘셉트 검토입니다. 건축설계도서, 인허가 도면, 측량성과도, 시공도, 금융 약정 또는 공사비 견적서가 아닙니다. 매입·설계·인허가·대출·세무 판단 전 각 분야 전문가의 원문 확인과 승인이 필요합니다.

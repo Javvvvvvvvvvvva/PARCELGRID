@@ -15,7 +15,6 @@ import {
   type ScenarioDiffUnit,
 } from "@/lib/planning/scenario-diff";
 import type {
-  PlanningScenario,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";

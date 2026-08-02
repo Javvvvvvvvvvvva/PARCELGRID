@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- Kakao Maps SDK does not ship TypeScript definitions. */
+
 /**
  * Kakao Map — 실거래·대지 시각화 (사용자용 지도).
  * 법규/필지는 VWorld 엔진, 사용자 지도는 Kakao Map으로 분리 (C 확정).

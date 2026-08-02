@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSiteAccessToken,
+  isLocalDevelopmentAccessOpen,
   isSiteAccessConfigured,
   matchesSitePassword,
   verifySiteAccessToken,
@@ -25,6 +26,15 @@ describe("site access gate", () => {
     expect(isSiteAccessConfigured()).toBe(true);
     process.env.SITE_ACCESS_PASSWORD = "short";
     expect(isSiteAccessConfigured()).toBe(false);
+  });
+
+  it("allows a password-free local development start but never production", () => {
+    expect(
+      isLocalDevelopmentAccessOpen({ NODE_ENV: "development" }),
+    ).toBe(true);
+    expect(
+      isLocalDevelopmentAccessOpen({ NODE_ENV: "production" }),
+    ).toBe(false);
   });
 
   it("matches only the configured password", async () => {

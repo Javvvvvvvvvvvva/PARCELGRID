@@ -13,6 +13,12 @@
 # testing
 /coverage
 
+# PARCELGRID local runtime data
+/.parcelgrid-data/
+/.pnpm-home/
+/.pnpm-store/
+/.xdg-data/
+
 # misc
 .DS_Store
 *.pem

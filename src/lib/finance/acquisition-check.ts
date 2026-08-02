@@ -342,8 +342,7 @@ export function checkAcquisition(
 
   const verdict = computeVerdict(
     axisLandPriceRatio,
-    axisMarketPriceComparison,
-    axisTransactionPattern
+    axisMarketPriceComparison
   );
 
   return {
@@ -377,8 +376,7 @@ export function checkAcquisition(
 
 function computeVerdict(
   ratio: AxisResult,
-  market: AxisResult,
-  pattern: AxisResult
+  market: AxisResult
 ): AcquisitionCheckResult["verdict"] {
   if (ratio.status === "insufficient" && market.status === "insufficient") {
     return {

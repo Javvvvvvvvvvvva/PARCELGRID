@@ -101,7 +101,7 @@ export default function StatusPage({
     return computeExistingRatios(main, parcel.lotArea);
   }, [main, parcel?.lotArea]);
 
-  const allComps: CompVM[] = data?.comps ?? [];
+  const allComps: CompVM[] = useMemo(() => data?.comps ?? [], [data?.comps]);
 
   const subjectPPP = useMemo(() => {
     if (!parcel?.acquiredPrice || !parcel.lotArea) return null;

@@ -341,7 +341,7 @@ export function PlanningScenarioWorkspace({ projectId }: { projectId: string }) 
     if (!selectedScenario) return;
     setNameDraft(selectedScenario.name);
     setEditingName(false);
-  }, [selectedScenario?.id]);
+  }, [selectedScenario]);
 
   if (!data || !parcel) return null;
 

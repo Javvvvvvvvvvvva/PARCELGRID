@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { use, useEffect, useRef } from "react";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
@@ -8,6 +8,7 @@ import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-pl
 import { TopBar } from "@/components/ui/TopBar";
 import { WorkRail } from "@/components/ui/WorkRail";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 
 interface ProjectLayoutProps {
   children: React.ReactNode;
@@ -37,8 +38,8 @@ function ProjectShell({
   children: React.ReactNode;
   params: Promise<{ projectId: string }>;
 }) {
-  const { projectId } = useUnwrappedParams(params);
-  const { data, isLoading, error } = useDynamicProject(projectId);
+  const { projectId } = use(params);
+  const { data, isLoading, error, refetch, isFetching } = useDynamicProject(projectId);
   const setData = useProjectStore((s) => s.setData);
   const envelopePlan = useProjectStore((s) => s.envelopePlan);
   const planningScenarios = useProjectStore((s) => s.planningScenarios);
@@ -144,8 +145,31 @@ function ProjectShell({
   }
   if (error || !data) {
     return (
-      <div style={{ padding: 40, color: "var(--neg-fg)" }}>
-        오류: {String(error instanceof Error ? error.message : error)}
+      <div style={{ maxWidth: 720, margin: "80px auto", padding: 24 }}>
+        <div style={{ padding: 20, border: "1px solid var(--neg)", borderRadius: 10, background: "var(--neg-soft)" }}>
+          <strong style={{ display: "block", color: "var(--neg-fg)", fontSize: 16 }}>
+            프로젝트를 열지 못했습니다
+          </strong>
+          <p style={{ color: "var(--neg-fg)", fontSize: 12, lineHeight: 1.65 }}>
+            {String(error instanceof Error ? error.message : error)}
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="ui-btn ui-btn--primary"
+            >
+              {isFetching ? "다시 연결 중…" : "다시 시도"}
+            </button>
+            <Link href="/projects/new" className="ui-btn">
+              주소부터 다시 시작
+            </Link>
+            <Link href="/system/readiness" className="ui-btn">
+              환경 점검
+            </Link>
+          </div>
+        </div>
       </div>
     );
   }
@@ -154,7 +178,14 @@ function ProjectShell({
 
   return (
     <div className="ui-shell app" style={{ height: "100vh" }}>
-      <TopBar crumb={crumb} />
+      <TopBar
+        crumb={crumb}
+        right={
+          <Link href="/system/readiness" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+            환경 점검
+          </Link>
+        }
+      />
       <div style={{ display: "flex", minHeight: 0, flex: 1 }}>
         <WorkRail projectId={projectId} />
         <main className="scroll-host" style={{ flex: 1, minWidth: 0 }}>
@@ -182,10 +213,4 @@ function makeCrumb(pathname: string, parcelLabel: string): string[] {
       ? [map[last]]
       : ["사업성 검토"];
   return ["프로젝트", parcelLabel, ...tail];
-}
-
-function useUnwrappedParams<T>(promise: Promise<T>): T {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const React = require("react") as typeof import("react");
-  return React.use(promise);
 }
