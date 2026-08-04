@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyFinancialSources,
   buildSourceDataGate,
+  FINANCIAL_SOURCE_GUIDANCE,
   requiredSourceFields,
   sourceKindRequiresDocument,
   validateFinancialSource,
@@ -91,6 +92,34 @@ describe("source data gate", () => {
     expect(gate.status).toBe("blocked");
     expect(gate.coveragePct).toBe(0);
     expect(gate.missingFields).toEqual(requiredSourceFields(scenario));
+  });
+
+  it("requires only fields that currently affect the financial ledger", () => {
+    const noBasementSaleScenario: Scenario = {
+      ...scenario,
+      program: {
+        ...scenario.program,
+        floorsBelow: 0,
+      },
+    };
+    const fields = requiredSourceFields(noBasementSaleScenario);
+
+    expect(fields).toContain("salePricePerSqM");
+    expect(fields).not.toContain("salesPaceMonthlyPct");
+    expect(fields).not.toContain("leaseUpMonths");
+    expect(fields).not.toContain("basementCostMultiplier");
+    expect(fields).toHaveLength(11);
+  });
+
+  it("provides plain-language evidence guidance for every financial field", () => {
+    for (const field of Object.keys(
+      FINANCIAL_SOURCE_GUIDANCE,
+    ) as FinancialSourceField[]) {
+      expect(FINANCIAL_SOURCE_GUIDANCE[field].why.length).toBeGreaterThan(5);
+      expect(
+        FINANCIAL_SOURCE_GUIDANCE[field].recommendedEvidence.length,
+      ).toBeGreaterThan(5);
+    }
   });
 
   it("rejects incomplete metadata and an incompatible source type", () => {
