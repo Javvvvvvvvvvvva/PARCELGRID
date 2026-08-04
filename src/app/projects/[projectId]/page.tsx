@@ -35,6 +35,7 @@ import {
   applyFinancialSources,
   buildSourceDataGate,
   FINANCIAL_SOURCE_FIELD_META,
+  FINANCIAL_SOURCE_GUIDANCE,
   sourceKindRequiresDocument,
   validateFinancialSource,
   validateFinancialSourceEvidence,
@@ -91,6 +92,7 @@ const ASSUMPTION_GROUPS: Array<{
     title: "원가",
     fields: [
       { field: "constCostPerSqM", label: "직접 공사비", divisor: 10_000, suffix: "만원/㎡", step: 10 },
+      { field: "basementCostMultiplier", label: "지하 공사비 가중치", divisor: 1, suffix: "배", step: 0.05, decimals: 2 },
       { field: "softCostRate", label: "설계·감리·인허가", divisor: 1, suffix: "%", step: 0.5, decimals: 1 },
       { field: "contingencyRate", label: "예비비", divisor: 1, suffix: "%", step: 0.5, decimals: 1 },
     ],
@@ -270,9 +272,13 @@ export default function DashboardPage({
   const hasSaleRevenue = scenario.program.mix.residentialSale > 0;
   const hasLeaseRevenue =
     scenario.program.mix.residentialLease > 0 || scenario.program.mix.retail > 0;
+  const hasBasementCost =
+    (scenario.program.areaContract?.basementAreaSqm ?? 0) > 0 ||
+    scenario.program.floorsBelow > 0;
   const activeAssumptionGroups = ASSUMPTION_GROUPS.map((group) => ({
     ...group,
     fields: group.fields.filter(({ field }) => {
+      if (field === "basementCostMultiplier") return hasBasementCost;
       if (field === "salePricePerSqM") return hasSaleRevenue;
       if (
         field === "rentPerSqMMonth" ||
@@ -313,6 +319,20 @@ export default function DashboardPage({
   const saleConfidence = data.saleEstimate?.confidence ?? "low";
   const aboveFloors = geometry.building.aboveGroundFloors.length;
   const basementFloors = geometry.building.basementFloors.length;
+  const currentSourceValues = {
+    acquisitionPrice,
+    ...assumptions,
+  } as Record<FinancialSourceField, number>;
+  const pendingSourceFields = Array.from(
+    new Set([
+      ...sourceGate.missingFields,
+      ...sourceGate.invalidFields.map((item) => item.field),
+    ])
+  );
+  const pendingSourceLabels = pendingSourceFields
+    .slice(0, 4)
+    .map((field) => FINANCIAL_SOURCE_FIELD_META[field].label)
+    .join(" · ");
   const rescueKey = JSON.stringify({
     projectId,
     geometryHash: geometry.geometryHash,
@@ -393,8 +413,17 @@ export default function DashboardPage({
       </header>
 
       <section className="audit-banner" role="status" style={sourceGate.status === "source-backed" ? { borderColor: "var(--pos-fg)", background: "var(--pos-soft)", color: "var(--pos-fg)" } : undefined}>
-        <strong>{sourceGate.status === "source-backed" ? "소스 데이터 게이트 통과" : "소스 데이터 미완료 · 확정 판단 차단"}</strong>
-        <span>{sourceGate.status === "source-backed" ? `필수 입력 ${sourceGate.validRecords.length}건이 원문·발급기관·기준일·확인자와 함께 등록되어 계산에 반영됐습니다.` : `필수 입력 ${sourceGate.requiredFields.length}건 중 ${sourceGate.validRecords.length}건만 검증됐습니다. 현재 숫자는 탐색용이며 보고서 확정에 사용할 수 없습니다.`}</span>
+        <div className="audit-copy">
+          <strong>{sourceGate.status === "source-backed" ? "소스 데이터 게이트 통과" : "소스 데이터 미완료 · 확정 판단 차단"}</strong>
+          <span>
+            {sourceGate.status === "source-backed"
+              ? `필수 입력 ${sourceGate.validRecords.length}건이 원문·발급기관·기준일·확인자와 함께 등록되어 계산에 반영됐습니다.`
+              : `필수 입력 ${sourceGate.requiredFields.length}건 중 ${sourceGate.validRecords.length}건 검증 · 다음 필요: ${pendingSourceLabels || "등록값 원문 확인"}${pendingSourceFields.length > 4 ? ` 외 ${pendingSourceFields.length - 4}건` : ""}`}
+          </span>
+        </div>
+        {sourceGate.status !== "source-backed" && (
+          <a className="audit-link" href="#source-data-room">근거자료 입력</a>
+        )}
       </section>
 
       <section className="source-lock">
@@ -650,11 +679,13 @@ export default function DashboardPage({
             ))}
           </section>
 
-          <section className="evidence-panel">
+          <section className="evidence-panel" id="source-data-room">
             <SourceDataPanel
+              key={`${scenario.id}:${sourceGate.requiredFields.join(",")}`}
               projectId={projectId}
               records={projectFinancialSources}
               gate={sourceGate}
+              currentValues={currentSourceValues}
               onSave={(record) => setFinancialSource(projectId, record)}
               onRemove={(field) => removeFinancialSource(projectId, field)}
             />
@@ -664,23 +695,57 @@ export default function DashboardPage({
             <span className="section-kicker">MODEL COVERAGE</span>
             <h2>계산 반영 범위</h2>
             <EvidenceRow label="대표 계획 매스" value={geometry.geometryHash} state="확정" />
-            <EvidenceRow
-              label="토지 검토가"
-              value={`${acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} · ${won(acquisitionPrice)} 총액 · ${Math.round(acquisitionPerPyeong).toLocaleString()}만원/평`}
-              state="검토"
+            <SourceCoverageRow
+              label="부동산 취득대금"
+              fields={["acquisitionPrice"]}
+              records={projectFinancialSources}
+              fallback={`${acquisitionEdited ? "사용자 수정 입력" : "부지 등록 입력"} · ${won(acquisitionPrice)} 총액 · 계약서·감정평가 원문 필요`}
             />
             <EvidenceRow label="토지 참고 추정" value={`${data.parcel.acquisitionEstimate?.modelVersion ?? "legacy-unversioned"} · 자체 보정·외부 검증 전`} state="미확정" />
-            <EvidenceRow label="매각 단가" value={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis}` : "내부 초기 가정 · 실거래 근거 없음"} state="미확정" />
-            <EvidenceRow label="공사비" value={ASSUMPTION_META.constCostPerSqM?.kind ?? "가정값"} state="미확정" />
-            {hasLeaseRevenue && (
-              <>
-                <EvidenceRow label="임대 출구 보정" value={`${(INTERNAL_REVENUE_ASSUMPTIONS.stabilizationDiscount * 100).toFixed(0)}% 자체 가정 · 외부 검증 전`} state="미확정" />
-                <EvidenceRow label="근생 임대료 배수" value={`주거 임대료의 ${INTERNAL_REVENUE_ASSUMPTIONS.retailRentPremium.toFixed(1)}× 자체 가정`} state="미확정" />
-              </>
+            {hasSaleRevenue && (
+              <SourceCoverageRow
+                label="매각 단가"
+                fields={["salePricePerSqM"]}
+                records={projectFinancialSources}
+                fallback={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis} · 외부 검증 전` : "내부 초기 가정 · 실거래 또는 감정평가 근거 필요"}
+              />
             )}
-            <EvidenceRow label="PF 조건" value="사용자·금융기관 확인 필요" state="미확정" />
+            {hasLeaseRevenue && (
+              <SourceCoverageRow
+                label="임대 수입"
+                fields={["rentPerSqMMonth", "vacancyRate", "capRate"]}
+                records={projectFinancialSources}
+                fallback="임대료·공실률·Exit cap rate 원문 필요"
+              />
+            )}
+            <SourceCoverageRow
+              label="공사비"
+              fields={hasBasementCost
+                ? ["constCostPerSqM", "basementCostMultiplier", "softCostRate", "contingencyRate"]
+                : ["constCostPerSqM", "softCostRate", "contingencyRate"]}
+              records={projectFinancialSources}
+              fallback="시공사·건축사 견적 또는 승인 예산 기준 필요"
+            />
+            <SourceCoverageRow
+              label="PF 조건"
+              fields={["ltcTarget", "interestRate"]}
+              records={projectFinancialSources}
+              fallback="금융기관 Term Sheet 필요"
+            />
+            <SourceCoverageRow
+              label="투자 기준"
+              fields={["equityIRR"]}
+              records={projectFinancialSources}
+              fallback="대표자 승인 요구수익률 기준 필요"
+            />
+            <SourceCoverageRow
+              label="사업 일정"
+              fields={["designMonths", "constructionMonths", "saleOutMonths"]}
+              records={projectFinancialSources}
+              fallback="설계·공정·매각 일정 근거 필요"
+            />
             <EvidenceRow label="세금" value={`${TAX_MODEL_AS_OF} 기본세율 · 미산정 항목 있음`} state="미확정" />
-            <p className="coverage-note">현재 대표 계획의 손익에 직접 연결되는 입력만 표시합니다. 임대 안정화 개월과 월 분양속도처럼 아직 핵심 손익 엔진에 연결되지 않은 값도 편집 항목에서 제외했습니다.</p>
+            <p className="coverage-note">등록된 원문이 실제 계산에 반영된 상태를 표시합니다. 월 분양속도와 임대 안정화 기간은 아직 월별 원장에 연결되지 않아 확정 게이트에서 제외했습니다.</p>
           </section>
 
           <section className="next-actions">
@@ -694,7 +759,7 @@ export default function DashboardPage({
 
       <style jsx>{`
         .stage3-page{max-width:1540px;margin:0 auto;padding:26px 28px 54px;color:var(--fg)}
-        .audit-banner{display:grid;gap:4px;margin-bottom:12px;padding:12px 14px;border:1px solid #d8a92e;border-radius:10px;background:#fff8dc;color:#5f4600}.audit-banner strong{font-size:11.5px}.audit-banner span{font-size:10.5px;line-height:1.5}\n        .stage3-header{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;margin-bottom:18px}.eyebrow,.section-kicker{font-size:9px;letter-spacing:.18em;font-weight:800;color:var(--fg-muted)}
+        .audit-banner{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;margin-bottom:12px;padding:12px 14px;border:1px solid #d8a92e;border-radius:10px;background:#fff8dc;color:#5f4600}.audit-copy{display:grid;gap:4px}.audit-banner strong{font-size:11.5px}.audit-banner span{font-size:10.5px;line-height:1.5}.audit-link{display:inline-flex;align-items:center;min-height:30px;padding:0 10px;border:1px solid currentColor;border-radius:7px;color:inherit;text-decoration:none;font-size:9.5px;font-weight:800;white-space:nowrap}\n        .stage3-header{display:flex;justify-content:space-between;gap:28px;align-items:flex-start;margin-bottom:18px}.eyebrow,.section-kicker{font-size:9px;letter-spacing:.18em;font-weight:800;color:var(--fg-muted)}
         h1{font-size:28px;letter-spacing:-.04em;margin:7px 0 7px}.stage3-header p{max-width:780px;margin:0;color:var(--fg-muted);font-size:12px;line-height:1.6}.header-actions{display:flex;gap:8px;align-items:center}
         button{font:inherit;cursor:pointer}.secondary-button,.primary-button{min-height:36px;border-radius:8px;padding:0 12px;border:1px solid var(--border);background:var(--bg-elev);color:var(--fg);font-size:11px;font-weight:700}.primary-button{background:var(--fg);color:var(--bg);border-color:var(--fg)}.text-button{border:0;background:transparent;color:var(--accent);font-size:10.5px;padding:0;font-weight:700}
         .source-lock{display:grid;grid-template-columns:minmax(260px,1.5fr) repeat(3,minmax(120px,.65fr));border:1px solid var(--border);border-radius:11px;background:var(--bg-elev);margin-bottom:12px}.source-main,.source-lock>:global(.fact){padding:13px 15px}.source-main{display:grid;gap:4px;border-right:1px solid var(--border-faint)}.source-main strong{font-size:14px}.source-main>span:last-child{font-size:10.5px;color:var(--fg-muted)}
