@@ -44,6 +44,65 @@ import type {
 
 // 만원 unit factor. 1억 = 10,000만원. 1원 → 만원 division by 10,000.
 const WON_TO_MANWON = D(10_000);
+const AREA_CONTRACT_TOLERANCE_SQM = 0.05;
+
+function validateFinancialGeometryContract(
+  program: BuildingProgram,
+  scenarioId: string
+): void {
+  const contract = program.areaContract;
+  if (!contract) return;
+
+  if (contract.sourceScenarioId !== scenarioId) {
+    throw new Error(
+      `Stage 2/3 계획안 ID가 일치하지 않습니다: ${contract.sourceScenarioId} / ${scenarioId}`
+    );
+  }
+
+  const numericAreas = [
+    contract.constructionAreaSqm,
+    contract.aboveGroundAreaSqm,
+    contract.basementAreaSqm,
+    contract.farAreaSqm,
+    contract.gradeFootprintAreaSqm,
+    contract.parkingAreaSqm,
+    contract.commonAreaSqm,
+    contract.saleableAreaSqm,
+    contract.rentableAreaSqm,
+    contract.revenueAreas.residentialSaleSqm,
+    contract.revenueAreas.residentialLeaseSqm,
+    contract.revenueAreas.retailSqm,
+  ];
+  if (numericAreas.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new Error("Stage 2/3 면적 계약에 유효하지 않은 면적이 있습니다.");
+  }
+
+  const constructedArea =
+    contract.aboveGroundAreaSqm + contract.basementAreaSqm;
+  if (
+    Math.abs(constructedArea - contract.constructionAreaSqm) >
+    AREA_CONTRACT_TOLERANCE_SQM
+  ) {
+    throw new Error(
+      "Stage 2/3 면적 계약의 지상·지하 합계가 전체 공사면적과 일치하지 않습니다."
+    );
+  }
+
+  const revenueArea =
+    contract.revenueAreas.residentialSaleSqm +
+    contract.revenueAreas.residentialLeaseSqm +
+    contract.revenueAreas.retailSqm;
+  const declaredRevenueArea =
+    contract.saleableAreaSqm + contract.rentableAreaSqm;
+  if (
+    Math.abs(revenueArea - declaredRevenueArea) >
+    AREA_CONTRACT_TOLERANCE_SQM
+  ) {
+    throw new Error(
+      "Stage 2/3 면적 계약의 수익 면적 합계가 매각·임대 면적과 일치하지 않습니다."
+    );
+  }
+}
 
 export interface CalcInput {
   parcel: Parcel;
@@ -61,18 +120,34 @@ export interface CalcInput {
 export function calculateScenario(input: CalcInput): ScenarioResult {
   const { parcel, scenario } = input;
   const { program, assumptions: a } = scenario;
+  validateFinancialGeometryContract(program, scenario.id);
 
   // ─── 1. Building outputs ────────────────────────────────────────────
-  // GFA = lotArea × FAR. BCR drives footprint.
+  // Stage 2 계약이 있으면 실제 면적이 절대 기준이다. FAR/BCR 재계산은
+  // 계약이 없는 구버전 저장 시나리오에만 사용한다.
   const lotArea = D(parcel.lotArea);
-  const gfa = lotArea.times(D(program.far)).div(HUNDRED);
-  const buildingArea = lotArea.times(D(program.bcr)).div(HUNDRED);
+  const legacyGfa = lotArea.times(D(program.far)).div(HUNDRED);
+  const legacyBuildingArea = lotArea.times(D(program.bcr)).div(HUNDRED);
+  const areaContract = program.areaContract;
+  const gfa = D(areaContract?.constructionAreaSqm ?? legacyGfa.toNumber());
+  const buildingArea = D(
+    areaContract?.gradeFootprintAreaSqm ?? legacyBuildingArea.toNumber()
+  );
 
-  // NEW: Calculate effectiveGFA (rawGFA minus parking + core).
-  // - rawGFA (gfa) is used for hardCost: you build everything, including parking.
-  // - effectiveGFA is used for revenue: only usable area generates sale/lease income.
-  // Without this split, IRR is overstated by 30-50% (a major real-world gap).
-  const effective = calculateEffectiveGFA(program, gfa.toNumber());
+  const contractedRevenueArea = areaContract
+    ? areaContract.revenueAreas.residentialSaleSqm +
+      areaContract.revenueAreas.residentialLeaseSqm +
+      areaContract.revenueAreas.retailSqm
+    : 0;
+  const effective = areaContract
+    ? {
+        effectiveGFA: contractedRevenueArea,
+        efficiencyRatio:
+          gfa.gt(0) ? contractedRevenueArea / gfa.toNumber() : 0,
+        parkingSpaces: areaContract.providedParkingSpaces,
+        coreArea: areaContract.commonAreaSqm,
+      }
+    : calculateEffectiveGFA(program, gfa.toNumber());
   const usableGFA = D(effective.effectiveGFA);
 
   // 안전망: 분양가능면적이 0/음수면 이 규모로는 시행 불가 (조용한 0원 매출 방지)
@@ -86,9 +161,15 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   //   기준으로 산정되므로 면적 기준을 일치시킴 (C 확정). 복도·계단·코어 포함 —
   //   시장에서 통매각은 연면적 기준으로 거래됨. usable을 곱하면 이중 할인(매출 과소).
   // 임대·근생: usable 기준 유지 (실사용 면적이 수익 창출 — 분양·임대 모델 개념).
-  const gfaSale = gfa.times(D(program.mix.residentialSale));
-  const gfaLease = usableGFA.times(D(program.mix.residentialLease));
-  const gfaRetail = usableGFA.times(D(program.mix.retail));
+  const gfaSale = areaContract
+    ? D(areaContract.revenueAreas.residentialSaleSqm)
+    : gfa.times(D(program.mix.residentialSale));
+  const gfaLease = areaContract
+    ? D(areaContract.revenueAreas.residentialLeaseSqm)
+    : usableGFA.times(D(program.mix.residentialLease));
+  const gfaRetail = areaContract
+    ? D(areaContract.revenueAreas.retailSqm)
+    : usableGFA.times(D(program.mix.retail));
 
   // ─── 2. Revenue ─────────────────────────────────────────────────────
   // Sale revenue: GFA_sale × sale price/m². Convert won → 만원.
@@ -129,7 +210,26 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   // ─── 3. Cost ────────────────────────────────────────────────────────
   const landCost = D(parcel.acquiredPrice);
   const demolitionCost = D(parcel.demolitionCost ?? 0);
-  const hardCost = gfa.times(D(a.constCostPerSqM)).div(WON_TO_MANWON);
+  const basementCostMultiplier = Math.max(
+    1,
+    a.basementCostMultiplier ?? 1.25
+  );
+  const baseHardCost = areaContract
+    ? D(areaContract.aboveGroundAreaSqm)
+        .plus(
+          D(areaContract.basementAreaSqm).times(
+            D(basementCostMultiplier)
+          )
+        )
+        .times(D(a.constCostPerSqM))
+        .div(WON_TO_MANWON)
+    : gfa.times(D(a.constCostPerSqM)).div(WON_TO_MANWON);
+  const hardCostWithMaterial = baseHardCost.plus(
+    D(areaContract?.materialAdjustmentCostManwon ?? 0)
+  );
+  const hardCost = hardCostWithMaterial.gt(0)
+    ? hardCostWithMaterial
+    : ZERO;
   const softCost = hardCost.times(D(a.softCostRate).div(HUNDRED));
   const contingency = hardCost.plus(softCost).times(D(a.contingencyRate).div(HUNDRED));
 
@@ -399,6 +499,7 @@ export function defaultAssumptions(): AssumptionSet {
 
     // 내부 초기값. 구조·마감·지하·현장조건을 반영한 시공사 견적으로 교체해야 한다.
     constCostPerSqM: 2_300_000,
+    basementCostMultiplier: 1.25,
     softCostRate: 12, // 설계·감리·인허가 등 — 공사비 대비 비율 (공공 요율 참고)
     contingencyRate: 5, // 예비비 5~10% 범위의 하단
 
@@ -426,6 +527,13 @@ export interface AssumptionMeta {
 }
 
 export const ASSUMPTION_META: Partial<Record<keyof AssumptionSet, AssumptionMeta>> = {
+  basementCostMultiplier: {
+    label: "지하 공사비 가중치",
+    unit: "배",
+    kind: "가정값",
+    basis:
+      "지상 기준 공사비의 1.25배 내부 초기값. 흙막이·굴토·토질·지하수 조건과 시공사 견적으로 교체해야 함.",
+  },
   constCostPerSqM: {
     label: "공사비",
     unit: "원/㎡",
