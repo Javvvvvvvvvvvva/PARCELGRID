@@ -1881,12 +1881,14 @@ function SourceDataPanel({
   projectId,
   records,
   gate,
+  currentValues,
   onSave,
   onRemove,
 }: {
   projectId: string;
   records: FinancialSourceMap;
   gate: SourceDataGateResult;
+  currentValues: Record<FinancialSourceField, number>;
   onSave: (record: FinancialSourceRecord) => void;
   onRemove: (field: FinancialSourceField) => void;
 }) {
@@ -1895,7 +1897,7 @@ function SourceDataPanel({
   const initialRecord = records[initialField];
   const [field, setField] = useState<FinancialSourceField>(initialField);
   const [value, setValue] = useState(
-    initialRecord ? String(initialRecord.value) : ""
+    String(initialRecord?.value ?? currentValues[initialField] ?? "")
   );
   const [sourceKind, setSourceKind] = useState<FinancialSourceKind>(
     initialRecord?.sourceKind ??
@@ -1920,7 +1922,8 @@ function SourceDataPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const meta = FINANCIAL_SOURCE_FIELD_META[field];
-  const reusableDocuments = Array.from(
+  const guidance = FINANCIAL_SOURCE_GUIDANCE[field];
+  const reusableSourceRecords = Array.from(
     new Map(
       Object.values(records)
         .filter(
@@ -1928,7 +1931,7 @@ function SourceDataPanel({
             document: SourceDocumentMetadata;
           } => Boolean(record?.document),
         )
-        .map((record) => [record.document.pathname, record.document]),
+        .map((record) => [record.document.pathname, record]),
     ).values(),
   );
 
@@ -1936,7 +1939,7 @@ function SourceDataPanel({
     const existing = records[nextField];
     const nextMeta = FINANCIAL_SOURCE_FIELD_META[nextField];
     setField(nextField);
-    setValue(existing ? String(existing.value) : "");
+    setValue(String(existing?.value ?? currentValues[nextField] ?? ""));
     setSourceKind(existing?.sourceKind ?? nextMeta.allowedKinds[0]);
     setSourceName(existing?.sourceName ?? "");
     setDocumentRef(existing?.documentRef ?? "");
@@ -2101,6 +2104,75 @@ function SourceDataPanel({
         <span>{gate.coveragePct.toFixed(0)}%</span>
       </div>
 
+      <div style={{ display: "grid", gap: 5, marginTop: 10 }}>
+        {gate.requiredFields.map((item) => {
+          const record = records[item];
+          const validation = record
+            ? validateFinancialSourceEvidence(record)
+            : null;
+          const status = validation?.valid
+            ? "확정"
+            : record
+              ? "원문 확인"
+              : "필요";
+          return (
+            <button
+              key={item}
+              type="button"
+              onClick={() => selectField(item)}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: 8,
+                width: "100%",
+                padding: "7px 8px",
+                border: `1px solid ${item === field ? "var(--accent)" : "var(--border-faint)"}`,
+                borderRadius: 7,
+                background: item === field ? "var(--accent-soft)" : "var(--bg-soft)",
+                color: "var(--fg)",
+                textAlign: "left",
+                font: "inherit",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ fontSize: 9.5, fontWeight: 700 }}>
+                {FINANCIAL_SOURCE_FIELD_META[item].label}
+              </span>
+              <small
+                style={{
+                  color: validation?.valid
+                    ? "var(--pos-fg)"
+                    : record
+                      ? "var(--warn-fg)"
+                      : "var(--neg-fg)",
+                  fontWeight: 800,
+                }}
+              >
+                {status}
+              </small>
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 4,
+          marginTop: 10,
+          padding: 9,
+          borderRadius: 8,
+          background: "var(--warn-soft)",
+          color: "var(--warn-fg)",
+          fontSize: 9,
+          lineHeight: 1.5,
+        }}
+      >
+        <b>{guidance.group} · 왜 필요한가</b>
+        <span>{guidance.why}</span>
+        <small>권장 근거: {guidance.recommendedEvidence}</small>
+      </div>
+
       <form onSubmit={submit} style={{ display: "grid", gap: 8, marginTop: 11 }}>
         <label style={sourceLabelStyle}>
           계산 항목
@@ -2130,6 +2202,9 @@ function SourceDataPanel({
             onChange={(event) => setValue(event.target.value)}
             style={sourceInputStyle}
           />
+          <small style={{ color: "var(--fg-faint)", lineHeight: 1.45 }}>
+            현재 예비 계산값을 자동 입력했습니다. 원문과 일치하는지 확인한 뒤 저장하세요.
+          </small>
         </label>
         <label style={sourceLabelStyle}>
           출처 유형
@@ -2191,27 +2266,38 @@ function SourceDataPanel({
               style={sourceInputStyle}
             />
           </label>
-          {reusableDocuments.length > 0 && (
+          {reusableSourceRecords.length > 0 && (
             <label style={sourceLabelStyle}>
-              이미 업로드한 원문 재사용
+              이미 등록한 원문과 발급정보 재사용
               <select
                 value={sourceDocument?.pathname ?? ""}
                 onChange={(event) => {
-                  const reused = reusableDocuments.find(
-                    (document) => document.pathname === event.target.value,
+                  const reused = reusableSourceRecords.find(
+                    (record) =>
+                      record.document.pathname === event.target.value,
                   );
-                  setSourceDocument(reused ?? null);
+                  setSourceDocument(reused?.document ?? null);
                   if (reused) {
-                    setDocumentRef((current) => current.trim() || reused.fileName);
-                    setNotice("기존 비공개 원문을 이 계산 항목에 연결했습니다.");
+                    if (meta.allowedKinds.includes(reused.sourceKind)) {
+                      setSourceKind(reused.sourceKind);
+                    }
+                    setSourceName(reused.sourceName);
+                    setDocumentRef(reused.documentRef || reused.document.fileName);
+                    setAsOf(reused.asOf);
+                    setVerifiedBy(reused.verifiedBy);
+                    setNotice("기존 원문·발급기관·기준일·확인자 정보를 재사용했습니다.");
                   }
                 }}
                 style={sourceInputStyle}
               >
                 <option value="">새 원문 업로드 또는 연결 안 함</option>
-                {reusableDocuments.map((document) => (
-                  <option key={document.pathname} value={document.pathname}>
-                    {document.fileName} · {document.sha256.slice(0, 10)}…
+                {reusableSourceRecords.map((record) => (
+                  <option
+                    key={record.document.pathname}
+                    value={record.document.pathname}
+                  >
+                    {record.sourceName} · {record.document.fileName} ·{" "}
+                    {record.document.sha256.slice(0, 10)}…
                   </option>
                 ))}
               </select>
@@ -2432,6 +2518,42 @@ function formatSourceValue(record: FinancialSourceRecord) {
 
 function NumericEditor({ label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {
   return <label style={{ display: "block", padding: "8px 0" }}><span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}><span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>{label}</span><span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><input type="number" min={0} step={step} value={(value / divisor).toFixed(decimals)} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next) && next >= 0) onChange(next * divisor); }} style={{ width: 88, height: 27, padding: "0 6px", borderRadius: 6, border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`, background: "var(--bg)", color: edited ? "var(--accent)" : "var(--fg)", textAlign: "right", font: "inherit", fontSize: 10.5, fontWeight: 700 }} /><small style={{ color: "var(--fg-faint)", fontSize: 8.5 }}>{suffix}</small></span></span><small title={source} style={{ display: "block", marginTop: 3, maxWidth: 300, color: edited ? "var(--accent)" : "var(--fg-faint)", fontSize: 8.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{edited ? "사용자 수정 · 실시간 재계산" : source}</small></label>;
+}
+
+function SourceCoverageRow({
+  label,
+  fields,
+  records,
+  fallback,
+}: {
+  label: string;
+  fields: FinancialSourceField[];
+  records: FinancialSourceMap;
+  fallback: string;
+}) {
+  const registered = fields
+    .map((field) => records[field])
+    .filter((record): record is FinancialSourceRecord => Boolean(record));
+  const valid = registered.filter(
+    (record) => validateFinancialSourceEvidence(record).valid
+  );
+  const state: "확정" | "검토" | "미확정" =
+    valid.length === fields.length
+      ? "확정"
+      : registered.length > 0
+        ? "검토"
+        : "미확정";
+  const value =
+    registered.length > 0
+      ? registered
+          .map((record) => {
+            const validation = validateFinancialSourceEvidence(record);
+            return `${FINANCIAL_SOURCE_FIELD_META[record.field].label}: ${record.sourceName} · ${record.asOf}${validation.valid ? "" : " · 원문 확인 필요"}`;
+          })
+          .join(" / ")
+      : fallback;
+
+  return <EvidenceRow label={label} value={value} state={state} />;
 }
 
 function EvidenceRow({ label, value, state }: { label: string; value: string; state: "확정" | "검토" | "미확정" }) {
