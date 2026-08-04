@@ -209,7 +209,7 @@ export interface AssumptionSet {
   // Cost
   constCostPerSqM: Won; // 지상 기준 공사비 원/m²
   /** 지하 공사비 가중치. 구버전 값이 없으면 1.25를 사용한다. */
-  basementCostMultiplier?: number;
+  basementCostMultiplier: number;
   softCostRate: Pct; // 설계/인허가/감리 비율 of hard cost
   contingencyRate: Pct; // 예비비
 
