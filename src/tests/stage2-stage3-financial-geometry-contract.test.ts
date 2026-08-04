@@ -115,7 +115,7 @@ function ssangmunPlanningScenario(): PlanningScenario {
     geometrySource: {
       mode: "reference-image",
       exactGeometryAvailable: false,
-      sourceName: "PARGELGRID 3D 기준 이미지",
+      sourceName: "PARCELGRID 3D 기준 이미지",
       locked: true,
       note: "정확한 좌표가 없어 기준 이미지 형상과 카메라 구도를 보존",
     },
