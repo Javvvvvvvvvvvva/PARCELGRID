@@ -528,10 +528,10 @@ export default function ReportPage({
                     <tr key={comp.id}>
                       <td>{comp.date}</td>
                       <td>{comp.address} · {comp.type}</td>
-                      <td className="num">{num(Math.round((comp.gfa || comp.area) * 10) / 10)}㎡</td>
-                      <td className="num">{won(comp.price)}</td>
+                      <td className="num">{num(Math.round(comp.lotArea * 10) / 10)}㎡</td>
+                      <td className="num">{won(Math.round(comp.priceWon / 10_000))}</td>
                       <td className="num">{num(comp.pricePerPyeong)}만/평</td>
-                      <td className="num">{comp.dist > 0 ? `${comp.dist.toFixed(1)}km` : "—"}</td>
+                      <td className="num">{comp.distanceKm != null ? `${comp.distanceKm.toFixed(1)}km` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
