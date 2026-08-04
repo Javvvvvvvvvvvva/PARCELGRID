@@ -88,6 +88,16 @@ describe("PlanningScenario → finance bridge", () => {
     expect(program.bcr).toBe(60);
     expect(program.floorsAbove).toBe(3);
     expect(program.floorsBelow).toBe(1);
+    expect(program.areaContract).toMatchObject({
+      constructionAreaSqm: 230,
+      aboveGroundAreaSqm: 160,
+      basementAreaSqm: 70,
+      farAreaSqm: 160,
+      parkingAreaSqm: 70,
+      commonAreaSqm: 10,
+      saleableAreaSqm: 60,
+      rentableAreaSqm: 90,
+    });
     expect(program.units).toEqual({ residential: 3, retail: 1 });
     expect(program.mix.residentialSale).toBeCloseTo(60 / 150, 8);
     expect(program.mix.residentialLease).toBeCloseTo(50 / 150, 8);
@@ -114,7 +124,7 @@ describe("PlanningScenario → finance bridge", () => {
     expect(representative.id).toBe(scenario.id);
     expect(representative.recommended).toBe(true);
     expect(representative.type).toBe("mixed");
-    expect(representative.gfa).toBeCloseTo(160, 6);
+    expect(representative.gfa).toBeCloseTo(230, 6);
     expect(representative.far).toBeCloseTo(160, 6);
     expect(representative.bcr).toBeCloseTo(60, 6);
     expect(representative.floors).toEqual({ above: 3, below: 1 });
