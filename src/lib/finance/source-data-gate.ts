@@ -75,6 +75,11 @@ export const FINANCIAL_SOURCE_FIELD_META: Record<
     unit: "원/㎡",
     allowedKinds: CONTRACT_OR_QUOTE,
   },
+  basementCostMultiplier: {
+    label: "지하 공사비 가중치",
+    unit: "배",
+    allowedKinds: [...CONTRACT_OR_QUOTE, "approved-policy"],
+  },
   softCostRate: {
     label: "설계·감리·인허가",
     unit: "%",
@@ -210,6 +215,12 @@ export function requiredSourceFields(
     "constructionMonths",
     "saleOutMonths",
   ];
+  if (
+    (scenario.program.areaContract?.basementAreaSqm ?? 0) > 0 ||
+    scenario.program.floorsBelow > 0
+  ) {
+    fields.push("basementCostMultiplier");
+  }
   if (scenario.program.mix.residentialSale > 0) {
     fields.push("salePricePerSqM", "salesPaceMonthlyPct");
   }
