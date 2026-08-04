@@ -21,6 +21,9 @@ describe("local runtime readiness", () => {
     expect(result.checks.find((check) => check.id === "vworld")?.status).toBe(
       "review",
     );
+    expect(
+      result.checks.find((check) => check.id === "openai-images")?.status,
+    ).toBe("optional");
   });
 
   it("requires security gates in production without exposing secret values", () => {
@@ -29,6 +32,8 @@ describe("local runtime readiness", () => {
       VWORLD_API_KEY: "vworld-secret-value",
       SITE_ACCESS_PASSWORD: "short",
       SOURCE_DOCUMENT_UPLOAD_KEY: "also-short",
+      OPENAI_API_KEY: "openai-secret-value",
+      OPENAI_IMAGE_MODEL: "gpt-image-2",
     };
     const result = buildRuntimeReadiness(environment);
     const serialized = JSON.stringify(result);
@@ -43,6 +48,10 @@ describe("local runtime readiness", () => {
       result.checks.find((check) => check.id === "source-documents")?.status,
     ).toBe("review");
     expect(serialized).not.toContain("vworld-secret-value");
+    expect(
+      result.checks.find((check) => check.id === "openai-images")?.status,
+    ).toBe("ready");
     expect(serialized).not.toContain("also-short");
+    expect(serialized).not.toContain("openai-secret-value");
   });
 });

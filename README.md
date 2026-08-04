@@ -33,7 +33,7 @@ curl http://localhost:3000/api/system/readiness
 | 2 | `/projects/[id]/envelope` | 층별 프로그램, 배치, 주차, 3D, 대표 계획안 |
 | 3 | `/projects/[id]` | 인수가·공사비·금융비·매출·수익성 재계산 |
 | 4 | `/projects/[id]/handoff` | 건축·시공·금융·세무 근거와 승인 기록 |
-| 5 | `/projects/[id]/report` | 화면 인쇄 기반 예비 PDF 보고서 |
+| 5 | `/projects/[id]/report` | 근거·현황·계획·사업성·리스크·전문가 승인·AI 콘셉트 렌더를 포함한 인쇄형 보고서 |
 
 ## 계획·내보내기 계약
 
@@ -43,6 +43,8 @@ curl http://localhost:3000/api/system/readiness
 - SketchUp 패키지는 DAE와 메타데이터를 제공합니다.
 - CAD 패키지는 AutoCAD R2000 ASCII DXF, 레이어, 메타데이터, 한국어 안내문을 제공합니다. DWG가 필요하면 CAD에서 DXF를 연 뒤 Save As로 변환합니다.
 - 기준 이미지 기반 디자인은 원본 층수·실루엣·후퇴·위치·회전·도로 관계·카메라를 잠그며, 좌표 원본이 없으면 형상을 새로 추정하지 않습니다.
+- AI 외장 콘셉트 렌더는 `OPENAI_API_KEY`가 있을 때만 활성화됩니다. 기준 이미지 없는 텍스트 전용 매스 생성은 서버에서 차단합니다.
+- 생성 이미지는 기본적으로 `.parcelgrid-data/concept-renders`에 저장되고 모델·원본/결과 SHA-256·Geometry Hash를 보고서에 남깁니다.
 
 ## 로컬 데이터와 보안
 
