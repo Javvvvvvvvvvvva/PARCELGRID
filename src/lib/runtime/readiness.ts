@@ -97,6 +97,15 @@ export function buildRuntimeReadiness(
         : "선택 기능입니다. 없어도 분석·3D·내보내기는 사용할 수 있습니다.",
     },
     {
+      id: "openai-images",
+      label: "AI 기준 이미지 외장 렌더",
+      status: configured(environment, "OPENAI_API_KEY") ? "ready" : "optional",
+      scope: "Stage 5 기준 이미지 기반 건축 콘셉트 시각화",
+      message: configured(environment, "OPENAI_API_KEY")
+        ? `서버 키 설정됨 · 모델 ${environment.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2"} · 기준 이미지 필수`
+        : "선택 기능입니다. 키가 없어도 주소·계획·사업성·보고서와 수동 이미지 첨부는 사용할 수 있습니다.",
+    },
+    {
       id: "site-access",
       label: "공유 화면 접근 보호",
       status:
