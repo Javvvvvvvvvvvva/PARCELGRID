@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   calculateScenario,
   ASSUMPTION_META,
-  INTERNAL_REVENUE_ASSUMPTIONS,
 } from "@/lib/finance/scenario";
 import { generatePFSchedule } from "@/lib/finance/cashflow";
 import { calculateTaxes, TAX_MODEL_AS_OF } from "@/lib/finance/tax";
