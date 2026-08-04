@@ -125,12 +125,56 @@ export type BuildingType =
   | "single-house" // 단독주택 (신축매매) — 작은 부지 30-80평
   | "multi-family"; // 다가구주택 (신축매매) — 중간 부지 50-150평
 
+export const FINANCIAL_GEOMETRY_CONTRACT_VERSION =
+  "stage2-finance-area-2026.1" as const;
+
+/**
+ * Stage 2에서 확정한 실제 면적을 Stage 3가 재생성하지 않고 소비하기 위한 계약.
+ *
+ * 이 값이 있으면 FAR/BCR은 설명·법규 검토용 지표로만 사용한다. 공사비와
+ * 매출은 아래 실제 면적을 기준으로 계산하며, 과거 저장 데이터만 legacy
+ * FAR/BCR 계산으로 되돌아간다.
+ */
+export interface FinancialGeometryAreaContract {
+  schemaVersion: typeof FINANCIAL_GEOMETRY_CONTRACT_VERSION;
+  source: "stage2-planning";
+  sourceScenarioId: string;
+  sourceScenarioVersion: number;
+  constructionAreaSqm: SqM;
+  aboveGroundAreaSqm: SqM;
+  basementAreaSqm: SqM;
+  farAreaSqm: SqM;
+  gradeFootprintAreaSqm: SqM;
+  parkingAreaSqm: SqM;
+  commonAreaSqm: SqM;
+  saleableAreaSqm: SqM;
+  rentableAreaSqm: SqM;
+  revenueAreas: {
+    residentialSaleSqm: SqM;
+    residentialLeaseSqm: SqM;
+    retailSqm: SqM;
+  };
+  providedParkingSpaces: number;
+  requiredParkingSpaces: number;
+  materialAdjustmentCostManwon: ManWon;
+  planningAssumptionsVersion?: string;
+  geometrySource?: {
+    mode: "engine-generated" | "external-model" | "reference-image";
+    exactGeometryAvailable: boolean;
+    locked: boolean;
+    geometryHash?: string;
+    verificationVersion?: string;
+  };
+}
+
 export interface BuildingProgram {
   type: BuildingType;
   far: Pct; // planned 용적률
   bcr: Pct; // planned 건폐율
   floorsAbove: number;
   floorsBelow: number;
+  /** Stage 2에서 확정한 실제 면적 계약. 없으면 구버전 FAR/BCR 계산을 사용한다. */
+  areaContract?: FinancialGeometryAreaContract;
   units: {
     residential: number;
     retail: number;
@@ -163,7 +207,9 @@ export interface AssumptionSet {
   capRate: Pct; // Cap rate %
 
   // Cost
-  constCostPerSqM: Won; // 공사비 원/m²
+  constCostPerSqM: Won; // 지상 기준 공사비 원/m²
+  /** 지하 공사비 가중치. 구버전 값이 없으면 1.25를 사용한다. */
+  basementCostMultiplier?: number;
   softCostRate: Pct; // 설계/인허가/감리 비율 of hard cost
   contingencyRate: Pct; // 예비비
 
