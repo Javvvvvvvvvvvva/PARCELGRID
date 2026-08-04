@@ -75,6 +75,11 @@ export const FINANCIAL_SOURCE_FIELD_META: Record<
     unit: "원/㎡",
     allowedKinds: CONTRACT_OR_QUOTE,
   },
+  basementCostMultiplier: {
+    label: "지하 공사비 가중치",
+    unit: "배",
+    allowedKinds: [...CONTRACT_OR_QUOTE, "approved-policy"],
+  },
   softCostRate: {
     label: "설계·감리·인허가",
     unit: "%",
@@ -124,6 +129,107 @@ export const FINANCIAL_SOURCE_FIELD_META: Record<
     label: "분양·매각 기간",
     unit: "개월",
     allowedKinds: ["appraisal", "approved-policy", "professional-quote"],
+  },
+};
+
+export interface FinancialSourceGuidance {
+  group: "취득" | "매출·임대" | "공사비" | "금융" | "사업 일정";
+  why: string;
+  recommendedEvidence: string;
+}
+
+/**
+ * 일반 사용자가 어떤 원문을 준비해야 하는지 설명하는 등록 가이드.
+ * 예시는 허용되는 근거의 종류를 설명할 뿐, 실제 원문을 대신하지 않는다.
+ */
+export const FINANCIAL_SOURCE_GUIDANCE: Record<
+  FinancialSourceField,
+  FinancialSourceGuidance
+> = {
+  acquisitionPrice: {
+    group: "취득",
+    why: "토지비와 자기자본 규모의 출발점입니다.",
+    recommendedEvidence: "서명 매매계약서, 감정평가서 또는 공식 취득가격 원문",
+  },
+  salePricePerSqM: {
+    group: "매출·임대",
+    why: "예상 매출과 최대 매입가를 직접 결정합니다.",
+    recommendedEvidence: "유사 건물 실거래 사례표, 감정평가서 또는 매각 계약서",
+  },
+  rentPerSqMMonth: {
+    group: "매출·임대",
+    why: "안정화 NOI와 임대 자산가치의 기준입니다.",
+    recommendedEvidence: "인근 임대차계약 사례, 감정평가서 또는 임대시장 보고서",
+  },
+  vacancyRate: {
+    group: "매출·임대",
+    why: "안정화 후 실제 임대수익을 조정합니다.",
+    recommendedEvidence: "임대시장 보고서, 운영 실적 또는 승인된 내부 기준",
+  },
+  capRate: {
+    group: "매출·임대",
+    why: "임대 NOI를 매각가치로 환산합니다.",
+    recommendedEvidence: "감정평가서, 거래사례 분석 또는 승인된 투자 기준",
+  },
+  constCostPerSqM: {
+    group: "공사비",
+    why: "전체 직접공사비의 기준 단가입니다.",
+    recommendedEvidence: "시공사 개산견적서 또는 서명된 공사계약서",
+  },
+  basementCostMultiplier: {
+    group: "공사비",
+    why: "굴토·흙막이·지하수 조건에 따른 지하 공사비를 조정합니다.",
+    recommendedEvidence: "지하공사 세부견적, 지반조사 검토 또는 승인된 원가 기준",
+  },
+  softCostRate: {
+    group: "공사비",
+    why: "설계·감리·인허가 등 간접비를 반영합니다.",
+    recommendedEvidence: "건축사·감리 견적서, 용역계약서 또는 승인된 예산 기준",
+  },
+  contingencyRate: {
+    group: "공사비",
+    why: "설계변경과 물가 변동의 예비비를 반영합니다.",
+    recommendedEvidence: "승인된 사업예산 기준 또는 시공사 리스크 견적",
+  },
+  ltcTarget: {
+    group: "금융",
+    why: "PF 가능액과 필요한 자기자본을 결정합니다.",
+    recommendedEvidence: "금융기관 Term Sheet 또는 대출약정서",
+  },
+  interestRate: {
+    group: "금융",
+    why: "월별 금융비와 최종 IRR을 결정합니다.",
+    recommendedEvidence: "금융기관 Term Sheet 또는 대출약정서",
+  },
+  equityIRR: {
+    group: "금융",
+    why: "사업 통과 여부와 최대 매입가 역산의 목표값입니다.",
+    recommendedEvidence: "대표자 승인 투자기준 또는 투자심의 기준서",
+  },
+  leaseUpMonths: {
+    group: "매출·임대",
+    why: "임대 안정화까지 걸리는 기간을 설명합니다.",
+    recommendedEvidence: "임대대행 계획서, 감정평가서 또는 운영계획",
+  },
+  salesPaceMonthlyPct: {
+    group: "매출·임대",
+    why: "월별 분양대금 회수 속도를 설명합니다.",
+    recommendedEvidence: "분양대행 계획서, 유사 사업 실적 또는 승인된 판매계획",
+  },
+  designMonths: {
+    group: "사업 일정",
+    why: "토지 취득 후 착공 전 자금 묶임 기간을 결정합니다.",
+    recommendedEvidence: "건축사 설계·인허가 일정표 또는 승인된 사업 일정",
+  },
+  constructionMonths: {
+    group: "사업 일정",
+    why: "공사비 집행기간과 PF 이자기간을 결정합니다.",
+    recommendedEvidence: "시공사 공정표 또는 공사계약 일정",
+  },
+  saleOutMonths: {
+    group: "사업 일정",
+    why: "준공 후 매각·잔금 회수기간을 결정합니다.",
+    recommendedEvidence: "매각계획, 분양대행 계획서 또는 승인된 사업 일정",
   },
 };
 
@@ -210,14 +316,20 @@ export function requiredSourceFields(
     "constructionMonths",
     "saleOutMonths",
   ];
+  if (
+    (scenario.program.areaContract?.basementAreaSqm ?? 0) > 0 ||
+    scenario.program.floorsBelow > 0
+  ) {
+    fields.push("basementCostMultiplier");
+  }
   if (scenario.program.mix.residentialSale > 0) {
-    fields.push("salePricePerSqM", "salesPaceMonthlyPct");
+    fields.push("salePricePerSqM");
   }
   if (
     scenario.program.mix.residentialLease > 0 ||
     scenario.program.mix.retail > 0
   ) {
-    fields.push("rentPerSqMMonth", "vacancyRate", "capRate", "leaseUpMonths");
+    fields.push("rentPerSqMMonth", "vacancyRate", "capRate");
   }
   return Array.from(new Set(fields));
 }

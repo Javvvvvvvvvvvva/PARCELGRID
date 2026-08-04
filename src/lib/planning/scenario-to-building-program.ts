@@ -1,4 +1,8 @@
-import type { BuildingProgram, BuildingType } from "@/lib/finance/types";
+import {
+  FINANCIAL_GEOMETRY_CONTRACT_VERSION,
+  type BuildingProgram,
+  type BuildingType,
+} from "@/lib/finance/types";
 import { resolveZoneRevenueModel } from "@/lib/planning/scenario-utils";
 import type {
   FloorUseType,
@@ -131,6 +135,41 @@ export function planningScenarioToBuildingProgram(
     bcr: calculation.metrics.preliminaryBcrPct,
     floorsAbove: calculation.metrics.aboveGroundFloors,
     floorsBelow: calculation.metrics.undergroundFloors,
+    areaContract: {
+      schemaVersion: FINANCIAL_GEOMETRY_CONTRACT_VERSION,
+      source: "stage2-planning",
+      sourceScenarioId: scenario.id,
+      sourceScenarioVersion: scenario.version,
+      constructionAreaSqm: calculation.metrics.constructionAreaSqm,
+      aboveGroundAreaSqm: calculation.metrics.aboveGroundProgramAreaSqm,
+      basementAreaSqm: calculation.metrics.basementProgramAreaSqm,
+      farAreaSqm: calculation.metrics.preliminaryFarAreaSqm,
+      gradeFootprintAreaSqm: calculation.metrics.gradeFootprintAreaSqm,
+      parkingAreaSqm: calculation.metrics.parkingAreaSqm,
+      commonAreaSqm: calculation.metrics.commonAreaSqm,
+      saleableAreaSqm: calculation.metrics.saleableAreaSqm,
+      rentableAreaSqm: calculation.metrics.rentableAreaSqm,
+      revenueAreas,
+      providedParkingSpaces: calculation.parking.providedCars,
+      requiredParkingSpaces: calculation.parking.requiredCars,
+      materialAdjustmentCostManwon:
+        calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
+      planningAssumptionsVersion:
+        calculation.economicsPreview.assumptionsVersion,
+      geometrySource: scenario.geometrySource
+        ? {
+            mode: scenario.geometrySource.mode,
+            exactGeometryAvailable:
+              scenario.geometrySource.exactGeometryAvailable,
+            locked: scenario.geometrySource.locked,
+            geometryHash:
+              scenario.geometrySource.lockedGeometryHash ??
+              scenario.geometrySource.sourceGeometryHash,
+            verificationVersion:
+              scenario.geometrySource.verificationVersion,
+          }
+        : undefined,
+    },
     units: {
       residential: calculation.metrics.residentialUnitCount,
       retail: calculation.metrics.commercialUnitCount,

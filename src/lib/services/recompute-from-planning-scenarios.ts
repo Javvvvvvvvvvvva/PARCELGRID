@@ -79,22 +79,7 @@ export function recomputeFromPlanningScenarios(
       planningScenario,
       calculationContext
     );
-    const realizedFarAreaSqm = calculation.metrics.preliminaryFarAreaSqm;
-    const materialAdjustmentManwon =
-      calculation.economicsPreview.materialAdjustmentCostManwon ?? 0;
-    const materialAdjustmentPerSqmWon =
-      realizedFarAreaSqm > 0
-        ? (materialAdjustmentManwon * 10_000) / realizedFarAreaSqm
-        : 0;
-    const scenarioAssumptions: AssumptionSet = {
-      ...assumptions,
-      // Stage 2에서 사용자가 입력한 외벽 수량·단가 증감액을 총액 그대로
-      // Stage 3 hard cost에 전달한다. 단가가 비어 있으면 증감액은 0이다.
-      constCostPerSqM: Math.max(
-        0,
-        assumptions.constCostPerSqM + materialAdjustmentPerSqmWon
-      ),
-    };
+    const scenarioAssumptions: AssumptionSet = { ...assumptions };
 
     return {
       id: planningScenario.id,
