@@ -17,12 +17,18 @@ import { buildEvidenceGate } from "@/lib/handoff/evidence-gate";
 import {
   buildExpertReviewSummary,
   validateExpertReview,
+  type ExpertReviewMap,
 } from "@/lib/handoff/review-workflow";
 import {
   buildSourceDataGate,
   FINANCIAL_SOURCE_FIELD_META,
   validateFinancialSourceEvidence,
+  type FinancialSourceMap,
 } from "@/lib/finance/source-data-gate";
+import type {
+  PriceVerificationRecord,
+  PriceVerificationTarget,
+} from "@/lib/finance/price-verification";
 import { buildPlanningDesignIntent } from "@/lib/planning/design-intent";
 import {
   PLANNING_FACADE_LABELS,
@@ -57,6 +63,12 @@ const EVIDENCE_STATUS_LABEL = {
   missing: "미확인",
 } as const;
 
+const EMPTY_FINANCIAL_SOURCES: FinancialSourceMap = Object.freeze({});
+const EMPTY_PRICE_VERIFICATIONS: Partial<
+  Record<PriceVerificationTarget, PriceVerificationRecord>
+> = Object.freeze({});
+const EMPTY_EXPERT_REVIEWS: ExpertReviewMap = Object.freeze({});
+
 export default function ReportPage({
   params,
 }: {
@@ -74,13 +86,15 @@ export default function ReportPage({
     (state) => state.representativePlanningScenarioId
   );
   const financialSources = useProjectStore(
-    (state) => state.financialSources[projectId] ?? {}
+    (state) =>
+      state.financialSources[projectId] ?? EMPTY_FINANCIAL_SOURCES
   );
   const priceVerifications = useReviewStore(
-    (state) => state.priceVerifications[projectId] ?? {}
+    (state) =>
+      state.priceVerifications[projectId] ?? EMPTY_PRICE_VERIFICATIONS
   );
   const expertReviews = useReviewStore(
-    (state) => state.expertReviews[projectId] ?? {}
+    (state) => state.expertReviews[projectId] ?? EMPTY_EXPERT_REVIEWS
   );
 
   const scenarios = useMemo(() => data?.scenarios ?? [], [data?.scenarios]);
