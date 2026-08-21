@@ -113,4 +113,68 @@ describe("auditable project ledger", () => {
       8
     );
   });
+
+  it("uses monthly sales pace as the minimum presale collection horizon", () => {
+    const fast = scenarioAtRate(6);
+    fast.program = { ...fast.program, type: "officetel" };
+    fast.assumptions.saleOutMonths = 3;
+    fast.assumptions.salesPaceMonthlyPct = 25;
+
+    const slow = scenarioAtRate(6);
+    slow.program = { ...slow.program, type: "officetel" };
+    slow.assumptions.saleOutMonths = 3;
+    slow.assumptions.salesPaceMonthlyPct = 5;
+
+    const fastLedger = build(6, fast);
+    const slowLedger = build(6, slow);
+
+    expect(fastLedger.rows).toHaveLength(4 + 12 + 4 + 1);
+    expect(slowLedger.rows).toHaveLength(4 + 12 + 20 + 1);
+    expect(slowLedger.totalRevenue).toBeCloseTo(fastLedger.totalRevenue, 8);
+    expect(
+      slowLedger.warnings.some((warning) => warning.includes("최소 20개월")),
+    ).toBe(true);
+  });
+
+  it("delays lease exit value until the configured lease-up period", () => {
+    const fast = scenarioAtRate(6);
+    fast.program = {
+      ...fast.program,
+      type: "retail",
+      mix: { residentialSale: 0, residentialLease: 0, retail: 1 },
+    };
+    fast.assumptions.saleOutMonths = 3;
+    fast.assumptions.leaseUpMonths = 4;
+
+    const slow = {
+      ...fast,
+      assumptions: { ...fast.assumptions, leaseUpMonths: 18 },
+    };
+
+    const buildLease = (leaseScenario: Scenario) =>
+      buildProjectLedger({
+        parcel,
+        scenario: leaseScenario,
+        revenueSale: 0,
+        revenueExit: 130_000,
+        hardCost: 40_000,
+        softCost: 4_800,
+        contingency: 2_240,
+      });
+
+    const fastLedger = buildLease(fast);
+    const slowLedger = buildLease(slow);
+
+    expect(fastLedger.rows).toHaveLength(4 + 12 + 4 + 1);
+    expect(slowLedger.rows).toHaveLength(4 + 12 + 18 + 1);
+    expect(slowLedger.financingCost).toBeGreaterThan(
+      fastLedger.financingCost,
+    );
+  });
+
+  it("rejects impossible financial inputs instead of silently clamping them", () => {
+    const invalid = scenarioAtRate(6);
+    invalid.assumptions.salesPaceMonthlyPct = 0;
+    expect(() => build(6, invalid)).toThrow("월 분양 속도");
+  });
 });
