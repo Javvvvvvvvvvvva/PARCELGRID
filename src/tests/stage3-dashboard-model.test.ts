@@ -9,6 +9,12 @@ const planning = {
   projectId: "PROJECT-1",
   version: 3,
   name: "대표 계획안",
+  checks: [
+    { code: "bcr", label: "건폐율", status: "pass", message: "확인" },
+    { code: "far", label: "용적률", status: "pass", message: "확인" },
+    { code: "height", label: "높이", status: "pass", message: "확인" },
+    { code: "parking", label: "주차", status: "pass", message: "확인" },
+  ],
 } as PlanningScenario;
 
 const geometry = {
@@ -56,6 +62,28 @@ describe("Stage 3 dashboard source contract", () => {
 
     expect(result.ready).toBe(true);
     if (result.ready) expect(result.financeScenario.id).toBe("PLAN-1");
+  });
+
+  it("blocks a representative whose core legal source is still review-only", () => {
+    const result = resolveStage3DashboardContext({
+      projectId: "PROJECT-1",
+      representativeScenarioId: "PLAN-1",
+      representativeGeometrySnapshot: geometry,
+      planningScenarios: [
+        {
+          ...planning,
+          checks: planning.checks.map((check) =>
+            check.code === "height"
+              ? { ...check, status: "review" as const }
+              : check
+          ),
+        },
+      ],
+      financeScenarios: [finance],
+    });
+
+    expect(result.ready).toBe(false);
+    if (!result.ready) expect(result.code).toBe("invalid-planning-checks");
   });
 
   it("blocks a stale geometry snapshot after the plan version changes", () => {
