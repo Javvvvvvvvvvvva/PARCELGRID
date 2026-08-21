@@ -620,10 +620,10 @@ export const ASSUMPTION_META: Partial<Record<keyof AssumptionSet, AssumptionMeta
     basis: "물가·설계변경 대응 5~10% 관행 범위의 하단.",
   },
   ltcTarget: {
-    label: "PF 비율(LTC)",
+    label: "PF 적격 공사비 조달비율",
     unit: "%",
     kind: "가정값",
-    basis: "통상 60~70% 범위. 사업·신용에 따라 달라짐.",
+    basis: "현재 원장은 토지비·철거비를 제외한 공사 관련 적격비용에만 적용합니다. 금융기관 Term Sheet의 실제 LTC 정의로 교체해야 합니다.",
   },
   interestRate: {
     label: "PF 금리",
