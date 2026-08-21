@@ -62,6 +62,11 @@ function geometry(
     scenarioId: "S1",
     scenarioVersion: 3,
     geometryHash: "GEO-1",
+    validation: {
+      status: "pass",
+      representativeEligible: true,
+      exportable: true,
+    },
     ...overrides,
   } as unknown as PlanningGeometrySnapshot;
 }
