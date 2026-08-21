@@ -32,7 +32,7 @@ curl http://localhost:3000/api/system/readiness
 | 1 | `/projects/[id]/status` | 기존 건축물·도로·실거래 현황 |
 | 2 | `/projects/[id]/envelope` | 층별 프로그램, 배치, 주차, 3D, 대표 계획안 |
 | 3 | `/projects/[id]` | 인수가·공사비·금융비·매출·수익성 재계산 |
-| 4 | `/projects/[id]/handoff` | 건축·시공·금융·세무 근거와 승인 기록 |
+| 4 | `/projects/[id]/handoff` | 건축·시공·금융·세무 근거와 승인 기록, 다른 PC용 인계 패키지 |
 | 5 | `/projects/[id]/report` | 근거·현황·계획·사업성·리스크·전문가 승인·AI 콘셉트 렌더를 포함한 인쇄형 보고서 |
 
 ## 계획·내보내기 계약
@@ -53,6 +53,8 @@ curl http://localhost:3000/api/system/readiness
 - 로컬 개발에서는 `SITE_ACCESS_PASSWORD`와 `SOURCE_DOCUMENT_UPLOAD_KEY`를 비워 둘 수 있습니다.
 - 다른 사람에게 공개되는 서버에서는 각각 12자, 16자 이상으로 반드시 설정해야 합니다.
 - PostgreSQL이 없으면 브라우저 세션과 시드 데이터로 동작하므로 다른 PC와 프로젝트가 자동 동기화되지는 않습니다.
+- Stage 4의 인계 패키지는 같은 프로젝트 ID의 계획·Geometry·사업성·검토 기록을 옮깁니다. 원문 PDF/Excel과 AI 이미지는 포함되지 않으므로 새 컴퓨터에서 원문을 다시 올리고 전문가 승인을 갱신해야 합니다.
+- 공유 비밀번호 로그인은 단일 Node 프로세스에서 기본 15분당 8회로 제한됩니다. 다중 인스턴스 공개 운영은 외부 인증과 공유 rate limiter가 필요합니다.
 
 ## 검증
 
