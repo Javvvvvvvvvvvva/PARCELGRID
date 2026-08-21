@@ -25,12 +25,13 @@ export interface RepresentativeCheckReadiness {
  * 대표안을 잠가야 한다.
  */
 export function assessRepresentativeCheckReadiness(
-  checks: PlanningCheck[],
+  checks: PlanningCheck[] | null | undefined,
 ): RepresentativeCheckReadiness {
+  const normalizedChecks = checks ?? [];
   const blockers: RepresentativeCheckBlocker[] = [];
-  const seen = new Set(checks.map((check) => check.code));
+  const seen = new Set(normalizedChecks.map((check) => check.code));
 
-  for (const check of checks) {
+  for (const check of normalizedChecks) {
     if (check.status === "fail") {
       blockers.push({
         code: check.code,
