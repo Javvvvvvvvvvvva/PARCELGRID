@@ -61,7 +61,8 @@ function stripFinancialRecordTimestamps(sources: FinancialSourceMap) {
   return Object.fromEntries(
     Object.entries(sources).map(([field, record]) => {
       if (!record) return [field, record];
-      const { recordedAt: _recordedAt, ...evidence } = record;
+      const evidence = { ...record };
+      delete evidence.recordedAt;
       return [field, evidence];
     })
   );
@@ -73,7 +74,8 @@ function stripPriceRecordTimestamps(
   return Object.fromEntries(
     Object.entries(records).map(([target, record]) => {
       if (!record) return [target, record];
-      const { updatedAt: _updatedAt, ...evidence } = record;
+      const evidence = { ...record };
+      delete evidence.updatedAt;
       return [target, evidence];
     })
   ) as ReviewPriceVerificationMap;
@@ -90,11 +92,9 @@ export function buildReviewSnapshotKey(input: {
   financialSources: FinancialSourceMap;
   priceVerifications: ReviewPriceVerificationMap;
 }): string {
-  const { lastSyncedAt: _lastSyncedAt, ...stableMeta } =
-    input.snapshot.data.meta;
   const stableData = {
     ...input.snapshot.data,
-    meta: stableMeta,
+    meta: { version: input.snapshot.data.meta.version },
   };
   const fingerprint = stableHash({
     version: REVIEW_SNAPSHOT_VERSION,
