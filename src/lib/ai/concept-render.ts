@@ -11,6 +11,19 @@ export interface ConceptReferenceFileLike {
   size: number;
 }
 
+export interface ConceptRenderUsage {
+  inputTokens: number;
+  inputImageTokens: number;
+  inputTextTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export type ConceptGeometryReviewStatus =
+  | "pending"
+  | "confirmed"
+  | "rejected";
+
 export interface ConceptRenderMetadata {
   pathname: string;
   fileName: string;
@@ -23,6 +36,11 @@ export interface ConceptRenderMetadata {
   geometryHash: string | null;
   sourceImageSha256: string;
   prompt: string;
+  usage?: ConceptRenderUsage;
+  geometryReview?: {
+    status: ConceptGeometryReviewStatus;
+    reviewedAt?: string;
+  };
 }
 
 export interface ConceptRenderPromptInput {
@@ -31,6 +49,18 @@ export interface ConceptRenderPromptInput {
 }
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const GEOMETRY_HASH_PATTERN = /^[a-zA-Z0-9._:-]{6,160}$/;
+
+export function validateConceptGeometryHash(value: string): string[] {
+  const hash = value.trim();
+  if (!hash) {
+    return ["검증된 대표안 Geometry Hash가 필요합니다."];
+  }
+  if (!GEOMETRY_HASH_PATTERN.test(hash)) {
+    return ["Geometry Hash 형식이 올바르지 않습니다."];
+  }
+  return [];
+}
 
 export function validateConceptReferenceFile(
   file: ConceptReferenceFileLike,

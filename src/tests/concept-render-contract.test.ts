@@ -6,6 +6,7 @@ import {
   isProjectConceptRenderPath,
   validateConceptReferenceBytes,
   validateConceptReferenceFile,
+  validateConceptGeometryHash,
 } from "@/lib/ai/concept-render";
 import { resolveConceptRenderFilePath } from "@/lib/runtime/concept-render-storage";
 
@@ -35,6 +36,13 @@ describe("geometry-locked concept render contract", () => {
     expect(
       validateConceptReferenceBytes("image/png", new Uint8Array([1, 2, 3])),
     ).toContain("PNG 파일 시그니처를 확인할 수 없습니다.");
+  });
+
+  it("requires a verified geometry hash for generation requests", () => {
+    expect(validateConceptGeometryHash("")).toContain(
+      "검증된 대표안 Geometry Hash가 필요합니다."
+    );
+    expect(validateConceptGeometryHash("PG-LOCKED-123")).toEqual([]);
   });
 
   it("always prepends the non-negotiable geometry preservation contract", () => {

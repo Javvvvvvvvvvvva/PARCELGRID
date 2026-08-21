@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Line, OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
@@ -29,6 +29,10 @@ import {
 } from "@/lib/planning/sketchup-export-package";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
+import {
+  conceptReferenceStorageKey,
+  createConceptReferenceCapture,
+} from "@/lib/ai/concept-reference-cache";
 
 interface ApiResponse {
   parcels: CadastralParcelFeature[];
@@ -607,6 +611,9 @@ function calculateExtent(input: {
 
 export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const data = useProjectStore((state) => state.data);
+  const representativeGeometry = useProjectStore(
+    (state) => state.representativeGeometrySnapshot
+  );
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
   const selectedPlanningScenarioId = useProjectStore(
     (state) => state.selectedPlanningScenarioId
@@ -623,6 +630,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const [showRoads, setShowRoads] = useState(true);
   const [showSamples, setShowSamples] = useState(true);
   const [showSourceRoadBoundary, setShowSourceRoadBoundary] = useState(false);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const parcel = data?.parcel;
   const scenario =
@@ -720,6 +729,44 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       }),
     };
   }, [parcel, projectId, scenario, sourceParcels, targetPnu]);
+
+  const captureEligible = Boolean(
+    snapshots &&
+      representativeGeometry?.projectId === projectId &&
+      representativeGeometry.geometryHash === snapshots.planning.geometryHash &&
+      representativeGeometry.validation.status === "pass" &&
+      representativeGeometry.validation.representativeEligible &&
+      representativeGeometry.validation.exportable
+  );
+
+  const captureConceptReference = () => {
+    if (!snapshots || !captureEligible || !captureCanvasRef.current) {
+      setCaptureNotice(
+        "현재 선택안이 검증된 대표안과 같을 때만 AI 기준 이미지를 저장할 수 있습니다."
+      );
+      return;
+    }
+    try {
+      const capture = createConceptReferenceCapture({
+        projectId,
+        geometryHash: snapshots.planning.geometryHash,
+        dataUrl: captureCanvasRef.current.toDataURL("image/jpeg", 0.9),
+      });
+      window.localStorage.setItem(
+        conceptReferenceStorageKey(projectId),
+        JSON.stringify(capture)
+      );
+      setCaptureNotice(
+        "현재 3D 시점을 대표 Geometry에 묶어 저장했습니다. Stage 5에서 자동으로 불러옵니다."
+      );
+    } catch (error) {
+      setCaptureNotice(
+        error instanceof Error
+          ? error.message
+          : "3D 기준 이미지를 저장하지 못했습니다."
+      );
+    }
+  };
 
   if (!parcel || !scenario || !snapshots) return null;
 
@@ -880,6 +927,41 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
 
       <div
         style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 10,
+          alignItems: "center",
+          margin: "10px 0 8px",
+        }}
+      >
+        <span style={{ fontSize: 10, color: "var(--fg-muted)" }}>
+          AI 외장 콘셉트는 검증된 대표안의 현재 카메라 시점을 기준으로 사용합니다.
+        </span>
+        <button
+          type="button"
+          disabled={!captureEligible}
+          onClick={captureConceptReference}
+          style={{
+            minHeight: 32,
+            padding: "0 12px",
+            border: "1px solid var(--fg)",
+            borderRadius: 7,
+            background: captureEligible ? "var(--fg)" : "var(--bg-soft)",
+            color: captureEligible ? "var(--bg)" : "var(--fg-faint)",
+            fontSize: 9.5,
+            fontWeight: 750,
+            cursor: captureEligible ? "pointer" : "not-allowed",
+          }}
+        >
+          AI 기준 이미지 저장
+        </button>
+      </div>
+      {captureNotice && (
+        <Notice>{captureNotice}</Notice>
+      )}
+
+      <div
+        style={{
           height: 520,
           border: "1px solid var(--border)",
           borderRadius: 12,
@@ -888,6 +970,10 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         }}
       >
         <Canvas
+          gl={{ antialias: true, preserveDrawingBuffer: true }}
+          onCreated={({ gl }) => {
+            captureCanvasRef.current = gl.domElement;
+          }}
           camera={{
             position: [
               snapshots.extent * 1.45,

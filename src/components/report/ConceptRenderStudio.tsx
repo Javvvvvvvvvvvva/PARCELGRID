@@ -6,6 +6,10 @@ import {
   type ConceptRenderMetadata,
   type ConceptRenderQuality,
 } from "@/lib/ai/concept-render";
+import {
+  conceptReferenceStorageKey,
+  parseConceptReferenceCapture,
+} from "@/lib/ai/concept-reference-cache";
 
 interface ConceptRenderStudioProps {
   projectId: string;
@@ -36,6 +40,9 @@ export default function ConceptRenderStudio({
   defaultPrompt,
 }: ConceptRenderStudioProps) {
   const [referenceImage, setReferenceImage] = useState<File | null>(null);
+  const [referenceGeometryHash, setReferenceGeometryHash] = useState<
+    string | null
+  >(null);
   const [referencePreviewUrl, setReferencePreviewUrl] = useState<string | null>(
     null,
   );
@@ -47,6 +54,11 @@ export default function ConceptRenderStudio({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [quota, setQuota] = useState<{
+    limit: number;
+    remaining: number;
+    resetAt: string;
+  } | null>(null);
 
   const endpoint = `/api/projects/${encodeURIComponent(projectId)}/concept-render`;
 
@@ -89,35 +101,83 @@ export default function ConceptRenderStudio({
   };
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey(projectId));
-    if (!saved) return;
-    try {
-      const parsed = JSON.parse(saved) as unknown;
-      if (!isRenderMetadata(parsed)) return;
-      setRender(parsed);
-      void loadStoredRender(parsed, "", true);
-    } catch {
-      window.localStorage.removeItem(storageKey(projectId));
+    let cancelled = false;
+    const savedRender = window.localStorage.getItem(storageKey(projectId));
+    if (savedRender) {
+      try {
+        const parsed = JSON.parse(savedRender) as unknown;
+        if (isRenderMetadata(parsed)) {
+          setRender(parsed);
+          if (!geometryHash || parsed.geometryHash === geometryHash) {
+            void loadStoredRender(parsed, "", true);
+          } else {
+            replaceRenderUrl(null);
+            setNotice(
+              "저장된 렌더는 이전 Geometry 기준입니다. 현재 대표안으로 다시 생성하세요."
+            );
+          }
+        }
+      } catch {
+        window.localStorage.removeItem(storageKey(projectId));
+      }
+    }
+
+    const cachedReference = parseConceptReferenceCapture(
+      window.localStorage.getItem(conceptReferenceStorageKey(projectId)),
+      { projectId, geometryHash }
+    );
+    if (cachedReference) {
+      fetch(cachedReference.dataUrl)
+        .then((response) => response.blob())
+        .then((blob) => {
+          if (cancelled) return;
+          const file = new File(
+            [blob],
+            `parcelgrid-3d-${cachedReference.geometryHash}.jpg`,
+            { type: blob.type || "image/jpeg" }
+          );
+          setReferenceImage(file);
+          setReferenceGeometryHash(cachedReference.geometryHash);
+          setReferencePreviewUrl(cachedReference.dataUrl);
+          setNotice(
+            "Stage 2에서 저장한 검증 대표안 3D 기준 이미지를 자동으로 불러왔습니다."
+          );
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setError("저장된 3D 기준 이미지를 읽지 못했습니다.");
+          }
+        });
     }
     return () => {
-      if (referencePreviewUrl) URL.revokeObjectURL(referencePreviewUrl);
-      if (renderUrl) URL.revokeObjectURL(renderUrl);
+      cancelled = true;
     };
-    // 저장 프로젝트가 바뀔 때만 초기 메타데이터를 읽습니다.
+    // 프로젝트·대표 Geometry가 바뀌면 저장된 기준과 렌더를 다시 검증합니다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [geometryHash, projectId]);
 
   const selectReferenceImage = (file: File | null) => {
     if (referencePreviewUrl) URL.revokeObjectURL(referencePreviewUrl);
     setReferenceImage(file);
+    setReferenceGeometryHash(null);
     setReferencePreviewUrl(file ? URL.createObjectURL(file) : null);
     setError(null);
-    setNotice(null);
+    setNotice(
+      file
+        ? "수동 업로드 이미지는 현재 Geometry와 자동 연결되지 않습니다. Stage 2의 3D 컨텍스트에서 기준 이미지를 저장하세요."
+        : null
+    );
   };
 
   const generate = async () => {
-    if (!referenceImage) {
-      setError("형상 보존용 PARCELGRID 기준 이미지를 선택하세요.");
+    if (!geometryHash) {
+      setError("검증된 대표안 Geometry가 없어 AI 렌더를 생성할 수 없습니다.");
+      return;
+    }
+    if (!referenceImage || referenceGeometryHash !== geometryHash) {
+      setError(
+        "Stage 2 3D 컨텍스트에서 현재 대표안의 AI 기준 이미지를 먼저 저장하세요."
+      );
       return;
     }
     if (!prompt.trim()) {
@@ -142,8 +202,13 @@ export default function ConceptRenderStudio({
         body: form,
       });
       const payload = (await response.json().catch(() => null)) as
-        | { render?: ConceptRenderMetadata; error?: string }
+        | {
+            render?: ConceptRenderMetadata;
+            error?: string;
+            quota?: { limit: number; remaining: number; resetAt: string };
+          }
         | null;
+      if (payload?.quota) setQuota(payload.quota);
       if (!response.ok || !payload?.render) {
         throw new Error(payload?.error ?? "콘셉트 렌더 생성에 실패했습니다.");
       }
@@ -154,7 +219,7 @@ export default function ConceptRenderStudio({
       );
       await loadStoredRender(payload.render, uploadKey, true);
       setNotice(
-        "기준 이미지 기반 렌더를 생성하고 로컬 비공개 저장소에 보관했습니다.",
+        "기준 이미지 기반 렌더를 생성했습니다. 원본과 형상이 같은지 확인한 뒤 확정하세요.",
       );
     } catch (generationError) {
       setError(
@@ -165,6 +230,29 @@ export default function ConceptRenderStudio({
     } finally {
       setWorking(false);
     }
+  };
+
+  const setGeometryReview = (
+    status: "confirmed" | "rejected"
+  ) => {
+    if (!render || !geometryHash || render.geometryHash !== geometryHash) {
+      setError("현재 대표 Geometry와 일치하는 렌더만 확인할 수 있습니다.");
+      return;
+    }
+    const next: ConceptRenderMetadata = {
+      ...render,
+      geometryReview: {
+        status,
+        reviewedAt: new Date().toISOString(),
+      },
+    };
+    setRender(next);
+    window.localStorage.setItem(storageKey(projectId), JSON.stringify(next));
+    setNotice(
+      status === "confirmed"
+        ? "원본과 결과의 층수·외곽선·후퇴·배치·카메라 일치를 확인했습니다."
+        : "형상 불일치로 표시했습니다. 이 결과는 보고서 확정 이미지로 사용하지 마세요."
+    );
   };
 
   const download = async () => {
@@ -206,7 +294,13 @@ export default function ConceptRenderStudio({
         </div>
         {render && (
           <span className="concept-status">
-            저장됨 · {new Date(render.createdAt).toLocaleString("ko-KR")}
+            {render.geometryHash !== geometryHash
+              ? "이전 Geometry 렌더"
+              : render.geometryReview?.status === "confirmed"
+                ? "형상 확인 완료"
+                : render.geometryReview?.status === "rejected"
+                  ? "형상 불일치"
+                  : "형상 검토 전"} · {new Date(render.createdAt).toLocaleString("ko-KR")}
           </span>
         )}
       </div>
@@ -221,7 +315,9 @@ export default function ConceptRenderStudio({
               PARCELGRID 3D 기준 이미지를 선택하면 미리보기가 표시됩니다.
             </div>
           )}
-          <span>형상 기준 원본</span>
+          <span>
+            형상 기준 원본 · {referenceGeometryHash === geometryHash ? "현재 Geometry 연결" : "연결 안 됨"}
+          </span>
         </div>
         <div className="concept-output">
           {renderUrl ? (
@@ -232,13 +328,15 @@ export default function ConceptRenderStudio({
               생성 결과는 보고서와 함께 인쇄되며 원본 해시를 보존합니다.
             </div>
           )}
-          <span>외장 콘셉트 결과</span>
+          <span>
+            외장 콘셉트 결과 · {render?.geometryReview?.status === "confirmed" ? "육안 확인 완료" : "육안 확인 필요"}
+          </span>
         </div>
       </div>
 
       <div className="concept-controls">
         <label>
-          <span>기준 이미지 · 필수</span>
+          <span>수동 이미지 확인 · 생성 기준으로는 사용 안 함</span>
           <input
             type="file"
             accept={CONCEPT_RENDER_ACCEPT}
@@ -279,10 +377,25 @@ export default function ConceptRenderStudio({
           />
         </label>
         <div className="concept-actions">
-          <button type="button" onClick={generate} disabled={working}>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={
+              working ||
+              !geometryHash ||
+              referenceGeometryHash !== geometryHash
+            }
+            title={
+              referenceGeometryHash === geometryHash
+                ? "현재 대표 Geometry 기준으로 생성"
+                : "Stage 2 3D 컨텍스트에서 AI 기준 이미지를 먼저 저장하세요"
+            }
+          >
             {working ? "기준 형상 보존 렌더 생성 중…" : "AI 콘셉트 렌더 생성"}
           </button>
-          {render && !renderUrl && (
+          {render &&
+            !renderUrl &&
+            render.geometryHash === geometryHash && (
             <button
               type="button"
               className="secondary"
@@ -291,6 +404,26 @@ export default function ConceptRenderStudio({
             >
               저장 렌더 불러오기
             </button>
+          )}
+          {render && renderUrl && render.geometryHash === geometryHash && (
+            <>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setGeometryReview("confirmed")}
+                disabled={working}
+              >
+                원본과 형상 일치 확인
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setGeometryReview("rejected")}
+                disabled={working}
+              >
+                형상 불일치
+              </button>
+            </>
           )}
           {render && (
             <button
@@ -307,12 +440,19 @@ export default function ConceptRenderStudio({
 
       {error && <p className="concept-error">{error}</p>}
       {notice && <p className="concept-notice">{notice}</p>}
+      {quota && (
+        <p className="concept-notice">
+          오늘 남은 생성 횟수 {quota.remaining}/{quota.limit} · 초기화 {new Date(quota.resetAt).toLocaleString("ko-KR")}
+        </p>
+      )}
       {render && (
         <dl className="concept-audit">
           <div><dt>모델</dt><dd>{render.model} · {render.quality}</dd></div>
           <div><dt>Geometry</dt><dd>{render.geometryHash ?? "기준 이미지 단독 잠금"}</dd></div>
           <div><dt>원본 SHA-256</dt><dd>{render.sourceImageSha256.slice(0, 16)}…</dd></div>
           <div><dt>결과 SHA-256</dt><dd>{render.sha256.slice(0, 16)}…</dd></div>
+          <div><dt>형상 확인</dt><dd>{render.geometryReview?.status ?? "pending"}</dd></div>
+          <div><dt>API 사용량</dt><dd>{render.usage ? `${render.usage.totalTokens} tokens` : "미제공"}</dd></div>
         </dl>
       )}
 
