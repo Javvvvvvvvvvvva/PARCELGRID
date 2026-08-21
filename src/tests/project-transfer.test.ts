@@ -84,8 +84,8 @@ describe("project transfer bundle", () => {
       payload: {
         ...emptyPayload(),
         expertReviews: {
-          architecture: {
-            discipline: "architecture",
+          architect: {
+            discipline: "architect",
             status: "requested",
             reviewer: "검토자",
             organization: "테스트",
