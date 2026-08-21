@@ -14,13 +14,27 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { estimateMarketPrice } from "@/lib/finance/estimate-price";
 import { fetchMolitRange } from "@/lib/integrations/molit";
-import type { JimokCategory } from "@/lib/integrations/vworld";
+import {
+  jimokToCategory,
+  type JimokCategory,
+} from "@/lib/integrations/vworld";
 
 export const runtime = "nodejs";
 
 const WON_TO_MANWON = 10_000;
+
+const requestSchema = z.object({
+  address: z.string().trim().min(1).max(200),
+  lotArea: z.number().finite().positive().max(10_000_000),
+  landPrice: z.number().finite().nonnegative().max(10_000_000_000),
+  lawdCd: z.string().regex(/^\d{5}$/, "법정동 코드는 5자리 숫자여야 합니다."),
+  jimokCategory: z
+    .enum(["buildable", "farmland", "forest", "other"])
+    .optional(),
+});
 
 function recentYearMonth(monthsAgo: number): string {
   const d = new Date();
@@ -29,27 +43,22 @@ function recentYearMonth(monthsAgo: number): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: {
-    address?: string;
-    lotArea?: number;
-    landPrice?: number;
-    lawdCd?: string;
-    jimokCategory?: JimokCategory;
-  };
+  let body: unknown;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { address, lotArea, landPrice, lawdCd, jimokCategory } = body;
-
-  if (!address || !lotArea || !landPrice || !lawdCd) {
+  const parsed = requestSchema.safeParse(body);
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: "address, lotArea, landPrice, lawdCd 필수" },
-      { status: 400 }
+      { error: "입력값을 확인하세요.", issues: parsed.error.issues },
+      { status: 422 },
     );
   }
+
+  const { address, lotArea, landPrice, lawdCd, jimokCategory } = parsed.data;
 
   try {
     // 최근 12개월 토지 + 구축 단독/다가구 실거래를 병렬로 조회
@@ -106,27 +115,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ...result,
       transactionCount: landTransactions.length,
-      // Round H-2: 비건축 지목 제외(분포 오염 방지) + fallback
+      // 대상 지목 카테고리와 일치하는 거래만 지도·분포 표본으로 반환
       transactions: (() => {
-        const base = landTransactions.filter(
-          (t) => t.exclusiveArea > 0 && t.priceManwon > 0
-        );
-        const NON_BUILDABLE = [
-          "임야", "전", "답", "과수원", "목장용지",
-          "잡종지", "도로", "구거", "하천", "제방",
-        ];
-        const buildable = base.filter(
-          (t) => !t.jimok || !NON_BUILDABLE.includes(t.jimok)
-        );
-        // 대지성 거래가 너무 적으면(<10건) 필터 풀고 전체 사용
-        const rows = buildable.length >= 10 ? buildable : base;
-        return rows.map((t) => ({
-          priceManwon: t.priceManwon,
-          areaSqm: t.exclusiveArea,
-          date: t.date,
-          address: `${t.dongName} ${t.jibun}`,
-          jimok: t.jimok ?? null,
-        }));
+        const targetCategory: JimokCategory =
+          (jimokCategory ?? "buildable") === "other"
+            ? "buildable"
+            : (jimokCategory ?? "buildable");
+        return landTransactions
+          .filter(
+            (transaction) =>
+              transaction.exclusiveArea > 0 &&
+              transaction.priceManwon > 0 &&
+              transaction.jimok != null &&
+              jimokToCategory(transaction.jimok) === targetCategory,
+          )
+          .map((transaction) => ({
+            priceManwon: transaction.priceManwon,
+            areaSqm: transaction.exclusiveArea,
+            date: transaction.date,
+            address: `${transaction.dongName} ${transaction.jibun}`,
+            jimok: transaction.jimok ?? null,
+          }));
       })(),
     });
   } catch (err) {

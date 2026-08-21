@@ -64,6 +64,13 @@ export interface FetchOptions {
   type?: PropertyType;
 }
 
+export interface MolitPageResult {
+  transactions: MolitTransaction[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
 /* ─────────────────────────── XML parsing ─────────────────────────── */
 
 function extractAll(xml: string, tag: string): string[] {
@@ -113,7 +120,7 @@ function releaseMolitSlot(): void {
 const PAST_MONTH_TTL_MS = 24 * 60 * 60_000; // 24h — 프로세스 수명 내 사실상 불변
 const CURRENT_MONTH_TTL_MS = 10 * 60_000; // 10m — 신규 거래 반영 여지
 interface MolitCacheEntry {
-  promise: Promise<MolitTransaction[]>;
+  promise: Promise<MolitPageResult>;
   expires: number;
 }
 const molitCache = new Map<string, MolitCacheEntry>();
@@ -125,9 +132,9 @@ function currentYearMonth(): string {
 
 /* ─────────────────────────── Fetch ─────────────────────────── */
 
-export async function fetchMolitTransactions(
-  opts: FetchOptions
-): Promise<MolitTransaction[]> {
+async function fetchMolitPage(
+  opts: FetchOptions,
+): Promise<MolitPageResult> {
   if (!SERVICE_KEY) {
     throw new Error(
       "MOLIT_SERVICE_KEY environment variable is not set."
@@ -148,7 +155,6 @@ export async function fetchMolitTransactions(
       ? CURRENT_MONTH_TTL_MS
       : PAST_MONTH_TTL_MS;
   molitCache.set(cacheKey, { promise, expires: now + ttl });
-  // 실패는 캐시하지 않음 → 다음 호출에서 재시도 가능
   promise.catch(() => {
     if (molitCache.get(cacheKey)?.promise === promise) molitCache.delete(cacheKey);
   });
@@ -156,11 +162,17 @@ export async function fetchMolitTransactions(
   return promise;
 }
 
+export async function fetchMolitTransactions(
+  opts: FetchOptions
+): Promise<MolitTransaction[]> {
+  return (await fetchMolitPage(opts)).transactions;
+}
+
 /** 실제 MOLIT HTTP 호출 (캐시 미스 시). 전역 세마포어로 동시성 제한. */
 async function fetchMolitUncached(
   opts: FetchOptions,
   type: PropertyType
-): Promise<MolitTransaction[]> {
+): Promise<MolitPageResult> {
   const baseUrl = ENDPOINTS[type];
 
   const qs = new URLSearchParams({
@@ -197,11 +209,21 @@ async function fetchMolitUncached(
       throw new Error(`MOLIT API error ${resultCode}: ${msg}`);
     }
 
-    const totalCount = extractField(xml, "totalCount");
-    if (totalCount === "0") return [];
-
+    const totalCountRaw = Number(extractField(xml, "totalCount"));
+    const totalCount =
+      Number.isFinite(totalCountRaw) && totalCountRaw > 0
+        ? Math.floor(totalCountRaw)
+        : 0;
+    const page = opts.page ?? 1;
+    const pageSize = opts.pageSize ?? 100;
     const items = extractAll(xml, "item");
-    return items.map((item) => parseTxn(item, opts.lawdCd, type));
+
+    return {
+      transactions: items.map((item) => parseTxn(item, opts.lawdCd, type)),
+      totalCount,
+      page,
+      pageSize,
+    };
   } finally {
     releaseMolitSlot();
   }
@@ -255,6 +277,8 @@ function parseTxn(
     jibun,
     buildingName,
     Math.round(exclusiveArea * 100),
+    Math.round(priceManwon),
+    Math.round(floor),
   ]
     .map((p) => String(p).replace(/[^\w가-힣]/g, ""))
     .join("-");
@@ -297,6 +321,8 @@ function parseTxn(
 
 /* ─────────────────────────── Range fetch ─────────────────────────── */
 
+const MOLIT_MAX_PAGES_PER_MONTH = 200;
+
 export async function fetchMolitRange(
   opts: Omit<FetchOptions, "dealYearMonth"> & {
     startYearMonth: string;
@@ -304,19 +330,56 @@ export async function fetchMolitRange(
   }
 ): Promise<MolitTransaction[]> {
   const months = monthsBetween(opts.startYearMonth, opts.endYearMonth);
-  // 월별 호출을 병렬로 (동시성은 fetchMolitTransactions 내부 전역 세마포어가 제한).
-  // 한 달 실패는 비치명적 → 빈 배열로 처리하고 나머지는 계속.
-  const pages = await Promise.all(
+  const pageSize = opts.pageSize ?? 100;
+
+  const monthResults = await Promise.all(
     months.map(async (ym) => {
       try {
-        return await fetchMolitTransactions({ ...opts, dealYearMonth: ym });
+        const first = await fetchMolitPage({
+          ...opts,
+          dealYearMonth: ym,
+          page: 1,
+          pageSize,
+        });
+        const totalPages = Math.max(
+          1,
+          Math.ceil(first.totalCount / pageSize),
+        );
+        if (totalPages > MOLIT_MAX_PAGES_PER_MONTH) {
+          throw new Error(
+            `MOLIT ${ym} 응답이 ${totalPages}페이지로 안전 상한 ${MOLIT_MAX_PAGES_PER_MONTH}페이지를 초과했습니다.`,
+          );
+        }
+
+        const remaining =
+          totalPages > 1
+            ? await Promise.all(
+                Array.from({ length: totalPages - 1 }, (_, index) =>
+                  fetchMolitPage({
+                    ...opts,
+                    dealYearMonth: ym,
+                    page: index + 2,
+                    pageSize,
+                  }),
+                ),
+              )
+            : [];
+
+        const deduplicated = new Map<string, MolitTransaction>();
+        for (const transaction of [
+          ...first.transactions,
+          ...remaining.flatMap((page) => page.transactions),
+        ]) {
+          deduplicated.set(transaction.externalId, transaction);
+        }
+        return [...deduplicated.values()];
       } catch (err) {
         console.warn(`MOLIT ${ym} failed:`, err);
         return [] as MolitTransaction[];
       }
     })
   );
-  return pages.flat();
+  return monthResults.flat();
 }
 
 function monthsBetween(startYM: string, endYM: string): string[] {

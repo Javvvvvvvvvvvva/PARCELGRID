@@ -101,7 +101,7 @@ export default function CompsPage({
   // 실거래 지오코딩 → 지도 마커 (주소 → 좌표)
   const [compMarkers, setCompMarkers] = useState<CompMarker[]>([]);
   useEffect(() => {
-    if (filtered.length === 0) {
+    if (filtered.length === 0 || !parcel?.address) {
       setCompMarkers([]);
       return;
     }
@@ -110,7 +110,12 @@ export default function CompsPage({
     fetch("/api/parcels/comps-geocode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ addresses }),
+      body: JSON.stringify({
+        addresses,
+        contextAddress: parcel.address,
+        contextLat: parcel.lat,
+        contextLng: parcel.lng,
+      }),
     })
       .then((r) => r.json())
       .then((res: { coords: ({ lat: number; lng: number } | null)[] }) => {
@@ -148,7 +153,13 @@ export default function CompsPage({
     return () => {
       cancelled = true;
     };
-  }, [data?.saleEstimate?.cases, filtered]);
+  }, [
+    data?.saleEstimate?.cases,
+    filtered,
+    parcel?.address,
+    parcel?.lat,
+    parcel?.lng,
+  ]);
 
   if (!data) return null;
 
