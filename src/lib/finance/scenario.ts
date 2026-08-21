@@ -24,6 +24,7 @@
 import { D, ZERO, ONE, HUNDRED, Decimal } from "./math";
 import { calculateEffectiveGFA } from "@/lib/finance/parking-core";
 import { buildProjectLedger } from "@/lib/finance/project-ledger";
+import { validateAssumptionSet } from "@/lib/finance/assumption-validation";
 import {
   npv,
   irr,
@@ -109,6 +110,45 @@ export interface CalcInput {
   scenario: Scenario;
 }
 
+export function validateScenarioFinancialInputs(
+  parcel: Parcel,
+  scenario: Scenario,
+): void {
+  const errors: string[] = [];
+
+  if (!Number.isFinite(parcel.lotArea) || parcel.lotArea <= 0) {
+    errors.push("대지면적은 0보다 큰 유한한 숫자여야 합니다.");
+  }
+  if (!Number.isFinite(parcel.acquiredPrice) || parcel.acquiredPrice < 0) {
+    errors.push("부동산 총 취득대금은 0 이상의 유한한 숫자여야 합니다.");
+  }
+  if (
+    parcel.demolitionCost !== undefined &&
+    (!Number.isFinite(parcel.demolitionCost) || parcel.demolitionCost < 0)
+  ) {
+    errors.push("철거비는 0 이상의 유한한 숫자여야 합니다.");
+  }
+
+  const mixEntries = Object.entries(scenario.program.mix);
+  for (const [label, value] of mixEntries) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      errors.push(`용도 배분 ${label}은(는) 0 이상 1 이하여야 합니다.`);
+    }
+  }
+  const mixTotal = mixEntries.reduce((sum, [, value]) => sum + value, 0);
+  if (Math.abs(mixTotal - 1) > 0.000001) {
+    errors.push("주거 매각·주거 임대·근생 용도 배분 합계는 100%여야 합니다.");
+  }
+
+  for (const invalid of validateAssumptionSet(scenario.assumptions)) {
+    errors.push(...invalid.errors);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`사업성 입력값을 확인하세요: ${errors.join(" ")}`);
+  }
+}
+
 /**
  * Compute one scenario end-to-end.
  *
@@ -120,6 +160,7 @@ export interface CalcInput {
 export function calculateScenario(input: CalcInput): ScenarioResult {
   const { parcel, scenario } = input;
   const { program, assumptions: a } = scenario;
+  validateScenarioFinancialInputs(parcel, scenario);
   validateFinancialGeometryContract(program, scenario.id);
 
   // ─── 1. Building outputs ────────────────────────────────────────────
