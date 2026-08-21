@@ -9,11 +9,13 @@ import {
   type ConceptRenderMetadata,
   validateConceptReferenceBytes,
   validateConceptReferenceFile,
+  validateConceptGeometryHash,
 } from "@/lib/ai/concept-render";
 import {
   loadConceptRender,
   saveConceptRender,
 } from "@/lib/runtime/concept-render-storage";
+import { reserveConceptRenderQuota } from "@/lib/runtime/concept-render-quota";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,7 +105,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
 
   const designPrompt = String(form.get("prompt") ?? "");
-  const geometryHash = String(form.get("geometryHash") ?? "").trim() || null;
+  const geometryHash = String(form.get("geometryHash") ?? "").trim();
+  const geometryErrors = validateConceptGeometryHash(geometryHash);
+  if (geometryErrors.length > 0) {
+    return NextResponse.json(
+      { error: geometryErrors.join(" "), code: "GEOMETRY_HASH_REQUIRED" },
+      { status: 422 },
+    );
+  }
   let lockedPrompt: string;
   try {
     lockedPrompt = buildLockedConceptRenderPrompt({
@@ -133,6 +142,30 @@ export async function POST(request: NextRequest, context: RouteContext) {
   upstream.set("output_format", "png");
   upstream.set("background", "opaque");
 
+  const quota = reserveConceptRenderQuota({ projectId });
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: `이 프로젝트의 오늘 AI 렌더 한도 ${quota.limit}회를 모두 사용했습니다. ${new Date(quota.resetAt).toLocaleString("ko-KR")} 이후 다시 시도하세요.`,
+        code: "CONCEPT_RENDER_DAILY_LIMIT",
+        quota,
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(
+            Math.max(
+              1,
+              Math.ceil(
+                (new Date(quota.resetAt).getTime() - Date.now()) / 1_000,
+              ),
+            ),
+          ),
+        },
+      },
+    );
+  }
+
   let response: Response;
   try {
     response = await fetch("https://api.openai.com/v1/images/edits", {
@@ -152,6 +185,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const payload = (await response.json().catch(() => null)) as
     | {
         data?: Array<{ b64_json?: string }>;
+        usage?: {
+          input_tokens?: number;
+          input_tokens_details?: {
+            image_tokens?: number;
+            text_tokens?: number;
+          };
+          output_tokens?: number;
+          total_tokens?: number;
+        };
         error?: { message?: string; code?: string };
       }
     | null;
@@ -209,9 +251,21 @@ export async function POST(request: NextRequest, context: RouteContext) {
     geometryHash,
     sourceImageSha256,
     prompt: lockedPrompt,
+    usage: payload.usage
+      ? {
+          inputTokens: payload.usage.input_tokens ?? 0,
+          inputImageTokens:
+            payload.usage.input_tokens_details?.image_tokens ?? 0,
+          inputTextTokens:
+            payload.usage.input_tokens_details?.text_tokens ?? 0,
+          outputTokens: payload.usage.output_tokens ?? 0,
+          totalTokens: payload.usage.total_tokens ?? 0,
+        }
+      : undefined,
+    geometryReview: { status: "pending" },
   };
 
-  return NextResponse.json({ render: metadata }, { status: 201 });
+  return NextResponse.json({ render: metadata, quota }, { status: 201 });
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {
