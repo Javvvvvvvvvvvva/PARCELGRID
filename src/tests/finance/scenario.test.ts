@@ -150,4 +150,34 @@ describe("calculateScenario", () => {
     expect(b.irr).toBe(a.irr);
     expect(b.dscr).toBe(a.dscr);
   });
+
+  it("slower monthly sales pace delays receipts and lowers equity NPV", () => {
+    const fast = calculateScenario({
+      parcel,
+      scenario: makeScenario({ salesPaceMonthlyPct: 25 }),
+    });
+    const slow = calculateScenario({
+      parcel,
+      scenario: makeScenario({ salesPaceMonthlyPct: 5 }),
+    });
+
+    expect(slow.totalMonths).toBeGreaterThan(fast.totalMonths);
+    expect(slow.npv).toBeLessThan(fast.npv);
+  });
+
+  it("rejects invalid rates before producing NaN or infinite results", () => {
+    expect(() =>
+      calculateScenario({
+        parcel,
+        scenario: makeScenario({ capRate: 0 }),
+      }),
+    ).toThrow("Exit cap rate");
+
+    expect(() =>
+      calculateScenario({
+        parcel,
+        scenario: makeScenario({ vacancyRate: 101 }),
+      }),
+    ).toThrow("공실률");
+  });
 });
