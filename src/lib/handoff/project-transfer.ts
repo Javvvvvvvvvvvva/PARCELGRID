@@ -171,13 +171,20 @@ export function parseProjectTransferBundle(
     })
   );
   if (bundle.checksum !== expectedChecksum) {
-    errors.push("파일 내용이 변경됐거나 손상되어 체크섬이 일치하지 않습니다.");
+    return {
+      valid: false,
+      errors: ["파일 내용이 변경됐거나 손상되어 체크섬이 일치하지 않습니다."],
+      bundle: null,
+    };
   }
 
+  const planningScenarios = Array.isArray(bundle.payload.planningScenarios)
+    ? bundle.payload.planningScenarios
+    : [];
   if (!Array.isArray(bundle.payload.planningScenarios)) {
     errors.push("계획안 목록 형식이 올바르지 않습니다.");
   } else {
-    const foreignScenario = bundle.payload.planningScenarios.find(
+    const foreignScenario = planningScenarios.find(
       (scenario) =>
         !isRecord(scenario) ||
         (typeof scenario.projectId === "string" &&
@@ -189,9 +196,7 @@ export function parseProjectTransferBundle(
   }
 
   const scenarioIds = new Set(
-    Array.isArray(bundle.payload.planningScenarios)
-      ? bundle.payload.planningScenarios.map((scenario) => scenario.id)
-      : []
+    planningScenarios.map((scenario) => scenario.id)
   );
   if (
     bundle.payload.representativeScenarioId &&
@@ -213,7 +218,7 @@ export function parseProjectTransferBundle(
   }
 
   const geometry = bundle.payload.representativeGeometry;
-  const representative = bundle.payload.planningScenarios?.find(
+  const representative = planningScenarios.find(
     (scenario) => scenario.id === bundle.payload.representativeScenarioId
   );
   if (geometry) {
