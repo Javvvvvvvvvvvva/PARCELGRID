@@ -1,11 +1,13 @@
 import type { ScenarioVM } from "@/lib/adapters/view-model";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 import type { PlanningScenario } from "@/lib/planning/types";
 
 export type Stage3BlockCode =
   | "missing-representative"
   | "missing-planning-scenario"
   | "project-mismatch"
+  | "invalid-planning-checks"
   | "missing-geometry"
   | "stale-geometry"
   | "invalid-geometry"
@@ -77,6 +79,18 @@ export function resolveStage3DashboardContext(
       "project-mismatch",
       "다른 프로젝트의 계획안입니다",
       "대표 계획안의 프로젝트 ID가 현재 프로젝트와 다릅니다. 숫자를 표시하지 않고 분석을 차단했습니다."
+    );
+  }
+
+  const checkReadiness = assessRepresentativeCheckReadiness(
+    planningScenario.checks
+  );
+  if (!checkReadiness.ready) {
+    return blocked(
+      "invalid-planning-checks",
+      "법규·주차 검증이 완료되지 않았습니다",
+      checkReadiness.blockers[0]?.message ??
+        "건폐율·용적률·높이·주차 검증을 모두 통과해야 합니다."
     );
   }
 
