@@ -49,6 +49,10 @@ import {
   type SourceDocumentMetadata,
 } from "@/lib/finance/source-document";
 import type { AssumptionSet } from "@/lib/finance/types";
+import {
+  ASSUMPTION_VALUE_RULES,
+  validateAssumptionValue,
+} from "@/lib/finance/assumption-validation";
 import { toCashflowVM, type ScenarioVM } from "@/lib/adapters/view-model";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
 import { commitStage3FeasibilitySnapshot } from "@/lib/services/commit-stage3-feasibility";
@@ -99,7 +103,7 @@ const ASSUMPTION_GROUPS: Array<{
   {
     title: "금융·목표",
     fields: [
-      { field: "ltcTarget", label: "목표 LTC", divisor: 1, suffix: "%", step: 1 },
+      { field: "ltcTarget", label: "PF 적격 공사비 조달비율", divisor: 1, suffix: "%", step: 1 },
       { field: "interestRate", label: "PF 금리", divisor: 1, suffix: "%", step: 0.1, decimals: 2 },
       { field: "equityIRR", label: "요구 IRR", divisor: 1, suffix: "%", step: 0.5, decimals: 1 },
     ],
@@ -110,6 +114,8 @@ const ASSUMPTION_GROUPS: Array<{
       { field: "designMonths", label: "설계·인허가", divisor: 1, suffix: "개월", step: 1 },
       { field: "constructionMonths", label: "공사", divisor: 1, suffix: "개월", step: 1 },
       { field: "saleOutMonths", label: "분양·매각", divisor: 1, suffix: "개월", step: 1 },
+      { field: "salesPaceMonthlyPct", label: "월 분양 속도", divisor: 1, suffix: "%/월", step: 0.5, decimals: 1 },
+      { field: "leaseUpMonths", label: "임대 안정화", divisor: 1, suffix: "개월", step: 1 },
     ],
   },
 ];
@@ -271,6 +277,19 @@ export default function DashboardPage({
   const hasSaleRevenue = scenario.program.mix.residentialSale > 0;
   const hasLeaseRevenue =
     scenario.program.mix.residentialLease > 0 || scenario.program.mix.retail > 0;
+  const usesPresalePace =
+    hasSaleRevenue &&
+    scenario.program.type !== "single-house" &&
+    scenario.program.type !== "multi-family";
+  const saleSourceFields: FinancialSourceField[] = usesPresalePace
+    ? ["salePricePerSqM", "salesPaceMonthlyPct"]
+    : ["salePricePerSqM"];
+  const leaseSourceFields: FinancialSourceField[] = [
+    "rentPerSqMMonth",
+    "vacancyRate",
+    "capRate",
+    "leaseUpMonths",
+  ];
   const hasBasementCost =
     (scenario.program.areaContract?.basementAreaSqm ?? 0) > 0 ||
     scenario.program.floorsBelow > 0;
@@ -279,10 +298,12 @@ export default function DashboardPage({
     fields: group.fields.filter(({ field }) => {
       if (field === "basementCostMultiplier") return hasBasementCost;
       if (field === "salePricePerSqM") return hasSaleRevenue;
+      if (field === "salesPaceMonthlyPct") return usesPresalePace;
       if (
         field === "rentPerSqMMonth" ||
         field === "vacancyRate" ||
-        field === "capRate"
+        field === "capRate" ||
+        field === "leaseUpMonths"
       ) {
         return hasLeaseRevenue;
       }
@@ -704,7 +725,7 @@ export default function DashboardPage({
             {hasSaleRevenue && (
               <SourceCoverageRow
                 label="매각 단가"
-                fields={["salePricePerSqM"]}
+                fields={saleSourceFields}
                 records={projectFinancialSources}
                 fallback={data.saleEstimate ? `${data.saleEstimate.modelVersion} · ${data.saleEstimate.basis} · 외부 검증 전` : "내부 초기 가정 · 실거래 또는 감정평가 근거 필요"}
               />
@@ -712,7 +733,7 @@ export default function DashboardPage({
             {hasLeaseRevenue && (
               <SourceCoverageRow
                 label="임대 수입"
-                fields={["rentPerSqMMonth", "vacancyRate", "capRate"]}
+                fields={leaseSourceFields}
                 records={projectFinancialSources}
                 fallback="임대료·공실률·Exit cap rate 원문 필요"
               />
@@ -744,7 +765,7 @@ export default function DashboardPage({
               fallback="설계·공정·매각 일정 근거 필요"
             />
             <EvidenceRow label="세금" value={`${TAX_MODEL_AS_OF} 기본세율 · 미산정 항목 있음`} state="미확정" />
-            <p className="coverage-note">등록된 원문이 실제 계산에 반영된 상태를 표시합니다. 월 분양속도와 임대 안정화 기간은 아직 월별 원장에 연결되지 않아 확정 게이트에서 제외했습니다.</p>
+            <p className="coverage-note">등록된 원문이 실제 계산에 반영된 상태를 표시합니다. 월 분양 속도는 최소 분양 회수기간을, 임대 안정화 기간은 임대·근생 출구가치 회수시점과 금융비를 조정합니다.</p>
           </section>
 
           <section className="next-actions">
@@ -2515,8 +2536,11 @@ function formatSourceValue(record: FinancialSourceRecord) {
   return `${record.value.toLocaleString()}${unit}`;
 }
 
-function NumericEditor({ label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {
-  return <label style={{ display: "block", padding: "8px 0" }}><span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}><span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>{label}</span><span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><input type="number" min={0} step={step} value={(value / divisor).toFixed(decimals)} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next) && next >= 0) onChange(next * divisor); }} style={{ width: 88, height: 27, padding: "0 6px", borderRadius: 6, border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`, background: "var(--bg)", color: edited ? "var(--accent)" : "var(--fg)", textAlign: "right", font: "inherit", fontSize: 10.5, fontWeight: 700 }} /><small style={{ color: "var(--fg-faint)", fontSize: 8.5 }}>{suffix}</small></span></span><small title={source} style={{ display: "block", marginTop: 3, maxWidth: 300, color: edited ? "var(--accent)" : "var(--fg-faint)", fontSize: 8.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{edited ? "사용자 수정 · 실시간 재계산" : source}</small></label>;
+function NumericEditor({ field, label, value, divisor, suffix, step, decimals = 0, edited, source, onChange }: Omit<AssumptionField, "field"> & { field?: keyof AssumptionSet; value: number; edited: boolean; source: string; onChange: (value: number) => void }) {
+  const rule = field ? ASSUMPTION_VALUE_RULES[field] : null;
+  const min = rule ? rule.min / divisor : 0;
+  const max = rule ? rule.max / divisor : undefined;
+  return <label style={{ display: "block", padding: "8px 0" }}><span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}><span style={{ fontSize: 10.5, color: "var(--fg-muted)" }}>{label}</span><span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}><input type="number" min={min} max={max} step={step} value={(value / divisor).toFixed(decimals)} onChange={(event) => { const next = Number(event.target.value); const rawValue = next * divisor; if (Number.isFinite(next) && (!field || validateAssumptionValue(field, rawValue).length === 0)) onChange(rawValue); }} style={{ width: 88, height: 27, padding: "0 6px", borderRadius: 6, border: `1px solid ${edited ? "var(--accent)" : "var(--border)"}`, background: "var(--bg)", color: edited ? "var(--accent)" : "var(--fg)", textAlign: "right", font: "inherit", fontSize: 10.5, fontWeight: 700 }} /><small style={{ color: "var(--fg-faint)", fontSize: 8.5 }}>{suffix}</small></span></span><small title={source} style={{ display: "block", marginTop: 3, maxWidth: 300, color: edited ? "var(--accent)" : "var(--fg-faint)", fontSize: 8.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{edited ? "사용자 수정 · 실시간 재계산" : source}</small></label>;
 }
 
 function SourceCoverageRow({

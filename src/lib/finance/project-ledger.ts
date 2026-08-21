@@ -11,8 +11,10 @@
  *   (opening balance + half of the current draw).
  * - Single-house and multi-family whole-asset sales are collected at exit.
  * - Other residential sale programs use an explicit 10/60/30 collection
- *   assumption until a project-specific collection schedule is available.
- * - Lease/retail capitalized value is treated as an exit receipt at project end.
+ *   assumption over a horizon that cannot be shorter than the configured
+ *   monthly sales pace.
+ * - Lease/retail capitalized value is received only after the configured
+ *   lease-up period has elapsed.
  * - Available sale receipts sweep PF principal before distribution to equity.
  *
  * These are transparent assumptions, not a lender term sheet. A future
@@ -22,8 +24,9 @@
 
 import { D, ZERO, type Decimal } from "./math";
 import type { Parcel, Scenario } from "./types";
+import { validateAssumptionSet } from "./assumption-validation";
 
-export const PROJECT_LEDGER_MODEL_VERSION = "pre-audit-2026.2";
+export const PROJECT_LEDGER_MODEL_VERSION = "pre-audit-2026.3";
 
 export type RevenueCollectionPolicy =
   | "bulk-exit"
@@ -123,16 +126,35 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
   const { parcel, scenario } = input;
   const assumptions = scenario.assumptions;
 
-  const designMonths = Math.max(0, Math.round(assumptions.designMonths));
-  const constructionMonths = Math.max(
-    1,
-    Math.round(assumptions.constructionMonths)
-  );
-  const saleOutMonths = Math.max(1, Math.round(assumptions.saleOutMonths));
+  const invalidAssumptions = validateAssumptionSet(assumptions);
+  if (invalidAssumptions.length > 0) {
+    throw new Error(
+      `사업성 원장 입력값을 확인하세요: ${invalidAssumptions
+        .flatMap((item) => item.errors)
+        .join(" ")}`,
+    );
+  }
+
+  const designMonths = assumptions.designMonths;
+  const constructionMonths = assumptions.constructionMonths;
+  const saleOutMonths = assumptions.saleOutMonths;
+  const leaseUpMonths = assumptions.leaseUpMonths;
   const occupancyMonth = designMonths + constructionMonths;
-  const totalMonths = occupancyMonth + saleOutMonths;
   const revenueCollectionPolicy =
     revenueCollectionPolicyForScenario(scenario);
+  const salesPaceMonths =
+    revenueCollectionPolicy === "presale-10-60-30" &&
+    input.revenueSale > 0
+      ? Math.ceil(100 / assumptions.salesPaceMonthlyPct)
+      : 0;
+  const effectiveLeaseUpMonths =
+    input.revenueExit > 0 ? leaseUpMonths : 0;
+  const exitMonths = Math.max(
+    saleOutMonths,
+    salesPaceMonths,
+    effectiveLeaseUpMonths,
+  );
+  const totalMonths = occupancyMonth + exitMonths;
 
   const landByMonth = new Map<number, Decimal>([
     [0, D(parcel.acquiredPrice)],
@@ -291,6 +313,17 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
     revenueCollectionPolicy === "bulk-exit"
       ? "단독·다가구 통매각 매출은 사업 종료 시 100% 회수하는 것으로 가정합니다."
       : "분양 수입은 10/60/30 회수 가정이며 실제 분양·신탁 약정으로 교체해야 합니다.";
+  const scheduleWarnings: string[] = [];
+  if (salesPaceMonths > 0) {
+    scheduleWarnings.push(
+      `월 분양 속도 ${assumptions.salesPaceMonthlyPct}%를 적용해 분양 회수기간을 최소 ${salesPaceMonths}개월로 설정했습니다.`,
+    );
+  }
+  if (effectiveLeaseUpMonths > 0) {
+    scheduleWarnings.push(
+      `임대·근생 출구가치는 임대 안정화 ${effectiveLeaseUpMonths}개월 이후에 회수합니다.`,
+    );
+  }
 
   return {
     modelVersion: PROJECT_LEDGER_MODEL_VERSION,
@@ -308,7 +341,8 @@ export function buildProjectLedger(input: ProjectLedgerInput): ProjectLedger {
     warnings: [
       "PF 조건은 금융기관 약정이 아닌 LTC·금리 입력 기반 예비 모델입니다.",
       revenueWarning,
-      "임대·근생 가치는 사업 종료 시 회수하는 것으로 가정합니다.",
+      ...scheduleWarnings,
+      "임대·근생 가치는 설정된 임대 안정화 기간 이후 사업 종료 시 회수합니다.",
       "PF 이자는 월초잔액과 당월 인출액의 절반을 사용한 월평균잔액 기준입니다.",
     ],
   };

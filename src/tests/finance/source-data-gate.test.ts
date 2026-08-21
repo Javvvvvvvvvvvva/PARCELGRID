@@ -68,6 +68,7 @@ function validRecord(field: FinancialSourceField, value: number) {
     interestRate: "lender-term-sheet",
     equityIRR: "approved-policy",
     salesPaceMonthlyPct: "appraisal",
+    leaseUpMonths: "approved-policy",
     designMonths: "professional-quote",
     constructionMonths: "professional-quote",
     saleOutMonths: "appraisal",
@@ -111,6 +112,25 @@ describe("source data gate", () => {
     expect(fields).toHaveLength(11);
   });
 
+  it("requires sales pace and lease-up evidence only when those inputs affect the ledger", () => {
+    const mixedScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("officetel", parcel.maxFAR, parcel.maxBCR),
+    };
+    const mixedFields = requiredSourceFields(mixedScenario);
+
+    expect(mixedFields).toContain("salesPaceMonthlyPct");
+    expect(mixedFields).toContain("leaseUpMonths");
+
+    const leaseScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+    };
+    const leaseFields = requiredSourceFields(leaseScenario);
+    expect(leaseFields).not.toContain("salesPaceMonthlyPct");
+    expect(leaseFields).toContain("leaseUpMonths");
+  });
+
   it("provides plain-language evidence guidance for every financial field", () => {
     for (const field of Object.keys(
       FINANCIAL_SOURCE_GUIDANCE,
@@ -133,6 +153,20 @@ describe("source data gate", () => {
     expect(result.errors.some((error) => error.includes("허용되지"))).toBe(
       true,
     );
+  });
+
+  it("rejects source values outside the calculator domain", () => {
+    const invalidVacancy = record("vacancyRate", 120, "approved-policy");
+    const invalidDuration = record("constructionMonths", 6.5, "approved-policy");
+
+    expect(validateFinancialSource(invalidVacancy).errors).toContain(
+      "공실률은(는) 0 이상 100 이하여야 합니다.",
+    );
+    expect(
+      validateFinancialSource(invalidDuration).errors.some((error) =>
+        error.includes("정수 개월"),
+      ),
+    ).toBe(true);
   });
 
   it("passes only when every financially material field is source-backed", () => {
