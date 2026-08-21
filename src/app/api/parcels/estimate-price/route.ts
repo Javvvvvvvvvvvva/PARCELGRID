@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ...result,
       transactionCount: landTransactions.length,
-      // Round H-2: 비건축 지목 제외(분포 오염 방지) + fallback
+      // 대상 지목 카테고리와 일치하는 거래만 지도·분포 표본으로 반환
       transactions: (() => {
         const targetCategory: JimokCategory =
           (jimokCategory ?? "buildable") === "other"
@@ -126,8 +126,8 @@ export async function POST(req: NextRequest) {
             (transaction) =>
               transaction.exclusiveArea > 0 &&
               transaction.priceManwon > 0 &&
-              Boolean(transaction.jimok) &&
-              jimokToCategory(transaction.jimok!) === targetCategory,
+              transaction.jimok != null &&
+              jimokToCategory(transaction.jimok) === targetCategory,
           )
           .map((transaction) => ({
             priceManwon: transaction.priceManwon,
