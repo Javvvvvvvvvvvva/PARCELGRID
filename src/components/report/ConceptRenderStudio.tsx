@@ -208,11 +208,11 @@ export default function ConceptRenderStudio({
             quota?: { limit: number; remaining: number; resetAt: string };
           }
         | null;
+      if (payload?.quota) setQuota(payload.quota);
       if (!response.ok || !payload?.render) {
         throw new Error(payload?.error ?? "콘셉트 렌더 생성에 실패했습니다.");
       }
       setRender(payload.render);
-      setQuota(payload.quota ?? null);
       window.localStorage.setItem(
         storageKey(projectId),
         JSON.stringify(payload.render),
@@ -336,7 +336,7 @@ export default function ConceptRenderStudio({
 
       <div className="concept-controls">
         <label>
-          <span>기준 이미지 · 필수</span>
+          <span>수동 이미지 확인 · 생성 기준으로는 사용 안 함</span>
           <input
             type="file"
             accept={CONCEPT_RENDER_ACCEPT}
@@ -377,10 +377,25 @@ export default function ConceptRenderStudio({
           />
         </label>
         <div className="concept-actions">
-          <button type="button" onClick={generate} disabled={working}>
+          <button
+            type="button"
+            onClick={generate}
+            disabled={
+              working ||
+              !geometryHash ||
+              referenceGeometryHash !== geometryHash
+            }
+            title={
+              referenceGeometryHash === geometryHash
+                ? "현재 대표 Geometry 기준으로 생성"
+                : "Stage 2 3D 컨텍스트에서 AI 기준 이미지를 먼저 저장하세요"
+            }
+          >
             {working ? "기준 형상 보존 렌더 생성 중…" : "AI 콘셉트 렌더 생성"}
           </button>
-          {render && !renderUrl && (
+          {render &&
+            !renderUrl &&
+            render.geometryHash === geometryHash && (
             <button
               type="button"
               className="secondary"
