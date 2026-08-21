@@ -146,9 +146,17 @@ export function validateReviewSnapshotAlignment(
     errors.push("사업성 스냅샷과 대표 Geometry의 형상 해시가 다릅니다.");
   }
   if (
-    currentScenario &&
-    (snapshot.representativeScenarioId !== currentScenario.id ||
-      snapshot.representativeScenarioVersion !== currentScenario.version)
+    geometry.validation.status !== "pass" ||
+    !geometry.validation.representativeEligible ||
+    !geometry.validation.exportable
+  ) {
+    errors.push("현재 대표 Geometry가 법규·면적·형상 검증을 모두 통과하지 않았습니다.");
+  }
+  if (!currentScenario) {
+    errors.push("현재 대표 계획안을 찾을 수 없습니다.");
+  } else if (
+    snapshot.representativeScenarioId !== currentScenario.id ||
+    snapshot.representativeScenarioVersion !== currentScenario.version
   ) {
     errors.push(
       "Stage 3 저장 후 대표 계획안이 변경됐습니다. 사업성을 다시 저장해야 합니다."
