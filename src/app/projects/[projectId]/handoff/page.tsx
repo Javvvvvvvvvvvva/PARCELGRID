@@ -4,6 +4,7 @@ import { use, useMemo, useState } from "react";
 import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
+import { ProjectTransferPanel } from "@/components/handoff/ProjectTransferPanel";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
 import {
   validateFinancialSourceEvidence,
@@ -271,6 +272,8 @@ export default function HandoffPage({
         <Summary label="재검토 필요" value={reviewSummary.staleDisciplines.length} note="저장본 변경 또는 구형 승인" danger />
         <Summary label="전문가 승인" value={reviewSummary.approvedCount} note="4개 분야 필요" positive />
       </section>
+
+      <ProjectTransferPanel projectId={projectId} />
 
       <section className="handoff-lanes-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
         {gate.lanes.map((lane) => {
