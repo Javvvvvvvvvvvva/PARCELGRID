@@ -49,7 +49,12 @@ function scenarioWithArea(areaSqm: number, footprintScalePct = 100) {
   return scenario;
 }
 
-function build(areaSqm: number, footprintScalePct = 100, generatedAt?: string) {
+function build(
+  areaSqm: number,
+  footprintScalePct = 100,
+  generatedAt?: string,
+  officialAreaScale = 1,
+) {
   const boundary = squareBoundary();
   const origin = planningRingCentroid(boundary);
   const officialAreaSqm = polygonAreaSqm(
@@ -59,7 +64,7 @@ function build(areaSqm: number, footprintScalePct = 100, generatedAt?: string) {
     projectId: "parcel-1",
     scenario: scenarioWithArea(areaSqm, footprintScalePct),
     boundary,
-    lotAreaSqm: officialAreaSqm,
+    lotAreaSqm: officialAreaSqm * officialAreaScale,
     zoning: "일반상업지역",
     roads: [],
     setback: { road: 0, side: 0, rear: 0 },
@@ -82,6 +87,19 @@ describe("Planning Geometry Contract", () => {
     expect(snapshot.coordinateSystem.unit).toBe("meter");
     expect(snapshot.coordinateSystem.northAxis).toBe("-Z");
     expect(snapshot.coordinateSystem.eastAxis).toBe("+X");
+  });
+
+  it("requires parcel-area review to be resolved before representative lock", () => {
+    const snapshot = build(100, 100, undefined, 0.97);
+
+    expect(snapshot.validation.status).toBe("review");
+    expect(snapshot.validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "parcel-area-review" }),
+      ]),
+    );
+    expect(snapshot.validation.representativeEligible).toBe(false);
+    expect(snapshot.validation.exportable).toBe(false);
   });
 
   it("blocks representative confirmation when a visual scale changes mass size", () => {

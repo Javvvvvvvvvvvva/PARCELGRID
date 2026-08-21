@@ -354,8 +354,8 @@ function buildValidation(
   const hasReview = issues.some((issue) => issue.severity === "review");
   return {
     status: hasFail ? "fail" : hasReview ? "review" : "pass",
-    representativeEligible: !hasFail,
-    exportable: !hasFail,
+    representativeEligible: !hasFail && !hasReview,
+    exportable: !hasFail && !hasReview,
     maxFloorAreaDifferencePct: floors.reduce(
       (max, floor) => Math.max(max, Math.abs(floor.areaDifferencePct)),
       0
@@ -416,8 +416,8 @@ function applyGeometrySourceValidation(
   return {
     ...baseValidation,
     status: hasFail ? "fail" : hasReview ? "review" : "pass",
-    representativeEligible: !hasFail,
-    exportable: !hasFail,
+    representativeEligible: !hasFail && !hasReview,
+    exportable: !hasFail && !hasReview,
     issues,
   };
 }
