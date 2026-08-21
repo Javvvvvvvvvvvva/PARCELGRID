@@ -5,7 +5,14 @@ import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
-import { validateFinancialSourceEvidence } from "@/lib/finance/source-data-gate";
+import {
+  validateFinancialSourceEvidence,
+  type FinancialSourceMap,
+} from "@/lib/finance/source-data-gate";
+import type {
+  PriceVerificationRecord,
+  PriceVerificationTarget,
+} from "@/lib/finance/price-verification";
 import { coreRegulatoryConstraintsVerified } from "@/lib/regulatory/constraints";
 import {
   buildEvidenceGate,
@@ -20,6 +27,10 @@ import {
   type ExpertReviewRecord,
   type ExpertReviewStatus,
 } from "@/lib/handoff/review-workflow";
+import {
+  buildReviewSnapshotKey,
+  validateReviewSnapshotAlignment,
+} from "@/lib/handoff/review-snapshot";
 
 const STATUS_LABEL: Record<EvidenceStatus, string> = {
   "system-confirmed": "시스템 재현 가능",
@@ -40,26 +51,82 @@ const REVIEW_STATUS_LABEL: Record<ExpertReviewStatus, string> = {
   "changes-requested": "수정 요청",
 };
 
+const EMPTY_FINANCIAL_SOURCES: FinancialSourceMap = Object.freeze({});
+const EMPTY_PRICE_VERIFICATIONS: Partial<
+  Record<PriceVerificationTarget, PriceVerificationRecord>
+> = Object.freeze({});
+const EMPTY_EXPERT_REVIEWS = Object.freeze({});
+
 export default function HandoffPage({
   params,
 }: {
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
-  const data = useProjectStore((state) => state.data);
+  const liveData = useProjectStore((state) => state.data);
   const geometry = useProjectStore(
     (state) => state.representativeGeometrySnapshot
   );
-  const financialSources = useProjectStore(
-    (state) => state.financialSources[projectId] ?? {}
+  const planningScenarios = useProjectStore(
+    (state) => state.planningScenarios
   );
-  const priceVerifications = useReviewStore(
-    (state) => state.priceVerifications[projectId] ?? {}
+  const representativePlanningScenarioId = useProjectStore(
+    (state) => state.representativePlanningScenarioId
   );
-  const expertReviews = useReviewStore(
-    (state) => state.expertReviews[projectId] ?? {}
+  const stage3Snapshots = useProjectStore(
+    (state) => state.stage3FeasibilitySnapshots
+  );
+  const financialSourceProjects = useProjectStore(
+    (state) => state.financialSources
+  );
+  const priceVerificationProjects = useReviewStore(
+    (state) => state.priceVerifications
+  );
+  const expertReviewProjects = useReviewStore(
+    (state) => state.expertReviews
   );
   const setExpertReview = useReviewStore((state) => state.setExpertReview);
+  const financialSources =
+    financialSourceProjects[projectId] ?? EMPTY_FINANCIAL_SOURCES;
+  const priceVerifications =
+    priceVerificationProjects[projectId] ?? EMPTY_PRICE_VERIFICATIONS;
+  const expertReviews =
+    expertReviewProjects[projectId] ?? EMPTY_EXPERT_REVIEWS;
+  const stage3Snapshot = stage3Snapshots[projectId] ?? null;
+  const currentScenario =
+    planningScenarios.find(
+      (scenario) =>
+        scenario.id === representativePlanningScenarioId &&
+        (!scenario.projectId || scenario.projectId === projectId)
+    ) ?? null;
+  const currentGeometry =
+    geometry?.projectId === projectId ? geometry : null;
+  const snapshotAlignment = useMemo(
+    () =>
+      validateReviewSnapshotAlignment({
+        snapshot: stage3Snapshot,
+        geometry: currentGeometry,
+        currentScenario,
+      }),
+    [currentGeometry, currentScenario, stage3Snapshot]
+  );
+  const reviewSnapshotKey = useMemo(
+    () =>
+      snapshotAlignment.valid && stage3Snapshot
+        ? buildReviewSnapshotKey({
+            snapshot: stage3Snapshot,
+            financialSources,
+            priceVerifications,
+          })
+        : null,
+    [
+      financialSources,
+      priceVerifications,
+      snapshotAlignment.valid,
+      stage3Snapshot,
+    ]
+  );
+  const data = stage3Snapshot?.data ?? liveData;
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle"
   );
@@ -82,17 +149,17 @@ export default function HandoffPage({
   );
   const financeTaxReview = expertReviews["finance-tax"];
   const taxReviewComplete = Boolean(
-    financeTaxReview?.status === "approved" &&
-      validateExpertReview(financeTaxReview).valid
+    reviewSnapshotKey &&
+      financeTaxReview?.status === "approved" &&
+      validateExpertReview(financeTaxReview, reviewSnapshotKey).valid
   );
 
   const gate = useMemo(() => {
     if (!data) return null;
-    const projectGeometry = geometry?.projectId === projectId ? geometry : null;
     return buildEvidenceGate({
       projectId,
       address: data.parcel.address,
-      geometryHash: projectGeometry?.geometryHash ?? null,
+      geometryHash: currentGeometry?.geometryHash ?? null,
       roadReferenceCount: data.parcel.roads?.length ?? 0,
       regulatorySourceBacked: coreRegulatoryConstraintsVerified(
         data.parcel.regulatoryConstraints
@@ -110,7 +177,7 @@ export default function HandoffPage({
     });
   }, [
     data,
-    geometry,
+    currentGeometry,
     priceVerifications.acquisition?.status,
     projectId,
     taxReviewComplete,
@@ -119,8 +186,12 @@ export default function HandoffPage({
   ]);
 
   const reviewSummary = useMemo(
-    () => buildExpertReviewSummary(expertReviews),
-    [expertReviews]
+    () =>
+      buildExpertReviewSummary(
+        expertReviews,
+        reviewSnapshotKey ?? "__missing-current-stage3-snapshot__"
+      ),
+    [expertReviews, reviewSnapshotKey]
   );
 
   if (!data || !gate) {
@@ -128,7 +199,10 @@ export default function HandoffPage({
   }
 
   const finalReady =
-    gate.criticalBlockerCount === 0 && reviewSummary.ready;
+    snapshotAlignment.valid &&
+    Boolean(reviewSnapshotKey) &&
+    gate.criticalBlockerCount === 0 &&
+    reviewSummary.ready;
 
   const copyBrief = async () => {
     const reviewLines = gate.lanes.map((lane) => {
@@ -139,7 +213,7 @@ export default function HandoffPage({
     });
     try {
       await navigator.clipboard.writeText(
-        `${buildHandoffBrief(gate)}\n\n[분야별 검토 상태]\n${reviewLines.join("\n")}`
+        `${buildHandoffBrief(gate)}\n\n검토 스냅샷: ${reviewSnapshotKey ?? "미생성"}\n\n[분야별 검토 상태]\n${reviewLines.join("\n")}`
       );
       setCopyState("copied");
     } catch {
@@ -149,9 +223,13 @@ export default function HandoffPage({
 
   const statusTitle = finalReady
     ? "모든 필수 근거와 전문가 승인이 완료됐습니다"
-    : gate.status === "blocked"
-      ? "전문가 승인 전에 보완할 필수 근거가 있습니다"
-      : "근거는 준비됐고 분야별 전문가 승인이 필요합니다";
+    : !snapshotAlignment.valid
+      ? "현재 대표안과 일치하는 Stage 3 저장본이 필요합니다"
+      : reviewSummary.staleDisciplines.length > 0
+        ? "계획·사업성 또는 근거 변경으로 재승인이 필요합니다"
+        : gate.status === "blocked"
+          ? "전문가 승인 전에 보완할 필수 근거가 있습니다"
+          : "근거는 준비됐고 분야별 전문가 승인이 필요합니다";
 
   return (
     <div style={{ maxWidth: 1240, margin: "0 auto", padding: "28px 30px 48px" }}>
@@ -179,14 +257,17 @@ export default function HandoffPage({
       <section role="status" style={{ padding: "14px 16px", border: `1px solid ${finalReady ? "var(--pos-fg)" : "var(--neg-fg)"}`, borderRadius: 10, background: finalReady ? "var(--pos-soft)" : "rgba(161,60,50,.06)", marginBottom: 16 }}>
         <strong style={{ display: "block", fontSize: 13 }}>{statusTitle}</strong>
         <span style={{ display: "block", marginTop: 4, fontSize: 10.5, color: "var(--fg-muted)" }}>
-          필수 근거 미확인 {gate.criticalBlockerCount}건 · 전문가 승인 {reviewSummary.approvedCount}/{reviewSummary.requiredDisciplines.length}개 분야 · 수정 요청 {reviewSummary.changesRequestedCount}건
+          필수 근거 미확인 {gate.criticalBlockerCount}건 · 전문가 승인 {reviewSummary.approvedCount}/{reviewSummary.requiredDisciplines.length}개 분야 · 재검토 {reviewSummary.staleDisciplines.length}건 · 수정 요청 {reviewSummary.changesRequestedCount}건
+          {!snapshotAlignment.valid && (
+            <><br />{snapshotAlignment.errors.join(" ")}</>
+          )}
         </span>
       </section>
 
       <section className="handoff-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
         <Summary label="시스템 재현 가능" value={gate.confirmedCount} note="자동 재현 가능한 근거" />
         <Summary label="필수 근거 차단" value={gate.criticalBlockerCount} note="승인 전 보완" danger />
-        <Summary label="검토 요청 중" value={reviewSummary.requestedCount} note="답변 대기" />
+        <Summary label="재검토 필요" value={reviewSummary.staleDisciplines.length} note="저장본 변경 또는 구형 승인" danger />
         <Summary label="전문가 승인" value={reviewSummary.approvedCount} note="4개 분야 필요" positive />
       </section>
 
@@ -203,8 +284,12 @@ export default function HandoffPage({
               <div style={{ padding: "15px 16px 13px", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <h2 style={{ margin: 0, fontSize: 16 }}>{lane.title}</h2>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: expertReviews[lane.discipline]?.status === "approved" ? "var(--pos-fg)" : "var(--fg-muted)" }}>
-                    {expertReviews[lane.discipline] ? REVIEW_STATUS_LABEL[expertReviews[lane.discipline]!.status] : "미요청"}
+                  <span style={{ fontSize: 9, fontWeight: 700, color: reviewSummary.staleDisciplines.includes(lane.discipline) ? "var(--neg-fg)" : expertReviews[lane.discipline]?.status === "approved" ? "var(--pos-fg)" : "var(--fg-muted)" }}>
+                    {reviewSummary.staleDisciplines.includes(lane.discipline)
+                      ? "재검토 필요"
+                      : expertReviews[lane.discipline]
+                        ? REVIEW_STATUS_LABEL[expertReviews[lane.discipline]!.status]
+                        : "미요청"}
                   </span>
                 </div>
                 <p style={{ margin: "6px 0 0", fontSize: 10.5, lineHeight: 1.55, color: "var(--fg-muted)" }}>{lane.description}</p>
@@ -213,8 +298,14 @@ export default function HandoffPage({
               <ExpertReviewEditor
                 discipline={lane.discipline}
                 current={expertReviews[lane.discipline]}
-                approvalBlocked={unresolvedBlockers.length > 0}
-                blockerMessage={unresolvedBlockers.map((item) => item.label).join(", ")}
+                snapshotKey={reviewSnapshotKey}
+                approvalBlocked={
+                  unresolvedBlockers.length > 0 || !snapshotAlignment.valid
+                }
+                blockerMessage={[
+                  ...snapshotAlignment.errors,
+                  ...unresolvedBlockers.map((item) => item.label),
+                ].join(" ")}
                 onSave={(record) => setExpertReview(projectId, record)}
               />
             </article>
@@ -243,12 +334,14 @@ export default function HandoffPage({
 function ExpertReviewEditor({
   discipline,
   current,
+  snapshotKey,
   approvalBlocked,
   blockerMessage,
   onSave,
 }: {
   discipline: HandoffDiscipline;
   current?: ExpertReviewRecord;
+  snapshotKey: string | null;
   approvalBlocked: boolean;
   blockerMessage: string;
   onSave: (record: ExpertReviewRecord) => void;
@@ -263,6 +356,10 @@ function ExpertReviewEditor({
   const [error, setError] = useState<string | null>(null);
 
   const save = (status: ExpertReviewStatus) => {
+    if (!snapshotKey) {
+      setError("현재 대표안과 일치하는 Stage 3 저장본을 먼저 생성하세요.");
+      return;
+    }
     if (status === "approved" && approvalBlocked) {
       setError(`먼저 필수 근거를 보완하세요: ${blockerMessage}`);
       return;
@@ -276,8 +373,9 @@ function ExpertReviewEditor({
       notes: notes.trim(),
       reviewedAt,
       updatedAt: new Date().toISOString(),
+      snapshotKey,
     };
-    const validation = validateExpertReview(record);
+    const validation = validateExpertReview(record, snapshotKey);
     if (!validation.valid) {
       setError(validation.errors.join(" "));
       return;
