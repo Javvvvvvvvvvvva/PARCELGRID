@@ -20,6 +20,10 @@ import {
   type ExpertReviewMap,
 } from "@/lib/handoff/review-workflow";
 import {
+  buildReviewSnapshotKey,
+  validateReviewSnapshotAlignment,
+} from "@/lib/handoff/review-snapshot";
+import {
   buildSourceDataGate,
   FINANCIAL_SOURCE_FIELD_META,
   validateFinancialSourceEvidence,
@@ -75,7 +79,7 @@ export default function ReportPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
-  const data = useProjectStore((s) => s.data);
+  const liveData = useProjectStore((state) => state.data);
   const representativeGeometry = useProjectStore(
     (state) => state.representativeGeometrySnapshot
   );
@@ -84,6 +88,9 @@ export default function ReportPage({
   );
   const representativePlanningScenarioId = useProjectStore(
     (state) => state.representativePlanningScenarioId
+  );
+  const stage3Snapshots = useProjectStore(
+    (state) => state.stage3FeasibilitySnapshots
   );
   const financialSources = useProjectStore(
     (state) =>
@@ -97,9 +104,7 @@ export default function ReportPage({
     (state) => state.expertReviews[projectId] ?? EMPTY_EXPERT_REVIEWS
   );
 
-  const scenarios = useMemo(() => data?.scenarios ?? [], [data?.scenarios]);
-  const parcel = data?.parcel;
-  const comps = useMemo(() => data?.comps ?? [], [data?.comps]);
+  const stage3Snapshot = stage3Snapshots[projectId] ?? null;
   const geometry =
     representativeGeometry?.projectId === projectId
       ? representativeGeometry
@@ -110,6 +115,35 @@ export default function ReportPage({
         scenario.id === representativePlanningScenarioId &&
         (!scenario.projectId || scenario.projectId === projectId)
     ) ?? null;
+  const snapshotAlignment = useMemo(
+    () =>
+      validateReviewSnapshotAlignment({
+        snapshot: stage3Snapshot,
+        geometry,
+        currentScenario: planningScenario,
+      }),
+    [geometry, planningScenario, stage3Snapshot]
+  );
+  const reviewSnapshotKey = useMemo(
+    () =>
+      snapshotAlignment.valid && stage3Snapshot
+        ? buildReviewSnapshotKey({
+            snapshot: stage3Snapshot,
+            financialSources,
+            priceVerifications,
+          })
+        : null,
+    [
+      financialSources,
+      priceVerifications,
+      snapshotAlignment.valid,
+      stage3Snapshot,
+    ]
+  );
+  const data = stage3Snapshot?.data ?? liveData;
+  const scenarios = useMemo(() => data?.scenarios ?? [], [data?.scenarios]);
+  const parcel = data?.parcel;
+  const comps = useMemo(() => data?.comps ?? [], [data?.comps]);
   const constructionSource = financialSources.constCostPerSqM;
   const ltcSource = financialSources.ltcTarget;
   const interestSource = financialSources.interestRate;
@@ -128,12 +162,17 @@ export default function ReportPage({
   );
   const financeTaxReview = expertReviews["finance-tax"];
   const taxComplete = Boolean(
-    financeTaxReview?.status === "approved" &&
-      validateExpertReview(financeTaxReview).valid
+    reviewSnapshotKey &&
+      financeTaxReview?.status === "approved" &&
+      validateExpertReview(financeTaxReview, reviewSnapshotKey).valid
   );
   const reviewSummary = useMemo(
-    () => buildExpertReviewSummary(expertReviews),
-    [expertReviews]
+    () =>
+      buildExpertReviewSummary(
+        expertReviews,
+        reviewSnapshotKey ?? "__missing-current-stage3-snapshot__"
+      ),
+    [expertReviews, reviewSnapshotKey]
   );
 
   const evidenceGate = useMemo(() => {
@@ -214,6 +253,8 @@ export default function ReportPage({
     ? new Date(data.meta.lastSyncedAt).toLocaleDateString("ko-KR")
     : new Date().toLocaleDateString("ko-KR");
   const finalReady =
+    snapshotAlignment.valid &&
+    Boolean(reviewSnapshotKey) &&
     evidenceGate.criticalBlockerCount === 0 &&
     reviewSummary.ready &&
     sourceGate.status === "source-backed";
@@ -265,7 +306,8 @@ export default function ReportPage({
           }}
         >
           <strong>{finalReady ? "Stage 5 · 필수 근거와 전문가 승인 기록 완료" : "Stage 5 예비 모델 · 전문가 검토 진행 중"}</strong><br />
-          아래 값은 저장 시점의 세전 비교값입니다. 계산 입력 근거 {sourceGate.validRecords.length}/{sourceGate.requiredFields.length}건 · Stage 4 필수 미확인 {evidenceGate.criticalBlockerCount}건 · 전문가 승인 {reviewSummary.approvedCount}/{reviewSummary.requiredDisciplines.length}개 분야입니다. 금융기관 약정·시공사 견적·감정평가·세무 원문을 별도로 대조하기 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.{" "}
+          아래 값은 Stage 3 저장본의 세전 비교값입니다. 계산 입력 근거 {sourceGate.validRecords.length}/{sourceGate.requiredFields.length}건 · Stage 4 필수 미확인 {evidenceGate.criticalBlockerCount}건 · 전문가 승인 {reviewSummary.approvedCount}/{reviewSummary.requiredDisciplines.length}개 분야 · 재검토 {reviewSummary.staleDisciplines.length}개 분야입니다.
+          {!snapshotAlignment.valid && <> 현재 저장본 문제: {snapshotAlignment.errors.join(" ")}</>}  금융기관 약정·시공사 견적·감정평가·세무 원문을 별도로 대조하기 전에는 매입 결정, 대출 심사 또는 세무신고에 사용할 수 없습니다.{" "}
           <Link href={`/projects/${projectId}/handoff`} style={{ color: "inherit", fontWeight: 700 }}>
             검증·인계 보드 확인
           </Link>
@@ -623,7 +665,7 @@ export default function ReportPage({
                 return (
                   <tr key={discipline}>
                     <td>{DISCIPLINE_LABEL[discipline]}</td>
-                    <td>{REVIEW_STATUS_LABEL[review?.status ?? "not-requested"]}</td>
+                    <td>{reviewSummary.staleDisciplines.includes(discipline) ? "재검토 필요" : REVIEW_STATUS_LABEL[review?.status ?? "not-requested"]}</td>
                     <td>{review ? `${review.reviewer} · ${review.organization}` : "미배정"}</td>
                     <td>{review ? [review.evidenceRef, review.reviewedAt].filter(Boolean).join(" · ") : "—"}</td>
                     <td style={{ whiteSpace: "normal" }}>{review?.notes || "—"}</td>
