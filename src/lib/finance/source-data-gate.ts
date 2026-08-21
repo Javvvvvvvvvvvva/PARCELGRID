@@ -1,4 +1,5 @@
 import type { AssumptionSet, Parcel, Scenario } from "./types";
+import { validateAssumptionValue } from "./assumption-validation";
 import {
   validateSourceDocumentMetadata,
   type SourceDocumentMetadata,
@@ -272,8 +273,12 @@ export function validateFinancialSource(
 ): SourceValidationResult {
   const errors: string[] = [];
   const meta = FINANCIAL_SOURCE_FIELD_META[record.field];
-  if (!Number.isFinite(record.value) || record.value < 0) {
-    errors.push("유효한 0 이상의 값을 입력해야 합니다.");
+  if (record.field === "acquisitionPrice") {
+    if (!Number.isFinite(record.value) || record.value < 0) {
+      errors.push("부동산 총 취득대금은 0 이상의 유한한 숫자여야 합니다.");
+    }
+  } else {
+    errors.push(...validateAssumptionValue(record.field, record.value));
   }
   if (!record.sourceName.trim()) errors.push("발급기관·출처명이 필요합니다.");
   if (!record.documentRef.trim())
@@ -324,12 +329,23 @@ export function requiredSourceFields(
   }
   if (scenario.program.mix.residentialSale > 0) {
     fields.push("salePricePerSqM");
+    if (
+      scenario.program.type !== "single-house" &&
+      scenario.program.type !== "multi-family"
+    ) {
+      fields.push("salesPaceMonthlyPct");
+    }
   }
   if (
     scenario.program.mix.residentialLease > 0 ||
     scenario.program.mix.retail > 0
   ) {
-    fields.push("rentPerSqMMonth", "vacancyRate", "capRate");
+    fields.push(
+      "rentPerSqMMonth",
+      "vacancyRate",
+      "capRate",
+      "leaseUpMonths",
+    );
   }
   return Array.from(new Set(fields));
 }
