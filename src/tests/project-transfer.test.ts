@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { FinancialSourceMap } from "@/lib/finance/source-data-gate";
 import {
   createProjectTransferBundle,
+  detachTransferredSourceDocuments,
   parseProjectTransferBundle,
   serializeProjectTransferBundle,
   type ProjectTransferPayload,
@@ -106,5 +108,32 @@ describe("project transfer bundle", () => {
 
     expect(result.valid).toBe(false);
     expect(result.errors.join(" ")).toContain("Stage 3 저장본");
+  });
+  it("detaches source files that are not contained in the JSON package", () => {
+    const sources = {
+      constCostPerSqM: {
+        field: "constCostPerSqM",
+        value: 3_000_000,
+        sourceKind: "professional-quote",
+        sourceName: "견적",
+        documentRef: "quote.pdf",
+        asOf: "2026-08-21",
+        verifiedBy: "검토자",
+        recordedAt: "2026-08-21",
+        document: {
+          pathname: "projects/P-100/source-documents/quote.pdf",
+          fileName: "quote.pdf",
+          contentType: "application/pdf",
+          size: 100,
+          sha256: "a".repeat(64),
+          uploadedAt: "2026-08-21T00:00:00.000Z",
+        },
+      },
+    } as FinancialSourceMap;
+
+    const detached = detachTransferredSourceDocuments(sources);
+
+    expect(detached.constCostPerSqM?.document).toBeUndefined();
+    expect(detached.constCostPerSqM?.documentRef).toBe("quote.pdf");
   });
 });

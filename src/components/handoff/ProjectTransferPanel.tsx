@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import {
   createProjectTransferBundle,
+  detachTransferredSourceDocuments,
   parseProjectTransferBundle,
   serializeProjectTransferBundle,
 } from "@/lib/handoff/project-transfer";
@@ -126,7 +127,8 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
     }
 
     const nextFinancialSources = { ...currentProject.financialSources };
-    nextFinancialSources[projectId] = payload.financialSources;
+    nextFinancialSources[projectId] =
+      detachTransferredSourceDocuments(payload.financialSources);
 
     const nextStage3Snapshots = {
       ...currentProject.stage3FeasibilitySnapshots,
@@ -174,7 +176,7 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
     setStatus({
       kind: "success",
       message:
-        "패키지를 적용했습니다. 현재 Geometry·Stage 3 저장본·승인 기록의 일치 여부를 다시 계산했습니다.",
+        "패키지를 적용했습니다. 원문 파일은 다시 업로드해야 하며, 기존 승인은 자동으로 재검토 상태가 됩니다.",
     });
   };
 
@@ -210,8 +212,9 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
             }}
           >
             계획안·검증 Geometry·사업성 저장본·가격 근거·전문가 승인을
-            체크섬 JSON으로 옮깁니다. 같은 프로젝트 ID에만 적용되며, AI 이미지와
-            외부 원문 첨부 파일은 포함하지 않습니다.
+            체크섬 JSON으로 옮깁니다. 같은 프로젝트 ID에만 적용됩니다. AI 이미지와
+            원문 첨부 파일은 포함되지 않아, 가져온 뒤 원문을 다시 올리고 승인을
+            갱신해야 합니다.
           </p>
         </div>
         <div style={{ display: "flex", flexShrink: 0, gap: 8 }}>

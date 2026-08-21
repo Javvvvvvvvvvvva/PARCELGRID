@@ -284,6 +284,27 @@ export function parseProjectTransferBundle(
   };
 }
 
+/**
+ * 인계 JSON에는 감사용 원문 메타데이터가 남지만 파일 바이트는 포함되지 않는다.
+ * 다른 컴퓨터에서 존재하지 않는 경로를 검증 완료 원문으로 오인하지 않도록
+ * 가져오기 시 파일 연결만 해제한다. 이 변경은 Snapshot Key를 바꿔 기존 승인을
+ * 자동으로 재검토 상태로 만든다.
+ */
+export function detachTransferredSourceDocuments(
+  sources: FinancialSourceMap
+): FinancialSourceMap {
+  return Object.fromEntries(
+    Object.entries(sources).map(([field, record]) => [
+      field,
+      record
+        ? Object.fromEntries(
+            Object.entries(record).filter(([key]) => key !== "document")
+          )
+        : record,
+    ])
+  ) as FinancialSourceMap;
+}
+
 export function serializeProjectTransferBundle(
   bundle: ProjectTransferBundle
 ): string {

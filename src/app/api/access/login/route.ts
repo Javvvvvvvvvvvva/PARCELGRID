@@ -5,14 +5,48 @@ import {
   matchesSitePassword,
   siteAccessCookie,
 } from "@/lib/site-access";
+import {
+  clearSiteAccessAttempts,
+  reserveSiteAccessAttempt,
+} from "@/lib/runtime/site-access-rate-limit";
 
 export const dynamic = "force-dynamic";
+
+function requestIdentity(request: Request): string {
+  const forwarded = request.headers
+    .get("x-forwarded-for")
+    ?.split(",")[0]
+    ?.trim();
+  return (
+    forwarded ||
+    request.headers.get("x-real-ip")?.trim() ||
+    "unknown-client"
+  );
+}
 
 export async function POST(request: Request) {
   if (!isSiteAccessConfigured()) {
     return NextResponse.json(
       { error: "사이트 접근 비밀번호가 설정되지 않았습니다." },
       { status: 503 },
+    );
+  }
+
+  const identity = requestIdentity(request);
+  const attempt = reserveSiteAccessAttempt({ identity });
+  if (!attempt.allowed) {
+    const retryAfter = Math.max(
+      1,
+      Math.ceil((new Date(attempt.resetAt).getTime() - Date.now()) / 1_000)
+    );
+    return NextResponse.json(
+      {
+        error: "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(retryAfter) },
+      }
     );
   }
 
@@ -28,6 +62,7 @@ export async function POST(request: Request) {
     );
   }
 
+  clearSiteAccessAttempts(identity);
   const response = NextResponse.json({ ok: true });
   response.cookies.set({
     name: siteAccessCookie.name,
