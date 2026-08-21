@@ -21,6 +21,13 @@ import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { protectLockedPlanningGeometryPatch } from "@/lib/planning/geometry-source";
+import { defaultAssumptions } from "@/lib/finance/scenario";
+import {
+  applyPlanningScenarioCalculation,
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 import {
   clonePlanningScenario,
   touchPlanningScenario,
@@ -431,9 +438,57 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
+          const assumptionSource =
+            state.data?.scenarios.find(
+              (financeScenario) => financeScenario.id === id
+            )?._raw.assumptions ??
+            state.data?.scenarios[0]?._raw.assumptions ??
+            defaultAssumptions();
+          const calculation = calculatePlanningScenario(scenario, {
+            parcel: {
+              lotAreaSqm: parcel.lotArea,
+              maxFARPct: parcel.maxFAR,
+              maxBCRPct: parcel.maxBCR,
+              heightLimitM: parcel.heightLimit,
+              regulatoryConstraints: parcel.regulatoryConstraints,
+              roofAllowanceM: 1.4,
+              acquisitionCostManwon: parcel.acquiredPrice,
+              demolitionCostManwon: parcel.demolitionCost ?? 0,
+            },
+            assumptions: planningEconomicsAssumptionsFromLegacy(
+              assumptionSource,
+              "representative-readiness-v1"
+            ),
+            calculatedAt: new Date().toISOString(),
+          });
+          const readiness = assessRepresentativeCheckReadiness(
+            calculation.checks
+          );
+          if (!readiness.ready) {
+            const firstBlocker = readiness.blockers[0];
+            set(
+              representativeInvalidation(
+                `대표안 법규·주차 검증 미완료: ${
+                  firstBlocker?.message ??
+                  "핵심 검증 항목을 모두 통과해야 합니다."
+                }`
+              )
+            );
+            return false;
+          }
+          const nextPlanningScenarios = state.planningScenarios.map(
+            (candidate) =>
+              candidate.id === id
+                ? applyPlanningScenarioCalculation(candidate, calculation)
+                : candidate
+          );
+          const calculatedScenario =
+            nextPlanningScenarios.find((candidate) => candidate.id === id) ??
+            scenario;
+
           const geometry = buildPlanningGeometry({
-            projectId: scenario.projectId ?? parcel.id,
-            scenario,
+            projectId: calculatedScenario.projectId ?? parcel.id,
+            scenario: calculatedScenario,
             boundary: parcel.boundary,
             lotAreaSqm: parcel.lotArea,
             zoning: parcel.zoning ?? "",
@@ -457,7 +512,7 @@ export const useProjectStore = create<ProjectStore>()(
           try {
             nextData = recomputeFromPlanningScenarios(
               parcel,
-              state.planningScenarios,
+              nextPlanningScenarios,
               id,
               state.data,
               {
@@ -486,6 +541,7 @@ export const useProjectStore = create<ProjectStore>()(
 
           set({
             data: nextData,
+            planningScenarios: nextPlanningScenarios,
             representativePlanningScenarioId: id,
             representativeGeometrySnapshot: geometry,
             geometryValidationError: null,
