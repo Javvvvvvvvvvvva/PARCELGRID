@@ -24,6 +24,7 @@ import {
 import {
   buildExpertReviewSummary,
   validateExpertReview,
+  type ExpertReviewMap,
   type ExpertReviewRecord,
   type ExpertReviewStatus,
 } from "@/lib/handoff/review-workflow";
@@ -55,7 +56,7 @@ const EMPTY_FINANCIAL_SOURCES: FinancialSourceMap = Object.freeze({});
 const EMPTY_PRICE_VERIFICATIONS: Partial<
   Record<PriceVerificationTarget, PriceVerificationRecord>
 > = Object.freeze({});
-const EMPTY_EXPERT_REVIEWS = Object.freeze({});
+const EMPTY_EXPERT_REVIEWS: ExpertReviewMap = Object.freeze({});
 
 export default function HandoffPage({
   params,
