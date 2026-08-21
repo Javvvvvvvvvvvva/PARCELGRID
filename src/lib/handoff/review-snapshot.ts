@@ -61,8 +61,9 @@ function stripFinancialRecordTimestamps(sources: FinancialSourceMap) {
   return Object.fromEntries(
     Object.entries(sources).map(([field, record]) => {
       if (!record) return [field, record];
-      const evidence = { ...record };
-      delete evidence.recordedAt;
+      const evidence = Object.fromEntries(
+        Object.entries(record).filter(([key]) => key !== "recordedAt")
+      );
       return [field, evidence];
     })
   );
@@ -74,8 +75,9 @@ function stripPriceRecordTimestamps(
   return Object.fromEntries(
     Object.entries(records).map(([target, record]) => {
       if (!record) return [target, record];
-      const evidence = { ...record };
-      delete evidence.updatedAt;
+      const evidence = Object.fromEntries(
+        Object.entries(record).filter(([key]) => key !== "updatedAt")
+      );
       return [target, evidence];
     })
   ) as ReviewPriceVerificationMap;
