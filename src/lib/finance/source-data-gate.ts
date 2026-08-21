@@ -92,7 +92,7 @@ export const FINANCIAL_SOURCE_FIELD_META: Record<
     allowedKinds: ["approved-policy", "professional-quote"],
   },
   ltcTarget: {
-    label: "목표 LTC",
+    label: "PF 적격 공사비 조달비율",
     unit: "%",
     allowedKinds: ["lender-term-sheet", "signed-contract"],
   },
@@ -194,7 +194,7 @@ export const FINANCIAL_SOURCE_GUIDANCE: Record<
   },
   ltcTarget: {
     group: "금융",
-    why: "PF 가능액과 필요한 자기자본을 결정합니다.",
+    why: "직접공사비·간접비·예비비 중 PF로 조달하는 비율과 필요한 자기자본을 결정합니다.",
     recommendedEvidence: "금융기관 Term Sheet 또는 대출약정서",
   },
   interestRate: {
