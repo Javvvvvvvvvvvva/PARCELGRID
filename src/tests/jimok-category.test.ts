@@ -12,6 +12,6 @@ describe("jimokToCategory", () => {
 
   it("returns other for an unknown or missing land category", () => {
     expect(jimokToCategory("구거")).toBe("other");
-    expect(jimokToCategory(undefined)).toBe("other");
+    expect(jimokToCategory("")).toBe("other");
   });
 });
