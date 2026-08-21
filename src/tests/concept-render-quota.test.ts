@@ -9,18 +9,18 @@ describe("concept render quota", () => {
   beforeEach(() => resetConceptRenderQuotaForTests());
 
   it("uses a safe default and bounds configured limits", () => {
-    expect(conceptRenderDailyLimit({} as NodeJS.ProcessEnv)).toBe(6);
+    expect(conceptRenderDailyLimit({} as unknown as NodeJS.ProcessEnv)).toBe(6);
     expect(
       conceptRenderDailyLimit({
         CONCEPT_RENDER_DAILY_LIMIT: "1000",
-      } as NodeJS.ProcessEnv)
+      } as unknown as NodeJS.ProcessEnv)
     ).toBe(50);
   });
 
   it("blocks requests after the project daily limit and resets next day", () => {
     const environment = {
       CONCEPT_RENDER_DAILY_LIMIT: "2",
-    } as NodeJS.ProcessEnv;
+    } as unknown as NodeJS.ProcessEnv;
     const now = new Date("2026-08-21T12:00:00.000Z");
 
     expect(
