@@ -14,6 +14,7 @@ import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacem
 import { ScenarioParkingWorkspace } from "@/components/planning/ScenarioParkingWorkspace";
 import { ScenarioChangeWorkspace } from "@/components/planning/ScenarioChangeWorkspace";
 import { RegulatoryEvidencePanel } from "@/components/planning/RegulatoryEvidencePanel";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 
 type StudioSection = "plan" | "design" | "verify" | "context" | "export";
 
@@ -76,6 +77,9 @@ export default function EnvelopePage({
       scenario.id === representativeScenarioId &&
       (!scenario.projectId || scenario.projectId === projectId)
   );
+  const representativeCheckReadiness = representativeScenario
+    ? assessRepresentativeCheckReadiness(representativeScenario.checks)
+    : null;
   const geometryReady = Boolean(
     representativeScenarioId &&
       representativeScenario &&
@@ -83,6 +87,7 @@ export default function EnvelopePage({
       representativeGeometry.projectId === projectId &&
       representativeGeometry.scenarioId === representativeScenarioId &&
       representativeGeometry.scenarioVersion === representativeScenario.version &&
+      representativeCheckReadiness?.ready &&
       representativeGeometry.validation.status !== "fail" &&
       representativeGeometry.validation.representativeEligible
   );
@@ -92,8 +97,13 @@ export default function EnvelopePage({
   );
   const handoffMessage = !representativeScenarioId
     ? "대표 계획안을 먼저 확정하세요"
-    : !geometryReady
-      ? "대표안 Geometry 검증을 다시 확인하세요"
+    : representativeCheckReadiness && !representativeCheckReadiness.ready
+      ? `법규·주차 검증 필요: ${
+          representativeCheckReadiness.blockers[0]?.message ??
+          "핵심 항목 미확인"
+        }`
+      : !geometryReady
+        ? "대표안 Geometry 검증을 다시 확인하세요"
       : !handoffReady
         ? "대표안 사업성을 재계산하고 있습니다"
         : "대표 계획안 사업성 검토로 이동";
