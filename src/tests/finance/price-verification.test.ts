@@ -34,6 +34,7 @@ function priceRecord(): PriceVerificationRecord {
     sourceModelVersion: "test",
     verifiedAt: "2026-07-22",
     updatedAt: "2026-07-22T12:00:00.000Z",
+    snapshotKey: "PG-REVIEW-TEST",
   };
 }
 
