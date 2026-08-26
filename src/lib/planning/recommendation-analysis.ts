@@ -147,6 +147,18 @@ export function recommendationCandidateKey(scenario: PlanningScenario): string {
   });
 }
 
+export function recommendationsSharePhysicalPlan(
+  architecturalFeasibility: PlanningScenario | null,
+  profitOptimal: PlanningScenario | null
+): boolean {
+  return Boolean(
+    architecturalFeasibility &&
+      profitOptimal &&
+      recommendationCandidateKey(architecturalFeasibility) ===
+        recommendationCandidateKey(profitOptimal)
+  );
+}
+
 function candidateRejectionReasons(
   candidate: RecommendationCandidateEvaluation
 ): Map<string, string> {
@@ -287,22 +299,67 @@ function buildableLegalReference(
   scenario: PlanningScenario | null;
   candidateCount: number;
 } {
-  const candidates = result.evaluations
-    .filter(isLegalGeometryCandidate)
-    .sort(
-      (a, b) =>
+  const candidates = result.evaluations.filter(isLegalGeometryCandidate);
+  const maximumFarPct = candidates.reduce(
+    (maximum, candidate) =>
+      Math.max(maximum, candidate.calculation.metrics.preliminaryFarPct),
+    0
+  );
+  const inferredCapPct =
+    candidates.length > 0
+      ? inferLegalFarCapPct(candidates[0], legalFarCapPct)
+      : null;
+  // 법정 FAR 2% 이내의 사실상 동률 후보는 작은 상층을 하나 더 얹는 대신
+  // 층판 균형과 단순한 매스를 우선한다. 예: 250% 상한이면 5%p 범위.
+  const nearMaximumTolerancePct = Math.max(
+    1,
+    (inferredCapPct ?? maximumFarPct) * 0.02
+  );
+  const floorShape = (candidate: RecommendationCandidateEvaluation) => {
+    const areas = candidate.scenario.floorPrograms
+      .filter((floor) => floor.level > 0)
+      .map((floor) =>
+        floor.zones.reduce(
+          (sum, zone) => sum + Math.max(0, zone.areaSqm),
+          0
+        )
+      )
+      .filter((area) => area > 0);
+    const maximum = Math.max(0, ...areas);
+    const minimum = areas.length > 0 ? Math.min(...areas) : 0;
+    return {
+      balance: maximum > 0 ? minimum / maximum : 0,
+      floors: areas.length,
+      surface: candidate.scenario.parking.strategy === "surface" ? 1 : 0,
+    };
+  };
+  const nearMaximum = candidates
+    .filter(
+      (candidate) =>
+        maximumFarPct - candidate.calculation.metrics.preliminaryFarPct <=
+        nearMaximumTolerancePct + 1e-6
+    )
+    .sort((a, b) => {
+      const aShape = floorShape(a);
+      const bShape = floorShape(b);
+      return (
+        bShape.balance - aShape.balance ||
+        bShape.surface - aShape.surface ||
+        aShape.floors - bShape.floors ||
         b.calculation.metrics.preliminaryFarPct -
           a.calculation.metrics.preliminaryFarPct ||
         b.calculation.metrics.preliminaryBcrPct -
           a.calculation.metrics.preliminaryBcrPct ||
         b.architectureScore - a.architectureScore
-    );
-  const selected = candidates[0];
+      );
+    });
+  const selected = nearMaximum[0];
   if (!selected) return { scenario: null, candidateCount: 0 };
 
   const realizedFarPct = selected.calculation.metrics.preliminaryFarPct;
   const realizedBcrPct = selected.calculation.metrics.preliminaryBcrPct;
   const capPct = inferLegalFarCapPct(selected, legalFarCapPct);
+  const maximumFarGapPct = Math.max(0, maximumFarPct - realizedFarPct);
   const parkingShortfall = Math.max(
     selected.calculation.parking.shortfallCars,
     selected.parkingLayout.shortfallCars
@@ -311,8 +368,15 @@ function buildableLegalReference(
     (check) => check.status === "review" || check.status === "unknown"
   ).length;
   const warnings = [
-    "산술 법정 상한 자체가 아니라 층별 법규 외곽선·배치·층간 연결을 통과한 후보 중 실현 용적률이 가장 높은 비교안입니다.",
+    "산술 법정 상한 자체가 아니라 층별 법규 외곽선·배치·층간 연결을 통과한 상위 실현 용적률 후보 중 층판이 안정적인 비교안입니다.",
   ];
+  if (maximumFarGapPct > 0.05) {
+    warnings.push(
+      `지나치게 작은 상층을 피하기 위해 최고 실현 용적률 ${maximumFarPct.toFixed(
+        1
+      )}%보다 ${maximumFarGapPct.toFixed(1)}%p 낮은 균형형 매스를 선택했습니다.`
+    );
+  }
   if (parkingShortfall > 0) {
     warnings.push(
       `법정·실제 배치 기준 주차가 ${parkingShortfall}대 부족합니다. 주차 해결 전에는 대표안으로 확정할 수 없습니다.`
@@ -336,6 +400,7 @@ function buildableLegalReference(
         ]
       : []),
     `실현 건폐율 ${realizedBcrPct.toFixed(1)}%`,
+    `층판 균형도 ${(floorShape(selected).balance * 100).toFixed(1)}%`,
     "층별 법규 외곽선·이동·회전·층간 연결 통과",
     `주차 ${selected.calculation.parking.providedCars}/${selected.calculation.parking.requiredCars}대`,
   ];
@@ -345,12 +410,12 @@ function buildableLegalReference(
     id: `${selected.scenario.id}-legal-buildable`,
     name: "배치 가능 상한 참고안",
     description:
-      "법규 외곽선과 실제 배치·층간 연결을 통과한 후보 중 실현 용적률이 가장 높은 3D 비교안입니다. 산술 법정 용적률 상한과는 구분하며 주차는 별도 제약으로 남을 수 있습니다.",
+      "법규 외곽선과 실제 배치·층간 연결을 통과한 최고 실현 용적률 2% 범위 안에서, 지나치게 작은 상층과 불필요한 층수를 피한 3D 비교안입니다. 산술 법정 용적률 상한과는 구분하며 주차는 별도 제약으로 남을 수 있습니다.",
     origin: "algorithm-max",
     status: "saved",
     recommendation: enhanceMetadata(
       {
-        engineVersion: `${result.engineVersion}-legal-geometry-v2`,
+        engineVersion: `${result.engineVersion}-legal-geometry-v3-balanced-plates`,
         objective: "legal-ceiling",
         generatedAt: result.generatedAt,
         evaluatedCandidates: result.evaluatedCandidates,
@@ -392,9 +457,7 @@ export function analyzePlanningRecommendations(
     legalFarCapPct
   );
   const sharedPrimaryCandidate = Boolean(
-    safe &&
-      profit &&
-      recommendationCandidateKey(safe) === recommendationCandidateKey(profit)
+    recommendationsSharePhysicalPlan(safe, profit)
   );
 
   let combinedPrimary: PlanningScenario | null = null;
