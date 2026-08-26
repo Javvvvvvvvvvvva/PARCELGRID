@@ -23,6 +23,7 @@ import {
 import {
   applySpatialValidationToCalculation,
   calculatePlanningSpatialValidation,
+  type PlanningSpatialValidation,
 } from "@/lib/planning/scenario-spatial-validation";
 import {
   createBlankPlanningScenario,
@@ -369,21 +370,49 @@ function localParcelContext(
   return { parcelShape, frontEdge };
 }
 
+/**
+ * 공간 검증은 층별 총면적·층 형상·배치에만 좌우된다.
+ * 세대면적 옵션이 달라 unitCount만 바뀐 후보는 같은 3D 형상을 공유하므로
+ * 추천 한 번의 실행 안에서 동일한 기하 검증을 재사용한다.
+ */
+function spatialGeometryKey(scenario: PlanningScenario): string {
+  return JSON.stringify({
+    floors: scenario.floorPrograms.map((floor) => ({
+      level: floor.level,
+      floorHeightM: round(floor.floorHeightM, 3),
+      footprintScalePct: round(floor.footprintScalePct, 3),
+      northSetbackM: round(floor.northSetbackM, 3),
+      areaSqm: round(
+        floor.zones.reduce((sum, zone) => sum + Math.max(0, zone.areaSqm), 0),
+        3
+      ),
+    })),
+    placement: scenario.placement,
+  });
+}
+
 function evaluateCandidate(
   scenario: PlanningScenario,
   input: PlanningRecommendationEngineInput,
   context: PlanningCalculationContext,
   parcelShape: LocalPlanPoint[],
-  frontEdge: [LocalPlanPoint, LocalPlanPoint] | null
+  frontEdge: [LocalPlanPoint, LocalPlanPoint] | null,
+  spatialCache: Map<string, PlanningSpatialValidation | null>
 ): RecommendationCandidateEvaluation {
   const initial = calculatePlanningScenario(scenario, context);
-  const initialSpatial = calculatePlanningSpatialValidation(
-    input.parcel.boundary,
-    input.parcel.zoning,
-    scenario,
-    input.parcel.roads,
-    input.parcel.setback
-  );
+  const spatialKey = spatialGeometryKey(scenario);
+  let initialSpatial: PlanningSpatialValidation | null =
+    spatialCache.get(spatialKey) ?? null;
+  if (!spatialCache.has(spatialKey)) {
+    initialSpatial = calculatePlanningSpatialValidation(
+      input.parcel.boundary,
+      input.parcel.zoning,
+      scenario,
+      input.parcel.roads,
+      input.parcel.setback
+    );
+    spatialCache.set(spatialKey, initialSpatial);
+  }
   const firstMass = initialSpatial?.model.aboveGroundFloors.find(
     (floor) => floor.level === 1
   );
@@ -411,14 +440,8 @@ function evaluateCandidate(
     parking: { ...scenario.parking, providedCars: parkingLayout.capacityCars },
   };
   const base = calculatePlanningScenario(withParking, context);
-  const spatial = calculatePlanningSpatialValidation(
-    input.parcel.boundary,
-    input.parcel.zoning,
-    withParking,
-    input.parcel.roads,
-    input.parcel.setback
-  );
-  const calculation = applySpatialValidationToCalculation(base, spatial);
+  // providedCars만 달라졌으므로 층별 형상·배치 검증 결과는 그대로다.
+  const calculation = applySpatialValidationToCalculation(base, initialSpatial);
   const applied = applyPlanningScenarioCalculation(withParking, calculation);
   applied.status = "saved";
 
@@ -544,6 +567,7 @@ export function generatePlanningRecommendations(
   );
   const evaluations: RecommendationCandidateEvaluation[] = [];
   const profileWarnings = new Set<string>();
+  const spatialCache = new Map<string, PlanningSpatialValidation | null>();
 
   for (let floors = 1; floors <= maxCandidateFloors(input.parcel); floors += 1) {
     const profile = buildSteppedEnvelopeProfile(input.parcel, floors);
@@ -562,7 +586,14 @@ export function generatePlanningRecommendations(
           });
           if (candidate) {
             evaluations.push(
-              evaluateCandidate(candidate, input, context, parcelShape, frontEdge)
+              evaluateCandidate(
+                candidate,
+                input,
+                context,
+                parcelShape,
+                frontEdge,
+                spatialCache
+              )
             );
           }
         }

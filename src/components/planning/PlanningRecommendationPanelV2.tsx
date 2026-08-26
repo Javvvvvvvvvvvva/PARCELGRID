@@ -6,6 +6,7 @@ import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
   calculateAcquisitionCapacity,
   generatePlanningRecommendationsV2,
+  recommendationsSharePhysicalPlan,
   type PlanningRecommendationAnalysis,
   type RecommendationProfitMode,
   type RecommendationRejectionSummary,
@@ -345,14 +346,33 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
       (scenario) =>
         scenario.recommendation?.objective === "architectural-feasibility"
     ) ?? null;
-  const combined = Boolean(
-    safe?.recommendation?.alsoSelectedFor?.includes("profit")
-  );
-  const profit = combined
-    ? null
-    : recommendations.find(
+  const storedProfit =
+    recommendations.find(
         (scenario) => scenario.recommendation?.objective === "profit"
       ) ?? null;
+  const combined = Boolean(
+    safe?.recommendation?.alsoSelectedFor?.includes("profit") ||
+      recommendationsSharePhysicalPlan(safe, storedProfit)
+  );
+  const profit = combined ? null : storedProfit;
+  const displayedSafe = useMemo(() => {
+    if (!combined || !safe?.recommendation) return safe;
+    const profitMetadata = storedProfit?.recommendation;
+    return {
+      ...safe,
+      recommendation: {
+        ...safe.recommendation,
+        alsoSelectedFor: ["profit" as const],
+        profitSelectionMode:
+          profitMetadata?.profitSelectionMode ??
+          safe.recommendation.profitSelectionMode,
+        reasons: [
+          ...safe.recommendation.reasons,
+          ...(profitMetadata?.reasons ?? []),
+        ].filter((reason, index, all) => all.indexOf(reason) === index),
+      },
+    };
+  }, [combined, safe, storedProfit]);
   const max =
     recommendations.find(
       (scenario) => scenario.recommendation?.objective === "legal-ceiling"
@@ -372,7 +392,7 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
   const calculations = useMemo(() => {
     const result = new Map<string, PlanningScenarioCalculation>();
     if (!parcel) return result;
-    for (const scenario of [safe, profit, max]) {
+    for (const scenario of [displayedSafe, profit, max]) {
       if (!scenario) continue;
       const base = calculatePlanningScenario(scenario, {
         parcel: {
@@ -398,9 +418,10 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
       result.set(scenario.id, applySpatialValidationToCalculation(base, spatial));
     }
     return result;
-  }, [assumptions, data?.meta.lastSyncedAt, max, parcel, profit, safe]);
+  }, [assumptions, data?.meta.lastSyncedAt, displayedSafe, max, parcel, profit]);
 
-  const persistedMetadata = safe?.recommendation ?? profit?.recommendation ?? max?.recommendation;
+  const persistedMetadata =
+    displayedSafe?.recommendation ?? profit?.recommendation ?? max?.recommendation;
   const persistedRejectionSummary: RecommendationRejectionSummary | null =
     persistedMetadata?.rejectedCandidates != null
       ? {
@@ -587,8 +608,10 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
           className="recommendation-card-grid-v2"
         >
           <RecommendationCard
-            scenario={safe}
-            calculation={safe ? calculations.get(safe.id) ?? null : null}
+            scenario={displayedSafe}
+            calculation={
+              displayedSafe ? calculations.get(displayedSafe.id) ?? null : null
+            }
             selected={safe?.id === selectedId}
             combined={combined}
             onOpen={() => openScenario(safe)}

@@ -6,6 +6,7 @@ import {
   isLegalGeometryCandidate,
   legalGeometryFailureCodes,
   recommendationCandidateKey,
+  recommendationsSharePhysicalPlan,
   summarizeRecommendationRejections,
 } from "@/lib/planning/recommendation-analysis";
 import { generatePlanningRecommendations } from "@/lib/planning/recommendation-engine";
@@ -191,7 +192,7 @@ describe("Stage 2 recommendation result analysis", () => {
     expect(result.legalGeometryCandidateCount).toBeGreaterThan(0);
     expect(result.arithmeticLegalFarCapPct).toBe(200);
     expect(legal?.name).toBe("배치 가능 상한 참고안");
-    expect(legal?.recommendation?.engineVersion).toContain("legal-geometry-v2");
+    expect(legal?.recommendation?.engineVersion).toContain("legal-geometry-v3");
     expect(legal?.recommendation?.reasons.join(" ")).toContain(
       "배치 가능 실현 용적률"
     );
@@ -225,7 +226,7 @@ describe("Stage 2 recommendation result analysis", () => {
     ).toBe(false);
   });
 
-  it("uses the highest realized FAR only among geometry-valid candidates", () => {
+  it("keeps the balanced legal reference within 2% of the legal FAR cap", () => {
     const raw = generatePlanningRecommendations(input());
     const result = generatePlanningRecommendationsV2(input());
     const valid = raw.evaluations.filter(isLegalGeometryCandidate);
@@ -243,12 +244,94 @@ describe("Stage 2 recommendation result analysis", () => {
     );
 
     expect(selected).toBeDefined();
-    expect(selected?.calculation.metrics.preliminaryFarPct).toBeCloseTo(
-      expectedFar,
-      6
+    expect(selected?.calculation.metrics.preliminaryFarPct).toBeGreaterThanOrEqual(
+      expectedFar - input().parcel.maxFARPct * 0.02
     );
     expect(
       result.legalCeilingReference?.recommendation?.warnings.join(" ")
     ).toContain("산술 법정 상한 자체가 아니라");
+
+    const source = valid.find(
+      (candidate) =>
+        candidate.scenario.floorPrograms.filter((floor) => floor.level > 0)
+          .length >= 2
+    );
+    expect(source).toBeDefined();
+    if (!source) return;
+    const template = source.scenario.floorPrograms.find(
+      (floor) => floor.level > 0
+    )!;
+    const zoneTemplate = template.zones[0];
+    const candidate = (
+      id: string,
+      floorAreas: number[],
+      farPct: number
+    ) => ({
+      ...source,
+      scenario: {
+        ...source.scenario,
+        id,
+        parking: { ...source.scenario.parking, strategy: "surface" as const },
+        floorPrograms: floorAreas.map((areaSqm, index) => ({
+          ...template,
+          id: `${id}-floor-${index + 1}`,
+          level: index + 1,
+          label: `${index + 1}층`,
+          zones: [
+            {
+              ...zoneTemplate,
+              id: `${id}-zone-${index + 1}`,
+              areaSqm,
+            },
+          ],
+        })),
+      },
+      calculation: {
+        ...source.calculation,
+        metrics: {
+          ...source.calculation.metrics,
+          aboveGroundFloors: floorAreas.length,
+          preliminaryFarPct: farPct,
+        },
+      },
+    });
+    const sliverTop = candidate("sliver-top", [100, 15], 200);
+    const balanced = candidate("balanced-plates", [100, 90], 198);
+    const synthetic = analyzePlanningRecommendations(
+      {
+        ...raw,
+        evaluations: [sliverTop, balanced],
+        evaluatedCandidates: 2,
+        eligibleCandidates: 2,
+      },
+      200
+    );
+
+    expect(synthetic.legalCeilingReference?.id).toContain("balanced-plates");
+    expect(
+      synthetic.legalCeilingReference?.recommendation?.warnings.join(" ")
+    ).toContain("지나치게 작은 상층");
+  });
+
+  it("recognizes persisted safe and profit records with different IDs as one plan", () => {
+    const raw = generatePlanningRecommendations(input());
+    const safe = raw.architecturalFeasibility;
+    expect(safe).not.toBeNull();
+    if (!safe) return;
+
+    const storedProfit = {
+      ...safe,
+      id: "persisted-profit-id",
+      origin: "algorithm-balanced" as const,
+      recommendation: safe.recommendation
+        ? {
+            ...safe.recommendation,
+            objective: "profit" as const,
+            alsoSelectedFor: undefined,
+          }
+        : undefined,
+    };
+
+    expect(recommendationsSharePhysicalPlan(safe, storedProfit)).toBe(true);
   });
 });
