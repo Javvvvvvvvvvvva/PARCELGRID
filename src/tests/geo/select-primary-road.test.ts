@@ -30,6 +30,7 @@ describe("selectPrimaryRoad", () => {
     expect(selection?.roadIndex).toBe(0);
     expect(selection?.boundarySegmentIndex).toBe(1);
     expect(selection?.alignment).toBeGreaterThan(0.99);
+    expect(selection?.outwardDot).toBeGreaterThan(0.99);
     expect(selection?.distanceM).toBeCloseTo(2, 5);
   });
 
@@ -53,6 +54,42 @@ describe("selectPrimaryRoad", () => {
 
     expect(selection?.roadIndex).toBe(0);
     expect(selection?.alignment).toBeGreaterThan(0.99);
+  });
+
+  it("rejects a centerline running through the parcel interior", () => {
+    const selection = selectPrimaryRoad(parcel, [
+      {
+        name: "잘못된 내부 중심선",
+        points: [
+          { x: 0, z: -20 },
+          { x: 0, z: 20 },
+        ],
+      },
+    ]);
+
+    expect(selection).toBeNull();
+  });
+
+  it("chooses the exterior parallel road when an internal line is also present", () => {
+    const selection = selectPrimaryRoad(parcel, [
+      {
+        name: "내부선",
+        points: [
+          { x: 0, z: -20 },
+          { x: 0, z: 20 },
+        ],
+      },
+      {
+        name: "실제 접도 후보",
+        points: [
+          { x: 7, z: -20 },
+          { x: 7, z: 20 },
+        ],
+      },
+    ]);
+
+    expect(selection?.roadIndex).toBe(1);
+    expect(selection?.boundarySegmentIndex).toBe(1);
   });
 
   it("returns null when every road is outside the frontage search distance", () => {

@@ -128,6 +128,19 @@ describe("Stage 2 planning recommendation engine", () => {
     }
   });
 
+  it("does not let design-margin inputs change the legal recommendation envelope", () => {
+    const base = input();
+    const conservativeDesignMargin = {
+      ...base.parcel,
+      setback: { road: 5, side: 4, rear: 6 },
+    };
+
+    const normalProfile = buildSteppedEnvelopeProfile(base.parcel, 5);
+    const marginProfile = buildSteppedEnvelopeProfile(conservativeDesignMargin, 5);
+
+    expect(marginProfile.capacitiesSqm).toEqual(normalProfile.capacitiesSqm);
+  });
+
   it("selects the legal ceiling only from geometry-feasible stepped candidates", () => {
     const result = generatePlanningRecommendations(input());
     const geometryEligible = result.evaluations.filter(
