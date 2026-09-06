@@ -1,7 +1,7 @@
 /**
  * POST /api/projects/dynamic
  *
- * 본인 부지로 시나리오 4종 생성 + 계산 + 실거래 가져오기.
+ * 본인 부지에 맞는 시나리오 생성 + 계산 + 실거래 가져오기.
  *
  * 흐름:
  *   1. generateScenariosForParcel(parcel) → Scenario[]
@@ -15,6 +15,7 @@ import { computeProject } from "@/lib/services/compute-project";
 import { fetchMolitRange, type MolitTransaction } from "@/lib/integrations/molit";
 import { estimateSalePriceFromComps } from "@/lib/finance/sale-price-from-comps";
 import type { Parcel } from "@/lib/finance/types";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -34,6 +35,129 @@ interface DynamicBody {
   parcelDong?: string;
 }
 
+const coordinateSchema = z.tuple([
+  z.number().finite().min(-180).max(180),
+  z.number().finite().min(-90).max(90),
+]);
+
+const sourceMetadataSchema = z
+  .object({
+    sourceName: z.string().trim().min(1).max(300),
+    sourceRef: z.string().trim().max(2_000).optional(),
+    asOf: z.string().max(40).optional(),
+    retrievedAt: z.string().max(40).optional(),
+    checkedBy: z.string().trim().max(120).optional(),
+    checkedRole: z.string().trim().max(120).optional(),
+    note: z.string().trim().max(2_000).optional(),
+  })
+  .passthrough();
+
+const constraintEvidenceSchema = sourceMetadataSchema.extend({
+  value: z.number().finite().nonnegative().nullable(),
+  unit: z.enum(["%", "m", "층"]),
+  status: z.enum([
+    "unknown",
+    "reference-only",
+    "user-entered",
+    "source-backed",
+    "expert-approved",
+  ]),
+  referenceValue: z.number().finite().nonnegative().nullable().optional(),
+  referenceSourceName: z.string().trim().max(300).optional(),
+  referenceSourceRef: z.string().trim().max(2_000).optional(),
+});
+
+const regulatoryConstraintsSchema = z
+  .object({
+    version: z.literal("regulatory-provenance-2026.1"),
+    retrievedAt: z.string().max(40),
+    zoningSource: sourceMetadataSchema.extend({
+      status: z.enum(["source-backed", "unknown"]),
+    }),
+    far: constraintEvidenceSchema,
+    bcr: constraintEvidenceSchema,
+    height: constraintEvidenceSchema,
+    floors: constraintEvidenceSchema,
+  })
+  .passthrough();
+
+const buildingLookupSchema = z
+  .object({
+    hasBuilding: z.boolean(),
+    buildings: z.array(z.record(z.unknown())).max(500),
+    totalBuildingArea: z.number().finite().nonnegative(),
+    oldestApprovalDate: z.string().max(40),
+    maxAgeYears: z.number().finite().nonnegative(),
+    averageAgeYears: z.number().finite().nonnegative(),
+    redevelopmentSignal: z.enum(["vacant", "rebuild", "renovate", "keep"]),
+    signalLabel: z.string().max(200),
+    signalReasoning: z.string().max(2_000),
+  })
+  .passthrough();
+
+const parcelSchema = z
+  .object({
+    id: z.string().trim().min(1).max(128),
+    address: z.string().trim().min(1).max(200),
+    addressRoad: z.string().max(200),
+    lat: z.number().finite().min(-90).max(90).optional(),
+    lng: z.number().finite().min(-180).max(180).optional(),
+    lotArea: z.number().finite().positive().max(100_000_000),
+    boundary: z.array(coordinateSchema).min(3).max(20_000).optional(),
+    roads: z
+      .array(
+        z.object({
+          name: z.string().max(200).nullable(),
+          points: z.array(coordinateSchema).min(2).max(5_000),
+        }),
+      )
+      .max(500)
+      .optional(),
+    zoning: z.string().trim().min(1).max(200),
+    zoneCode: z.string().max(40),
+    maxFAR: z.number().finite().positive().max(10_000),
+    maxBCR: z.number().finite().positive().max(100),
+    heightLimit: z.number().finite().nonnegative().max(10_000),
+    regulatoryConstraints: regulatoryConstraintsSchema.optional(),
+    overlays: z
+      .array(
+        z.object({
+          code: z.string().max(100),
+          name: z.string().max(300),
+          conflict: z.string().max(2_000),
+        }),
+      )
+      .max(200)
+      .optional(),
+    setback: z.object({
+      road: z.number().finite().nonnegative().max(1_000),
+      side: z.number().finite().nonnegative().max(1_000),
+      rear: z.number().finite().nonnegative().max(1_000),
+    }),
+    currentBuilding: buildingLookupSchema.nullable().optional(),
+    landPrice: z.number().finite().nonnegative().max(1_000_000_000_000),
+    estMarketPrice: z.number().finite().nonnegative().max(1_000_000_000_000),
+    acquired: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    acquiredPrice: z.number().finite().positive().max(1_000_000_000_000),
+    demolitionCost: z
+      .number()
+      .finite()
+      .nonnegative()
+      .max(1_000_000_000_000)
+      .optional(),
+  })
+  .passthrough()
+  .refine(({ lat, lng }) => (lat == null) === (lng == null), {
+    message: "lat과 lng는 함께 입력해야 합니다.",
+    path: ["lat"],
+  });
+
+const dynamicBodySchema = z.object({
+  parcel: parcelSchema,
+  lawdCd: z.string().regex(/^\d{5}$/).optional(),
+  parcelDong: z.string().trim().max(40).optional(),
+});
+
 export async function POST(req: NextRequest) {
   let body: DynamicBody;
   try {
@@ -49,31 +173,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { parcel, lawdCd, parcelDong } = body;
-  if (!parcel) {
+  const parsed = dynamicBodySchema.safeParse(body);
+  if (!parsed.success) {
     return NextResponse.json(
       {
-        code: "PARCEL_REQUIRED",
-        error: "계산할 부지 정보가 없습니다.",
+        code: "INVALID_PROJECT_INPUT",
+        error: "프로젝트 계산 입력값이 올바르지 않습니다.",
         nextAction: "주소 등록 단계에서 부지를 다시 조회하세요.",
+        details: parsed.error.flatten(),
       },
-      { status: 400 },
+      { status: 422 },
     );
   }
+  body = parsed.data as DynamicBody;
 
-  if (!parcel.lotArea || !parcel.zoning || !parcel.acquiredPrice) {
-    return NextResponse.json(
-      {
-        code: "PARCEL_INPUT_INCOMPLETE",
-        error: "대지면적·용도지역·검토 인수가가 모두 필요합니다.",
-        nextAction: "주소 등록 화면에서 총 취득대금을 입력하세요.",
-      },
-      { status: 400 }
-    );
-  }
+  const { parcel, lawdCd, parcelDong } = body;
 
   try {
-    // 1. 시나리오 4종 생성
+    // 1. 용도지역과 부지 규모에 맞는 시나리오 생성
     const scenarios = generateScenariosForParcel(parcel);
 
     if (scenarios.length === 0) {

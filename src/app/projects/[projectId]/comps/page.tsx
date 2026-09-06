@@ -10,10 +10,11 @@
  */
 
 import { use, useEffect, useMemo, useState } from "react";
-import { KakaoMap, type CompMarker, type StationMarker } from "@/components/ui/KakaoMap";
+import { KakaoMap, type CompMarker } from "@/components/ui/KakaoMap";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
+import { useNearbyStations } from "@/lib/hooks/use-nearby-stations";
 
 const SQM_PER_PYEONG = 3.305785;
 
@@ -81,22 +82,11 @@ export default function CompsPage({
   }, [filtered]);
 
   // 주변 지하철역 (역세권)
-  const [stations, setStations] = useState<StationMarker[]>([]);
-  useEffect(() => {
-    if (parcel?.lat == null || parcel?.lng == null) return;
-    let cancelled = false;
-    fetch(`/api/parcels/nearby-stations?lat=${parcel.lat}&lng=${parcel.lng}&radius=1000`)
-      .then((r) => r.json())
-      .then((res: { stations?: StationMarker[] }) => {
-        if (!cancelled && res.stations) setStations(res.stations);
-      })
-      .catch(() => {
-        if (!cancelled) setStations([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [parcel?.lat, parcel?.lng]);
+  const {
+    stations,
+    status: stationLookupStatus,
+    errorMessage: stationError,
+  } = useNearbyStations(parcel?.lat, parcel?.lng);
 
   // 실거래 지오코딩 → 지도 마커 (주소 → 좌표)
   const [compMarkers, setCompMarkers] = useState<CompMarker[]>([]);
@@ -166,7 +156,7 @@ export default function CompsPage({
   const selected = filtered.find((c) => c._key === selectedId) ?? null;
 
   return (
-    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="comps-page" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
       {/* 필터바 */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <Select label="유형" value={type} onChange={setType}
@@ -180,7 +170,7 @@ export default function CompsPage({
                 padding: "6px 12px", fontSize: 12.5, cursor: "pointer", border: "none",
                 borderLeft: i > 0 ? "1px solid var(--border)" : "none",
                 background: region === v ? "var(--accent)" : "var(--bg-elev)",
-                color: region === v ? "var(--accent-fg, #fff)" : "var(--fg-muted)",
+                color: region === v ? "var(--fg-onaccent)" : "var(--fg-muted)",
                 fontWeight: region === v ? 600 : 400,
               }}>
               {label}
@@ -195,22 +185,39 @@ export default function CompsPage({
 
       {/* 실거래 지도 (대지 중심 + 실거래 점) */}
       {parcel?.lat != null && parcel?.lng != null && (
-        <KakaoMap
-          centerLat={parcel.lat}
-          centerLng={parcel.lng}
-          subjectLabel={parcel.address?.split(" ").slice(-2).join(" ") ?? "대상 대지"}
-          subjectPPP={subjectPPP}
-          comps={compMarkers}
-          stations={stations}
-          selectedId={selectedId}
-          onSelectComp={setSelectedId}
-          height={400}
-        />
+        <>
+          {stationLookupStatus === "unavailable" && (
+            <div
+              role="status"
+              style={{
+                padding: "9px 11px",
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                background: "var(--warn-soft)",
+                color: "var(--warn-fg)",
+                fontSize: 11.5,
+              }}
+            >
+              역세권 조회 불가 · {stationError ?? "카카오 REST API 설정을 확인하세요."}
+            </div>
+          )}
+          <KakaoMap
+            centerLat={parcel.lat}
+            centerLng={parcel.lng}
+            subjectLabel={parcel.address?.split(" ").slice(-2).join(" ") ?? "대상 대지"}
+            subjectPPP={subjectPPP}
+            comps={compMarkers}
+            stations={stations}
+            selectedId={selectedId}
+            onSelectComp={setSelectedId}
+            height={400}
+          />
+        </>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 480px", gap: 16, alignItems: "start" }}>
+      <div className="comps-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 480px", gap: 16, alignItems: "start" }}>
         {/* 좌측 테이블 */}
-        <div className="ui-panel" style={{ overflow: "hidden" }}>
+        <div className="ui-panel comps-table-scroll" style={{ overflow: "hidden" }}>
           <table className="ui-table">
             <thead>
               <tr>
@@ -242,7 +249,7 @@ export default function CompsPage({
         </div>
 
         {/* 우측: 산점도 + 상세 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 16 }}>
+        <div className="comps-side" style={{ display: "flex", flexDirection: "column", gap: 14, position: "sticky", top: 16 }}>
           <div className="ui-panel">
             <div className="ui-panel__title">평당가 분포 · 최근 거래</div>
             <TypeDistChart comps={filtered} subjectPPP={subjectPPP}

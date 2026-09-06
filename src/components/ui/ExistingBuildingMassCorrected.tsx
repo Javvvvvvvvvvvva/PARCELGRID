@@ -820,7 +820,7 @@ export function ExistingBuildingMass({
       }}
     >
       <Canvas
-        shadows
+        shadows="basic"
         dpr={[1, 1.5]}
         camera={{ position: [0, 30, 20], fov: 35 }}
         style={{ cursor: viewMode === "3d" ? "grab" : "default", touchAction: "none" }}

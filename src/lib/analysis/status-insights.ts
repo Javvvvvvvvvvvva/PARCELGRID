@@ -5,6 +5,8 @@ import { computeExistingRatios, headroomPct } from "./existing-building-metrics"
 import { analyzeOrientation, type Direction } from "@/lib/geo/orientation";
 import { analyzeFrontage } from "@/lib/geo/road-frontage";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
+import { getBuildingRegistryStatus } from "./status-summary";
+import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
 
 export interface StationSummaryInput {
   name: string;
@@ -173,14 +175,21 @@ export function buildDataReadinessInsight(
   comps: CompVM[],
   stations: StationSummaryInput[]
 ): DataReadinessInsight {
-  const hasBuilding = Boolean(parcel.currentBuilding?.hasBuilding);
-  const hasRegistryResponse = parcel.currentBuilding != null;
+  const buildingStatus = getBuildingRegistryStatus(parcel.currentBuilding);
+  const hasBuilding = buildingStatus === "present";
+  const hasRegistryResponse = buildingStatus !== "unknown";
   const geometry = getExistingBuildingGeometry(parcel.currentBuilding);
   const actualGeometry = geometry?.status === "matched" && geometry.footprints.length > 0;
   const knownViolationCount =
     geometry?.footprints.filter((footprint) => footprint.violationStatus !== "unknown").length ?? 0;
   const violationYesCount =
     geometry?.footprints.filter((footprint) => footprint.violationStatus === "yes").length ?? 0;
+  const constraints = parcel.regulatoryConstraints;
+  const zoningSourceBacked = constraints?.zoningSource.status === "source-backed";
+  const regulationDecisionGrade =
+    regulatoryConstraintIsDecisionGrade(constraints?.far) &&
+    regulatoryConstraintIsDecisionGrade(constraints?.bcr);
+  const hasRegulationReference = parcel.maxFAR > 0 && parcel.maxBCR > 0;
 
   const items: DataCheckItem[] = [
     {
@@ -199,9 +208,30 @@ export function buildDataReadinessInsight(
       source: "V월드 연속지적도",
     },
     {
-      label: "용도지역·법정 상한",
-      status: parcel.zoning && parcel.maxFAR > 0 && parcel.maxBCR > 0 ? "available" : "missing",
-      source: "V월드 토지이용계획",
+      label: "용도지역",
+      status: zoningSourceBacked
+        ? "available"
+        : parcel.zoning
+          ? "derived"
+          : "missing",
+      source: zoningSourceBacked
+        ? constraints.zoningSource.sourceName
+        : "용도지역 조회값 · 원문 미확인",
+      note: zoningSourceBacked ? undefined : "원문 출처와 기준일 확인 필요",
+    },
+    {
+      label: "건폐율·용적률 상한",
+      status: regulationDecisionGrade
+        ? "available"
+        : hasRegulationReference
+          ? "derived"
+          : "missing",
+      source: regulationDecisionGrade
+        ? `${constraints?.bcr.sourceName ?? "건폐율 원문"} · ${constraints?.far.sourceName ?? "용적률 원문"}`
+        : "국토계획법 시행령 전국 범위 참고",
+      note: regulationDecisionGrade
+        ? undefined
+        : "관할 조례·지구단위계획 원문 확인 전에는 필지별 법정 상한이 아님",
     },
     {
       label: "기존 건물 면적·층수",
@@ -295,12 +325,51 @@ export function buildDataReadinessInsight(
 
 export function buildExistingReviewOptions(parcel: Parcel): ExistingReviewOption[] {
   const main = mainBuilding(parcel);
+  const buildingStatus = getBuildingRegistryStatus(parcel.currentBuilding);
   const age = parcel.currentBuilding?.maxAgeYears ?? main?.ageYears ?? null;
   const ratios = main ? computeExistingRatios(main, parcel.lotArea) : null;
   const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
   const oldBuilding = age != null && age >= 30;
   const veryOldBuilding = age != null && age >= 40;
   const highFarHeadroom = farHeadroom != null && farHeadroom >= parcel.maxFAR * 0.3;
+
+  if (buildingStatus === "unknown") {
+    return [
+      {
+        id: "keep",
+        title: "기존 건물 유지",
+        status: "자료 확인 필요",
+        tone: "warning",
+        summary: "건축물대장 조회 결과가 없어 유지 가능성을 아직 평가할 수 없습니다.",
+        points: ["기존 건물 유무와 대장 일치 여부 미확인"],
+        costImpact: "건물 현황을 확인하기 전에는 유지비와 보수비를 산정하지 않습니다.",
+        requiredChecks: ["건축물대장 원문", "현장 건물 존재 여부", "임대차·사용 현황"],
+        nextStep: "건축물대장과 현장 현황을 확보한 뒤 유지안을 다시 평가합니다.",
+      },
+      {
+        id: "renovate",
+        title: "리모델링",
+        status: "자료 확인 필요",
+        tone: "warning",
+        summary: "대상 건물의 구조·면적·노후도를 알 수 없어 리모델링안을 평가할 수 없습니다.",
+        points: ["건물 구조·면적·사용승인일 미확인"],
+        costImpact: "대상 건물과 공사 범위를 확인하기 전에는 리모델링 비용을 산정하지 않습니다.",
+        requiredChecks: ["건축물대장 원문", "구조·설비 상태", "위반건축물 여부"],
+        nextStep: "대장과 현장조사를 확보한 뒤 리모델링 범위와 비용을 검토합니다.",
+      },
+      {
+        id: "rebuild",
+        title: "신축",
+        status: "대장 확인 선행",
+        tone: "warning",
+        summary: "기존 건물 유무가 확인되지 않아 철거 범위와 신축 착수 조건을 확정할 수 없습니다.",
+        points: ["철거 대상·멸실 상태 미확인", "Stage 2 가능 규모는 예비 검토만 가능"],
+        costImpact: "철거비, 명도비, 석면 조사비가 누락될 수 있어 취득 판단에 사용하지 않습니다.",
+        requiredChecks: ["건축물대장 원문", "현장 건물 존재 여부", "멸실·위반·임차권 상태"],
+        nextStep: "기존 건물 상태를 확인한 뒤 Stage 2 배치안과 Stage 3 사업비를 갱신합니다.",
+      },
+    ];
+  }
 
   if (!main) {
     return [

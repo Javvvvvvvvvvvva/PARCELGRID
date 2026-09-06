@@ -27,9 +27,10 @@ import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui
 import { AddressAutocomplete } from "@/components/ui/AddressAutocomplete";
 import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
-import type { BuildingInfo, RedevelopmentSignal } from "@/lib/integrations/molit-building";
+import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
 import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
+import type { StoredParcel } from "@/lib/hooks/use-dynamic-project";
 
 /* ─────────────────────────── 타입 ─────────────────────────── */
 
@@ -67,16 +68,7 @@ interface LookupResult {
   regulatoryConstraints: RegulatoryConstraintSet;
   overlays: Array<{ code: string; name: string; conflict: string }>;
 
-  currentBuilding: {
-    buildings: BuildingInfo[];
-    hasBuilding: boolean;
-    totalBuildingArea: number;
-    redevelopmentSignal: RedevelopmentSignal;
-    signalLabel: string;
-    signalReasoning: string;
-    oldestApprovalDate?: string;
-    maxAgeYears?: number;
-  } | null;
+  currentBuilding: BuildingLookupResult | null;
 }
 
 interface EstimateResult extends AcquisitionEstimateSnapshot {
@@ -187,7 +179,7 @@ export default function NewParcelPage() {
   function handleStart() {
     if (!parcel || !acquiredPrice) return;
 
-    const storedParcel = {
+    const storedParcel: StoredParcel = {
       id: parcel.pnu,
       address: parcel.address,
       addressRoad: parcel.addressRoad,

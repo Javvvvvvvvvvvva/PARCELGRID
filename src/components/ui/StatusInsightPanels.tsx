@@ -10,6 +10,7 @@ import type {
   RoadOrientationInsight,
   ReviewTone,
 } from "@/lib/analysis/status-insights";
+import type { NearbyStationsStatus } from "@/lib/hooks/use-nearby-stations";
 import { num } from "@/lib/utils/format";
 
 export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsight }) {
@@ -210,9 +211,33 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
   );
 }
 
-export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
+export function MarketSnapshotPanel({
+  insight,
+  stationLookupStatus = "ready",
+}: {
+  insight: MarketInsight;
+  stationLookupStatus?: NearbyStationsStatus;
+}) {
   const median = insight.sameDongMedianPricePerPyeong ?? insight.medianPricePerPyeong;
   const medianLabel = insight.sameDongMedianPricePerPyeong != null ? "같은 동 중앙값" : "수집 거래 중앙값";
+  const stationValue =
+    stationLookupStatus === "loading"
+      ? "조회 중"
+      : stationLookupStatus === "unavailable"
+        ? "조회 불가"
+        : stationLookupStatus === "idle"
+          ? "좌표 없음"
+        : insight.nearestStation?.name ?? "결과 없음";
+  const stationNote =
+    stationLookupStatus === "loading"
+      ? "카카오 장소 검색 연결 중"
+      : stationLookupStatus === "unavailable"
+        ? "카카오 REST API 설정 확인 필요"
+        : stationLookupStatus === "idle"
+          ? "대상지 좌표 확인 필요"
+        : insight.nearestStation
+          ? `직선거리 ${num(insight.nearestStation.distanceM)}m`
+          : "1km 내 검색 결과 없음";
   return (
     <div
       style={{
@@ -237,8 +262,8 @@ export function MarketSnapshotPanel({ insight }: { insight: MarketInsight }) {
       />
       <MarketMetric
         label="가장 가까운 역"
-        value={insight.nearestStation ? insight.nearestStation.name : "조회 없음"}
-        sub={insight.nearestStation ? `직선거리 ${num(insight.nearestStation.distanceM)}m` : "1km 내 결과 없음"}
+        value={stationValue}
+        sub={stationNote}
       />
       {insight.subjectPricePerPyeong != null && (
         <MarketMetric

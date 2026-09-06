@@ -139,6 +139,8 @@ describe("Stage 1 status insights", () => {
     expect(insight.items.find((item) => item.label === "기존 주차대수")?.status).toBe("missing");
     expect(insight.items.find((item) => item.label === "위반건축물 여부")?.status).toBe("missing");
     expect(insight.items.find((item) => item.label === "전면 도로 방향")?.status).toBe("derived");
+    expect(insight.items.find((item) => item.label === "건폐율·용적률 상한"))
+      .toMatchObject({ status: "derived" });
   });
 
   it("keeps rebuild as a preliminary option, not a final recommendation", () => {
@@ -151,5 +153,21 @@ describe("Stage 1 status insights", () => {
     expect(rebuild?.costImpact).toContain("철거");
     expect(rebuild?.requiredChecks).toContain("Stage 2 실제 배치·일조·주차 검증");
     expect(rebuild?.nextStep).toContain("Stage 3");
+  });
+
+  it("does not treat a missing registry response as confirmed vacant land", () => {
+    const parcel = sampleParcel();
+    parcel.currentBuilding = null;
+
+    const readiness = buildDataReadinessInsight(parcel, [], []);
+    const options = buildExistingReviewOptions(parcel);
+
+    expect(
+      readiness.items.find((item) => item.label === "기존 건물 면적·층수"),
+    ).toMatchObject({ status: "missing", note: "조회 실패 가능성 확인 필요" });
+    expect(options.every((option) => option.status.includes("확인"))).toBe(true);
+    expect(options.find((option) => option.id === "rebuild")?.points).not.toContain(
+      "등록 건물 없음",
+    );
   });
 });

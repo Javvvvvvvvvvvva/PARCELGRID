@@ -56,6 +56,7 @@ export function Panel({
     >
       {hasHeader && (
         <header
+          className="ui-panel-header"
           style={{
             display: "flex",
             alignItems: "center",
@@ -67,6 +68,7 @@ export function Panel({
         >
           {title != null && (
             <span
+              className="ui-panel-header__title"
               style={{
                 fontSize: "var(--t-xs)",
                 fontWeight: 600,
@@ -79,6 +81,7 @@ export function Panel({
           )}
           {(source != null || actions != null) && (
             <span
+              className="ui-panel-header__meta"
               style={{
                 marginLeft: "auto",
                 display: "flex",
@@ -148,7 +151,7 @@ export function SectionTitle({
           style={{
             fontSize: size === "lg" ? "var(--t-xl)" : "var(--t-lg)",
             fontWeight: 600,
-            letterSpacing: "-0.01em",
+            letterSpacing: 0,
             margin: 0,
           }}
         >

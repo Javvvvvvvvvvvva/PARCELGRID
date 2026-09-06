@@ -9,6 +9,7 @@ import { TopBar } from "@/components/ui/TopBar";
 import { WorkRail } from "@/components/ui/WorkRail";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
 
 interface ProjectLayoutProps {
   children: React.ReactNode;
@@ -174,16 +175,37 @@ function ProjectShell({
     );
   }
 
-  const crumb = makeCrumb(pathname, data.parcel.address.split(" ").pop() ?? "");
+  const parcelLabel = data.parcel.address.split(" ").pop() ?? "";
+  const crumb = makeCrumb(
+    pathname,
+    projectId === DEMO_PROJECT_ID ? `${parcelLabel} · 데모` : parcelLabel,
+  );
 
   return (
     <div className="ui-shell app" style={{ height: "100vh" }}>
       <TopBar
         crumb={crumb}
         right={
-          <Link href="/system/readiness" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
-            환경 점검
-          </Link>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {projectId === DEMO_PROJECT_ID && (
+              <span
+                style={{
+                  padding: "3px 6px",
+                  border: "1px solid var(--warn)",
+                  borderRadius: 4,
+                  background: "var(--warn-soft)",
+                  color: "var(--warn-fg)",
+                  fontSize: 10,
+                  fontWeight: 650,
+                }}
+              >
+                검증용 예시 데이터
+              </span>
+            )}
+            <Link href="/system/readiness" style={{ color: "var(--fg-muted)", fontSize: 10 }}>
+              환경 점검
+            </Link>
+          </div>
         }
       />
       <div style={{ display: "flex", minHeight: 0, flex: 1 }}>

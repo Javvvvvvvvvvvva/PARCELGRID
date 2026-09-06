@@ -314,7 +314,7 @@ export default function EnvelopePage({
         .studio-flow-title h1 {
           margin: 0;
           font-size: clamp(19px, 2vw, 27px);
-          letter-spacing: -0.035em;
+          letter-spacing: 0;
         }
         .studio-flow-title p {
           margin: 6px 0 0;
@@ -441,7 +441,7 @@ export default function EnvelopePage({
         .section-intro h2 {
           margin: 0;
           font-size: 19px;
-          letter-spacing: -0.025em;
+          letter-spacing: 0;
         }
         .section-intro p {
           margin: 5px 0 0;

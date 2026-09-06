@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
 
 /**
  * 홈 페이지. PARCELGRID 진입점.
  *
- * "새 부지 분석"으로 /projects/new로 보내거나,
- * 데모용 sample 프로젝트로 보낼 수 있음.
+ * "새 부지 분석"으로 /projects/new로 보내거나 검증된 회귀 프로젝트를 연다.
  */
 export default function HomePage() {
   return (
@@ -44,7 +44,7 @@ export default function HomePage() {
             style={{
               fontSize: 22,
               fontWeight: 600,
-              letterSpacing: "-0.01em",
+              letterSpacing: 0,
             }}
           >
             PARCELGRID
@@ -65,8 +65,8 @@ export default function HomePage() {
           lineHeight: 1.6,
         }}
       >
-        시행사·건축·투자팀을 위한 부지 분석 도구. 카카오·V월드·MOLIT 5개 공공
-        API를 통합해 부지 정보·인수가·시나리오 4종을 자동 생성합니다.
+        시행사·건축·투자팀을 위한 부지 분석 도구. 카카오·V월드·MOLIT 데이터를
+        연결해 부지 정보·인수가·부지 규모별 시나리오를 생성합니다.
       </div>
 
       {/* CTA */}
@@ -90,7 +90,7 @@ export default function HomePage() {
           새 부지 분석 →
         </Link>
         <Link
-          href="/projects/sample"
+          href={`/projects/${DEMO_PROJECT_ID}/status`}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -106,7 +106,7 @@ export default function HomePage() {
             textDecoration: "none",
           }}
         >
-          데모 프로젝트 (역삼동)
+          검증용 데모 (쌍문동)
         </Link>
         <Link
           href="/system/readiness"

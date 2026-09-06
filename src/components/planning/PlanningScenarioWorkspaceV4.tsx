@@ -146,7 +146,7 @@ function Metric({
           marginTop: 4,
           fontSize: 17,
           fontWeight: 750,
-          letterSpacing: "-0.025em",
+          letterSpacing: 0,
         }}
       >
         {value}

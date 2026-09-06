@@ -20,7 +20,8 @@ const ITEMS = [
 export function WorkRail({ projectId }: WorkRailProps) {
   const pathname = usePathname();
   return (
-    <div
+    <nav
+      aria-label="프로젝트 단계"
       className="ui-workrail"
       style={{
         width: 48,
@@ -42,6 +43,8 @@ export function WorkRail({ projectId }: WorkRailProps) {
             key={it.id}
             href={href}
             title={it.label}
+            aria-label={it.label}
+            aria-current={active ? "page" : undefined}
             style={{
               width: 34,
               height: 34,
@@ -58,23 +61,6 @@ export function WorkRail({ projectId }: WorkRailProps) {
           </Link>
         );
       })}
-      <div style={{ flex: 1 }} />
-      <button
-        title="히스토리"
-        style={{
-          width: 34,
-          height: 34,
-          borderRadius: 6,
-          border: 0,
-          cursor: "pointer",
-          background: "transparent",
-          color: "var(--fg-muted)",
-          display: "grid",
-          placeItems: "center",
-        }}
-      >
-        {Icons.history()}
-      </button>
-    </div>
+    </nav>
   );
 }

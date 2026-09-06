@@ -81,7 +81,7 @@
   color: #17191c;
   font-size: 28px;
   line-height: 1.25;
-  letter-spacing: -0.035em;
+  letter-spacing: 0;
 }
 
 .heading p:last-child {

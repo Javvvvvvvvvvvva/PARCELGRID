@@ -9,6 +9,10 @@ import {
 
 export type SummaryTone = "neutral" | "positive" | "warning" | "negative";
 export type SummaryKind = "observation" | "check";
+export type BuildingRegistryStatus =
+  | "present"
+  | "confirmed-empty"
+  | "unknown";
 
 export interface StatusSummaryBullet {
   text: string;
@@ -20,6 +24,14 @@ function mainBuilding(info: BuildingLookupResult) {
   return info.buildings.find((b) => b.isMainBuilding) ?? info.buildings[0] ?? null;
 }
 
+export function getBuildingRegistryStatus(
+  info: BuildingLookupResult | null | undefined
+): BuildingRegistryStatus {
+  if (!info) return "unknown";
+  if (!info.hasBuilding) return "confirmed-empty";
+  return mainBuilding(info) ? "present" : "unknown";
+}
+
 function unitCount(info: BuildingLookupResult): number {
   const b = mainBuilding(info);
   if (!b) return 0;
@@ -29,13 +41,22 @@ function unitCount(info: BuildingLookupResult): number {
 function ageBullet(
   info: BuildingLookupResult | null | undefined
 ): StatusSummaryBullet | null {
-  if (!info || !info.hasBuilding) {
+  const status = getBuildingRegistryStatus(info);
+  if (status === "unknown") {
+    return {
+      text: "건축물대장 조회 결과를 확보하지 못했습니다. 기존 건물 유무를 원문과 현장에서 확인해야 합니다.",
+      tone: "warning",
+      kind: "check",
+    };
+  }
+  if (status === "confirmed-empty") {
     return {
       text: "건축물대장에 등록된 현재 건물이 없습니다. 실제 빈 토지 여부는 현장과 추가 자료로 확인해야 합니다.",
       tone: "neutral",
       kind: "observation",
     };
   }
+  if (!info) return null;
 
   switch (info.redevelopmentSignal) {
     case "rebuild":

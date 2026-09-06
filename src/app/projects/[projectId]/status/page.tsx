@@ -11,7 +11,8 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useProjectStore } from "@/lib/stores/project-store";
-import { KakaoMap, type CompMarker, type StationMarker } from "@/components/ui/KakaoMap";
+import { KakaoMap, type CompMarker } from "@/components/ui/KakaoMap";
+import { useNearbyStations } from "@/lib/hooks/use-nearby-stations";
 import { Panel, SectionTitle, DataRow, Button } from "@/components/ui/primitives";
 import { Dot } from "@/components/ui/Tag";
 import {
@@ -23,6 +24,8 @@ import {
 import {
   buildStatusSummary,
   formatExistingUnits,
+  getBuildingRegistryStatus,
+  type BuildingRegistryStatus,
   type SummaryTone,
 } from "@/lib/analysis/status-summary";
 import {
@@ -110,23 +113,10 @@ export default function StatusPage({
     );
   }, [parcel?.acquiredPrice, parcel?.lotArea]);
 
-  const [stations, setStations] = useState<StationMarker[]>([]);
-
-  useEffect(() => {
-    if (parcel?.lat == null || parcel?.lng == null) return;
-    let cancelled = false;
-    fetch(`/api/parcels/nearby-stations?lat=${parcel.lat}&lng=${parcel.lng}&radius=1000`)
-      .then((r) => r.json())
-      .then((res: { stations?: StationMarker[] }) => {
-        if (!cancelled && res.stations) setStations(res.stations);
-      })
-      .catch(() => {
-        if (!cancelled) setStations([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [parcel?.lat, parcel?.lng]);
+  const { stations, status: stationLookupStatus } = useNearbyStations(
+    parcel?.lat,
+    parcel?.lng,
+  );
 
   const compsForMap = useMemo(() => {
     let list = allComps.slice(0, 24);
@@ -225,6 +215,7 @@ export default function StatusPage({
     parcel.regulatoryConstraints?.height
   );
   const ageYears = currentBuilding?.maxAgeYears ?? main?.ageYears ?? null;
+  const buildingStatus = getBuildingRegistryStatus(currentBuilding);
   const bcrHeadroom = ratios ? headroomPct(ratios.bcrPct, parcel.maxBCR) : null;
   const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
   const farUtilization =
@@ -233,22 +224,33 @@ export default function StatusPage({
     ? main.detailPurpose && main.detailPurpose !== main.mainPurpose
       ? `${main.mainPurpose} · ${main.detailPurpose}`
       : main.mainPurpose
-    : "등록 건물 없음";
+    : buildingStatus === "confirmed-empty"
+      ? "등록 건물 없음"
+      : "건축물대장 미확인";
 
   const headline = main
     ? `${ageYears ?? "—"}년 경과한 ${purpose}`
-    : "건축물대장에 등록된 현재 건물이 없습니다";
+    : buildingStatus === "confirmed-empty"
+      ? "건축물대장에 등록된 현재 건물이 없습니다"
+      : "현재 건축물대장 조회 상태를 확인해야 합니다";
 
   const overviewText = ratios
     ? farDecisionGrade && bcrDecisionGrade
       ? `현재 건폐율은 원문 확인 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 확인 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 함께 검토합니다.`
       : `현재 건물 비율은 계산됐지만 건폐율·용적률 숫자는 전국 시행령 참고 상한입니다. 관할 조례·지구단위계획 원문을 확인하기 전에는 법정 여유로 확정하지 않습니다.`
-    : "현재 건물 비율을 계산할 수 없습니다. 대지·건축물대장 데이터를 확인한 뒤 Stage 2에서 가능 규모를 검토합니다.";
+    : buildingStatus === "confirmed-empty"
+      ? "건축물대장상 등록 건물이 없는 것으로 조회됐습니다. 실제 빈 토지 여부와 멸실 상태를 현장에서 확인한 뒤 Stage 2에서 가능 규모를 검토합니다."
+      : "건축물대장 응답이 없어 기존 건물 유무와 비율을 확정할 수 없습니다. 원문과 현장 현황을 확인한 뒤 Stage 2 검토를 진행합니다.";
 
   const badges: { label: string; tone: BadgeTone }[] = [
     {
-      label: main ? "기존 건물 있음" : "등록 건물 없음",
-      tone: main ? "neutral" : "warning",
+      label:
+        buildingStatus === "present"
+          ? "기존 건물 있음"
+          : buildingStatus === "confirmed-empty"
+            ? "등록 건물 없음"
+            : "건축물대장 확인 필요",
+      tone: buildingStatus === "present" ? "neutral" : "warning",
     },
     ...(ageYears != null && ageYears >= 30
       ? [{ label: `노후 ${ageYears}년`, tone: "warning" as const }]
@@ -296,7 +298,7 @@ export default function StatusPage({
   ];
 
   return (
-    <div style={{ padding: "var(--s6)", maxWidth: 1200, margin: "0 auto" }}>
+    <div className="status-page" style={{ padding: "var(--s6)", maxWidth: 1200, margin: "0 auto" }}>
       <div
         style={{
           display: "flex",
@@ -356,7 +358,7 @@ export default function StatusPage({
             >
               CURRENT CONDITION
             </div>
-            <h2 style={{ margin: 0, fontSize: 24, lineHeight: 1.3, letterSpacing: "-0.02em" }}>
+            <h2 style={{ margin: 0, fontSize: 24, lineHeight: 1.3, letterSpacing: 0 }}>
               {headline}
             </h2>
             <p
@@ -400,7 +402,13 @@ export default function StatusPage({
           <OverviewMetric label="대지" value={pyeong(parcel.lotArea)} sub={`${num(parcel.lotArea, 2)}㎡`} />
           <OverviewMetric
             label="기존 건물"
-            value={main ? `지상 ${main.groundFloors}층` : "없음"}
+            value={
+              main
+                ? `지상 ${main.groundFloors}층`
+                : buildingStatus === "confirmed-empty"
+                  ? "없음"
+                  : "미확인"
+            }
             sub={main && main.undergroundFloors > 0 ? `지하 ${main.undergroundFloors}층` : purpose}
           />
           <OverviewMetric
@@ -420,14 +428,14 @@ export default function StatusPage({
           />
           <OverviewMetric
             label="데이터 상태"
-            value={currentBuilding ? "대장 연동" : "확인 필요"}
+            value={buildingStatus === "unknown" ? "대장 미확인" : "대장 연동"}
             sub={parcel.boundary ? "필지 경계 확보" : "필지 경계 없음"}
           />
         </div>
       </section>
 
       <Stage1ReadingGuide
-        hasBuilding={Boolean(main)}
+        buildingStatus={buildingStatus}
         buildingAgeYears={ageYears}
         acquiredPriceManwon={parcel.acquiredPrice}
         maxBCR={parcel.maxBCR}
@@ -436,6 +444,7 @@ export default function StatusPage({
       />
 
       <div
+        className="status-primary-grid"
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
@@ -512,7 +521,7 @@ export default function StatusPage({
                   borderBottom: "1px solid var(--border)",
                 }}
               >
-                <strong style={{ fontSize: 28, letterSpacing: "-0.03em" }}>
+                <strong style={{ fontSize: 28, letterSpacing: 0 }}>
                   {ageYears ?? "—"}년
                 </strong>
                 <span style={{ fontSize: 12, color: "var(--fg-subtle)" }}>현재 건물 연령</span>
@@ -558,15 +567,20 @@ export default function StatusPage({
                 />
               )}
             </>
-          ) : (
+          ) : buildingStatus === "confirmed-empty" ? (
             <p style={{ margin: 0, fontSize: 13, color: "var(--fg-muted)" }}>
               건축물대장에 등록된 건축물이 없습니다. 실제 빈 토지 여부는 현장 확인이 필요합니다.
+            </p>
+          ) : (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--warn-fg)" }}>
+              건축물대장 조회 결과를 확보하지 못했습니다. 기존 건물 유무를 원문과 현장에서 확인하세요.
             </p>
           )}
         </Panel>
       </div>
 
       <div
+        className="status-secondary-grid"
         style={{
           display: "grid",
           gridTemplateColumns: "minmax(0, 1.25fr) minmax(300px, 0.75fr)",
@@ -575,7 +589,16 @@ export default function StatusPage({
           alignItems: "start",
         }}
       >
-        <Panel title="③ 기존 건물 개략 매스" source="건축물대장 면적·층수 기반 · 실제 배치도 아님">
+        <Panel
+          title="③ 기존 건물·필지 개략 매스"
+          source={
+            buildingStatus === "present"
+              ? "건축물대장 면적·층수 기반 · 실제 배치도 아님"
+              : buildingStatus === "confirmed-empty"
+                ? "필지 경계 + 건축물대장상 등록 건물 없음"
+                : "필지 경계만 표시 · 건축물대장 미확인"
+          }
+        >
           <ExistingBuildingMass
             boundary={parcel.boundary}
             currentBuilding={currentBuilding}
@@ -594,7 +617,13 @@ export default function StatusPage({
             }}
           >
             <span>드래그로 회전 · 휠로 확대</span>
-            <span>형상 정확도: 개략 · 면적·층수: 건축물대장</span>
+            <span>
+              {buildingStatus === "present"
+                ? "형상 정확도: 개략 · 면적·층수: 건축물대장"
+                : buildingStatus === "confirmed-empty"
+                  ? "필지 경계만 표시 · 등록 건물 없음은 현장 재확인"
+                  : "필지 경계만 표시 · 기존 건물 형상 미확인"}
+            </span>
           </div>
         </Panel>
 
@@ -649,7 +678,12 @@ export default function StatusPage({
         source="Kakao Map · MOLIT 실거래"
         style={{ marginTop: "var(--s5)" }}
       >
-        {marketInsight && <MarketSnapshotPanel insight={marketInsight} />}
+        {marketInsight && (
+          <MarketSnapshotPanel
+            insight={marketInsight}
+            stationLookupStatus={stationLookupStatus}
+          />
+        )}
 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
           <LayerChip
@@ -664,7 +698,13 @@ export default function StatusPage({
             hint={`지도 실제 표시 ${compMarkers.length}건`}
           />
           <LayerChip
-            label={`역세권 (${stations.length})`}
+            label={
+              stationLookupStatus === "unavailable"
+                ? "역세권 (조회 불가)"
+                : stationLookupStatus === "loading"
+                  ? "역세권 (조회 중)"
+                  : `역세권 (${stations.length})`
+            }
             active={layers.stations}
             onClick={() => setLayers((l) => ({ ...l, stations: !l.stations }))}
           />
@@ -786,14 +826,14 @@ function StatusBadge({
 }
 
 function Stage1ReadingGuide({
-  hasBuilding,
+  buildingStatus,
   buildingAgeYears,
   acquiredPriceManwon,
   maxBCR,
   maxFAR,
   missingCount,
 }: {
-  hasBuilding: boolean;
+  buildingStatus: BuildingRegistryStatus;
   buildingAgeYears: number | null;
   acquiredPriceManwon: number;
   maxBCR: number;
@@ -802,9 +842,12 @@ function Stage1ReadingGuide({
 }) {
   const acquisitionLabel =
     acquiredPriceManwon > 0 ? won(acquiredPriceManwon, { full: true }) : "아직 입력하지 않음";
-  const buildingLabel = hasBuilding
-    ? `건축물대장상 기존 건물 있음${buildingAgeYears != null ? ` · 약 ${buildingAgeYears}년 경과` : ""}`
-    : "건축물대장상 등록 건물 없음";
+  const buildingLabel =
+    buildingStatus === "present"
+      ? `건축물대장상 기존 건물 있음${buildingAgeYears != null ? ` · 약 ${buildingAgeYears}년 경과` : ""}`
+      : buildingStatus === "confirmed-empty"
+        ? "건축물대장상 등록 건물 없음"
+        : "건축물대장 조회 결과 미확보 · 건물 유무 확인 필요";
 
   return (
     <section

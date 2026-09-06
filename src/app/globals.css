@@ -85,12 +85,12 @@ html, body {
   -webkit-font-smoothing: antialiased;
   font-feature-settings: "ss01", "tnum", "cv11";
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
   font-size: 13px;
   line-height: 1.45;
 }
 
-.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; letter-spacing: -0.01em; }
+.mono { font-family: var(--font-mono); font-feature-settings: "tnum"; letter-spacing: 0; }
 
 /* Scrollbar */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -280,6 +280,11 @@ html, body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.ui-panel-header__title,
+.ui-panel-header__meta {
+  min-width: 0;
 }
 
 /* 테이블 (분기 현금흐름 등) */
@@ -566,7 +571,7 @@ html, body {
 .rpt-co b { font-weight: 800; }
 .rpt-pr { font-size: 9px; font-weight: 700; letter-spacing: 0.13em; color: var(--edge-gold); text-transform: uppercase; border: 1px solid var(--edge-gold); border-radius: 3px; padding: 1px 5px; margin-left: 6px; }
 .rpt-meta { text-align: right; font-size: 11px; color: var(--fg-muted); line-height: 1.6; }
-.rpt-title { font-size: 22px; font-weight: 800; margin: 22px 0 4px; letter-spacing: -0.01em; }
+.rpt-title { font-size: 22px; font-weight: 800; margin: 22px 0 4px; letter-spacing: 0; }
 .rpt-sub { font-size: 13px; color: var(--fg-muted); margin-bottom: 24px; }
 .rpt-reco { background: var(--accent); color: #fff; border-radius: 8px; padding: 18px 20px; }
 .rpt-reco-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
@@ -603,6 +608,14 @@ html, body {
   .rpt-wrap { padding: 12px; }
   .rpt-page { padding: 26px 22px; overflow-x: auto; }
   .rpt-reco-kpis, .rpt-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .comps-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .comps-side { position: static !important; }
+  .comps-table-scroll {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .comps-table-scroll .ui-table { min-width: 560px; }
 }
 
 @media (max-width: 560px) {
@@ -612,6 +625,47 @@ html, body {
   .handoff-summary-grid { grid-template-columns: 1fr !important; }
   .rpt-head, .rpt-foot { flex-direction: column; gap: 10px; }
   .rpt-meta { text-align: left; }
+  .ui-workrail {
+    position: fixed !important;
+    inset: auto 0 0 0;
+    z-index: 50;
+    width: 100% !important;
+    height: 56px;
+    padding: 6px 12px !important;
+    flex-direction: row !important;
+    justify-content: space-around;
+    gap: 4px !important;
+    border-right: 0 !important;
+    border-top: 1px solid var(--border);
+    background: color-mix(in oklch, var(--bg-elev) 96%, transparent) !important;
+  }
+  .ui-workrail a {
+    width: 44px !important;
+    height: 44px !important;
+  }
+  .scroll-host { padding-bottom: 56px; }
+  .ui-panel-header {
+    min-height: 0 !important;
+    padding: 10px 12px !important;
+    align-items: flex-start !important;
+    flex-wrap: wrap;
+  }
+  .ui-panel-header__title {
+    flex: 1 1 160px;
+    overflow-wrap: anywhere;
+  }
+  .ui-panel-header__meta {
+    flex: 1 1 100%;
+    margin-left: 0 !important;
+    justify-content: flex-start;
+  }
+  .ui-panel-header .ui-src { white-space: normal; }
+  .status-page { padding: 16px !important; }
+  .status-primary-grid,
+  .status-secondary-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .comps-page { padding: 12px !important; }
 }
 
 @media print {
