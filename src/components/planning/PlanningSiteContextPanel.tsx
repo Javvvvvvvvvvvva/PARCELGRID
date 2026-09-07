@@ -644,13 +644,21 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const targetPnu = parcel
     ? ((parcel as typeof parcel & { pnu?: string }).pnu ?? parcel.id)
     : "";
+  const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
-    if (!parcel || !targetPnu || !Number.isFinite(parcel.lat) || !Number.isFinite(parcel.lng)) {
+    if (
+      !parcel ||
+      manualParcel ||
+      !targetPnu ||
+      !Number.isFinite(parcel.lat) ||
+      !Number.isFinite(parcel.lng)
+    ) {
       setSourceParcels([]);
       setSourceSummary(undefined);
       setUpisRoadSummaries([]);
       setLoadState("idle");
+      setLoadError(null);
       return;
     }
     const controller = new AbortController();
@@ -689,7 +697,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         setLoadError(error instanceof Error ? error.message : "도로 경계 조회 실패");
       });
     return () => controller.abort();
-  }, [parcel, targetPnu]);
+  }, [manualParcel, parcel, targetPnu]);
 
   const snapshots = useMemo(() => {
     if (!parcel?.boundary || parcel.boundary.length < 3 || !scenario || !targetPnu) {
@@ -795,7 +803,11 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   return (
     <Panel
       title="설계 전달 3D 컨텍스트"
-      source="계획 매스·주변 건물·지적선·UPIS 도로 경계·접도 폭"
+      source={
+        manualParcel
+          ? "계획 매스 · 사용자 GeoJSON 필지 경계"
+          : "계획 매스·주변 건물·지적선·UPIS 도로 경계·접도 폭"
+      }
       bodyStyle={{ padding: "var(--s5)" }}
     >
       <div
@@ -886,6 +898,12 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>VWorld 지적·UPIS 도로 경계를 불러오고 있습니다.</Notice>
       )}
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
+      {manualParcel && (
+        <Notice>
+          VWorld 비활성 모드입니다. 사용자 GeoJSON 필지와 계획 매스만 표시하며
+          주변 지적·도로 경계·접도 폭은 포함하지 않습니다.
+        </Notice>
+      )}
       {plannedRoadReference && (
         <Notice>
           회색 면은 대상 접도부에 맞춰{" "}

@@ -1,3 +1,5 @@
+import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
+
 export type ReadinessStatus = "ready" | "review" | "optional";
 
 export interface ReadinessCheck {
@@ -6,6 +8,7 @@ export interface ReadinessCheck {
   status: ReadinessStatus;
   scope: string;
   message: string;
+  environmentVariables?: string[];
 }
 
 export interface RuntimeReadiness {
@@ -40,6 +43,8 @@ export function buildRuntimeReadiness(
   const accessPasswordLength = environment.SITE_ACCESS_PASSWORD?.trim().length ?? 0;
   const sourceKeyLength =
     environment.SOURCE_DOCUMENT_UPLOAD_KEY?.trim().length ?? 0;
+  const vworld = vworldRuntimeState(environment);
+  const kakaoRestConfigured = configured(environment, "KAKAO_REST_API_KEY");
 
   const checks: ReadinessCheck[] = [
     {
@@ -57,15 +62,34 @@ export function buildRuntimeReadiness(
       message: configured(environment, "DATABASE_URL")
         ? "DATABASE_URL이 설정됐습니다. 실제 연결은 첫 DB 요청에서 확인됩니다."
         : "미설정입니다. 로컬 데모는 동작하지만 여러 PC 간 자동 동기화는 되지 않습니다.",
+      environmentVariables: ["DATABASE_URL"],
     },
     {
       id: "vworld",
       label: "V월드 지적·도로·건물",
-      status: configured(environment, "VWORLD_API_KEY") ? "ready" : "review",
+      status: vworld.mode === "enabled" ? "ready" : "optional",
       scope: "실제 필지 외곽·도로 경계·주변 건물",
-      message: configured(environment, "VWORLD_API_KEY")
-        ? `키 설정됨 · 호출 도메인 ${environment.VWORLD_API_DOMAIN?.trim() || "http://localhost:3000"}`
-        : "키가 없어 실제 지적·도로·주변 건물 조회가 제한됩니다.",
+      message:
+        vworld.mode === "enabled"
+          ? `키 설정됨 · 호출 도메인 ${environment.VWORLD_API_DOMAIN?.trim() || "http://localhost:3000"}`
+          : vworld.mode === "disabled"
+            ? "명시적으로 꺼져 있습니다. 외부 요청을 보내지 않고 수동 토지 정보·GeoJSON 등록으로 전환합니다."
+            : "키가 없습니다. 주소·건축물대장을 유지한 채 수동 토지 정보·GeoJSON 등록으로 전환합니다.",
+      environmentVariables: [
+        "VWORLD_ENABLED",
+        "VWORLD_API_KEY",
+        "VWORLD_API_DOMAIN",
+      ],
+    },
+    {
+      id: "manual-parcel",
+      label: "VWorld 없는 부지 등록",
+      status: kakaoRestConfigured ? "ready" : "review",
+      scope: "Kakao 주소 + MOLIT 건축물 + 사용자 토지 정보",
+      message: kakaoRestConfigured
+        ? "주소 좌표를 확보한 뒤 면적·용도지역·법규값을 직접 입력하고 필지 GeoJSON을 선택 연결할 수 있습니다."
+        : "주소와 PNU 기초값을 만들려면 KAKAO_REST_API_KEY가 필요합니다.",
+      environmentVariables: ["KAKAO_REST_API_KEY", "MOLIT_SERVICE_KEY"],
     },
     {
       id: "molit",
@@ -75,15 +99,17 @@ export function buildRuntimeReadiness(
       message: configured(environment, "MOLIT_SERVICE_KEY")
         ? "서비스 키가 설정됐습니다."
         : "키가 없어 공공 원문 조회가 제한되고 예비값으로 표시됩니다.",
+      environmentVariables: ["MOLIT_SERVICE_KEY"],
     },
     {
       id: "kakao-rest",
       label: "카카오 주소·거리 조회",
-      status: configured(environment, "KAKAO_REST_API_KEY") ? "ready" : "review",
+      status: kakaoRestConfigured ? "ready" : "review",
       scope: "주소 검색·좌표·역세권 거리",
-      message: configured(environment, "KAKAO_REST_API_KEY")
+      message: kakaoRestConfigured
         ? "REST API 키가 설정됐습니다."
         : "키가 없어 신규 주소 검색과 거리 계산이 제한됩니다.",
+      environmentVariables: ["KAKAO_REST_API_KEY"],
     },
     {
       id: "kakao-map",
@@ -95,6 +121,7 @@ export function buildRuntimeReadiness(
       message: configured(environment, "NEXT_PUBLIC_KAKAO_JS_KEY")
         ? "브라우저 지도 키가 설정됐습니다."
         : "선택 기능입니다. 없어도 분석·3D·내보내기는 사용할 수 있습니다.",
+      environmentVariables: ["NEXT_PUBLIC_KAKAO_JS_KEY"],
     },
     {
       id: "openai-images",
@@ -104,6 +131,7 @@ export function buildRuntimeReadiness(
       message: configured(environment, "OPENAI_API_KEY")
         ? `서버 키 설정됨 · 모델 ${environment.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2"} · 기준 이미지 필수`
         : "선택 기능입니다. 키가 없어도 주소·계획·사업성·보고서와 수동 이미지 첨부는 사용할 수 있습니다.",
+      environmentVariables: ["OPENAI_API_KEY", "OPENAI_IMAGE_MODEL"],
     },
     {
       id: "site-access",
@@ -117,6 +145,7 @@ export function buildRuntimeReadiness(
           : production
             ? "운영 모드에서는 12자 이상의 SITE_ACCESS_PASSWORD가 필요합니다."
             : "로컬 개발 모드에서는 비밀번호 없이 열립니다. 공유 서버에서는 반드시 설정하세요.",
+      environmentVariables: ["SITE_ACCESS_PASSWORD"],
     },
     {
       id: "source-documents",
@@ -129,6 +158,10 @@ export function buildRuntimeReadiness(
           : production
             ? "운영 모드에서는 16자 이상의 SOURCE_DOCUMENT_UPLOAD_KEY가 필요합니다."
             : "로컬 개발 모드에서는 키 없이 저장하며 파일은 .parcelgrid-data에 보관됩니다.",
+      environmentVariables: [
+        "SOURCE_DOCUMENT_UPLOAD_KEY",
+        "SOURCE_DOCUMENT_STORAGE_DIR",
+      ],
     },
   ];
 

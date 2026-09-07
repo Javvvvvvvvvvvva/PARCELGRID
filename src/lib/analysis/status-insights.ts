@@ -96,6 +96,7 @@ export function buildRoadOrientationInsight(parcel: Parcel): RoadOrientationInsi
   const roads = parcel.roads ?? [];
   const orientation = boundary ? analyzeOrientation(boundary) : null;
   const frontage = boundary && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const manualParcel = parcel.inputProvenance?.mode === "manual";
 
   const northEdge = orientation?.edges.find((e) => e.index === orientation.northEdgeIndex) ?? null;
   const frontEdge =
@@ -110,7 +111,11 @@ export function buildRoadOrientationInsight(parcel: Parcel): RoadOrientationInsi
   } else if (frontage.frontIndex < 0) {
     notes.push("가까운 도로 중심선이 12m 이상 떨어져 있어 접도 여부를 추가 확인해야 합니다.");
   } else {
-    notes.push("전면 방향은 V월드 도로 중심선과 필지 경계의 근접도를 이용한 추정입니다.");
+    notes.push(
+      manualParcel
+        ? "전면 방향은 연결된 도로 선형과 사용자 필지 경계의 근접도를 이용한 추정입니다."
+        : "전면 방향은 VWorld 도로 중심선과 필지 경계의 근접도를 이용한 추정입니다.",
+    );
   }
   notes.push("도로 폭은 현재 연동 데이터에 포함되지 않아 별도 확인이 필요합니다.");
 
@@ -190,6 +195,10 @@ export function buildDataReadinessInsight(
     regulatoryConstraintIsDecisionGrade(constraints?.far) &&
     regulatoryConstraintIsDecisionGrade(constraints?.bcr);
   const hasRegulationReference = parcel.maxFAR > 0 && parcel.maxBCR > 0;
+  const manualParcel = parcel.inputProvenance?.mode === "manual";
+  const userEnteredRegulation =
+    constraints?.far.status === "user-entered" ||
+    constraints?.bcr.status === "user-entered";
 
   const items: DataCheckItem[] = [
     {
@@ -199,13 +208,26 @@ export function buildDataReadinessInsight(
     },
     {
       label: "대지면적·PNU",
-      status: parcel.lotArea > 0 && parcel.id.length > 0 ? "available" : "missing",
-      source: "V월드 지적",
+      status:
+        parcel.lotArea > 0 && parcel.id.length > 0
+          ? manualParcel
+            ? "derived"
+            : "available"
+          : "missing",
+      source: manualParcel ? "Kakao 주소 기반 PNU · 사용자 면적" : "VWorld 지적",
     },
     {
       label: "필지 경계",
-      status: parcel.boundary && parcel.boundary.length >= 3 ? "available" : "missing",
-      source: "V월드 연속지적도",
+      status:
+        parcel.boundary && parcel.boundary.length >= 3
+          ? manualParcel
+            ? "derived"
+            : "available"
+          : "missing",
+      source:
+        parcel.inputProvenance?.geometry === "user-geojson"
+          ? "사용자 GeoJSON · WGS84"
+          : "VWorld 연속지적도",
     },
     {
       label: "용도지역",
@@ -216,7 +238,9 @@ export function buildDataReadinessInsight(
           : "missing",
       source: zoningSourceBacked
         ? constraints.zoningSource.sourceName
-        : "용도지역 조회값 · 원문 미확인",
+        : manualParcel
+          ? "사용자 입력 · 원문 미확인"
+          : "용도지역 조회값 · 원문 미확인",
       note: zoningSourceBacked ? undefined : "원문 출처와 기준일 확인 필요",
     },
     {
@@ -228,7 +252,9 @@ export function buildDataReadinessInsight(
           : "missing",
       source: regulationDecisionGrade
         ? `${constraints?.bcr.sourceName ?? "건폐율 원문"} · ${constraints?.far.sourceName ?? "용적률 원문"}`
-        : "국토계획법 시행령 전국 범위 참고",
+        : userEnteredRegulation
+          ? "사용자 입력 · 관할 원문 미확인"
+          : "국토계획법 시행령 전국 범위 참고",
       note: regulationDecisionGrade
         ? undefined
         : "관할 조례·지구단위계획 원문 확인 전에는 필지별 법정 상한이 아님",
@@ -246,7 +272,9 @@ export function buildDataReadinessInsight(
     {
       label: "전면 도로 방향",
       status: parcel.roads && parcel.roads.length > 0 ? "derived" : "missing",
-      source: "V월드 도로 중심선 + 필지 경계",
+      source: manualParcel
+        ? "도로 선형 미연결 · 사용자 필지 경계"
+        : "VWorld 도로 중심선 + 필지 경계",
       note: "근접도 기반 추정",
     },
     {

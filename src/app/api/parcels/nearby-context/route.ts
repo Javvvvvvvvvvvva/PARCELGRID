@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchNearbyCadastralParcels } from "@/lib/integrations/vworld";
 import { lookupBuildingByPnu } from "@/lib/integrations/molit-building";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
+import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
@@ -22,6 +23,22 @@ export async function GET(req: NextRequest) {
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return NextResponse.json({ error: "lat, lng 필수" }, { status: 400 });
+  }
+
+  const vworld = vworldRuntimeState();
+  if (vworld.mode !== "enabled") {
+    return NextResponse.json(
+      {
+        code:
+          vworld.mode === "disabled"
+            ? "VWORLD_DISABLED"
+            : "VWORLD_NOT_CONFIGURED",
+        error: "VWorld 주변 필지 조회가 현재 비활성 상태입니다.",
+        nextAction: "주변 필지 없이 현재 부지 분석을 계속할 수 있습니다.",
+        retryable: false,
+      },
+      { status: 503 },
+    );
   }
 
   try {

@@ -19,11 +19,32 @@ describe("local runtime readiness", () => {
       "ready",
     );
     expect(result.checks.find((check) => check.id === "vworld")?.status).toBe(
-      "review",
+      "optional",
     );
+    expect(
+      result.checks.find((check) => check.id === "manual-parcel")?.status,
+    ).toBe("review");
     expect(
       result.checks.find((check) => check.id === "openai-images")?.status,
     ).toBe("optional");
+  });
+
+  it("treats an explicitly disabled VWorld integration as a supported manual flow", () => {
+    const result = buildRuntimeReadiness({
+      NODE_ENV: "development",
+      VWORLD_ENABLED: "false",
+      VWORLD_API_KEY: "configured-but-disabled",
+      KAKAO_REST_API_KEY: "kakao-key",
+      MOLIT_SERVICE_KEY: "molit-key",
+    });
+    const vworld = result.checks.find((check) => check.id === "vworld");
+
+    expect(vworld?.status).toBe("optional");
+    expect(vworld?.message).toContain("명시적으로 꺼져");
+    expect(
+      result.checks.find((check) => check.id === "manual-parcel")?.status,
+    ).toBe("ready");
+    expect(JSON.stringify(result)).not.toContain("configured-but-disabled");
   });
 
   it("requires security gates in production without exposing secret values", () => {

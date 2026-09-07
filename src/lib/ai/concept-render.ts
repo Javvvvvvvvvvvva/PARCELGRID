@@ -33,6 +33,7 @@ export interface ConceptRenderMetadata {
   createdAt: string;
   model: string;
   quality: ConceptRenderQuality;
+  openAiRequestId?: string;
   geometryHash: string | null;
   sourceImageSha256: string;
   prompt: string;

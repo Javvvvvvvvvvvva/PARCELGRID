@@ -2,12 +2,14 @@
 
 
 import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
+import ManualParcelIntake from "@/components/project/ManualParcelIntake";
 import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
 /**
  * /projects/new — 새 부지 분석 페이지
  *
  * 흐름:
- *   1. 주소 입력 → POST /api/parcels/lookup (Kakao + V월드 + MOLIT 건축물)
+ *   1. 주소 입력 → POST /api/parcels/lookup (Kakao + 선택 VWorld + MOLIT 건축물)
+ *      VWorld 불가 시 사용자 토지 정보 + 선택 GeoJSON 경계로 전환
  *   2. 사용자가 알고 있는 부동산 총 취득대금을 직접 입력
  *   3. lookup 성공 → 주변 실거래·공시지가를 참고자료로 조회
  *   4. "분석 시작" → 입력값과 조회 사실을 분리 저장 → /projects/${pnu}/status 이동
@@ -27,49 +29,15 @@ import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui
 import { AddressAutocomplete } from "@/components/ui/AddressAutocomplete";
 import { num, pyeong, koreanDate } from "@/lib/utils/format";
 import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
-import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
-import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
 import type { StoredParcel } from "@/lib/hooks/use-dynamic-project";
+import type {
+  ParcelLookupComplete,
+  ParcelLookupManualRequired,
+  ParcelLookupResponse,
+} from "@/lib/parcels/lookup-contract";
 
 /* ─────────────────────────── 타입 ─────────────────────────── */
-
-interface LookupResult {
-  address: string;
-  addressRoad: string | null;
-  lat: number;
-  lng: number;
-  bCode: string;
-  lawdCd: string;
-  sido: string;
-  sigungu: string;
-  dong: string;
-  jibun: string | null;
-  mainAddressNo: string;
-  subAddressNo: string;
-  mountainYn: "Y" | "N" | "";
-
-  pnu: string;
-  lotArea: number;
-  /** 필지 경계 폴리곤 [lng, lat][] (WGS84). 3D 매싱용 */
-  boundary?: [number, number][];
-  roads?: { name: string | null; points: [number, number][] }[];
-  jimok: string;
-  jimokCode: string;
-  jimokCategory: "buildable" | "farmland" | "forest" | "other";
-  landPrice: number;
-  landPriceYear: string;
-
-  zoning: string;
-  zoneCode: string;
-  maxFAR: number;
-  maxBCR: number;
-  heightLimit: number;
-  regulatoryConstraints: RegulatoryConstraintSet;
-  overlays: Array<{ code: string; name: string; conflict: string }>;
-
-  currentBuilding: BuildingLookupResult | null;
-}
 
 interface EstimateResult extends AcquisitionEstimateSnapshot {
   /** 추정 C: 구축 단독/다가구 토지 proxy (사례·근거) */
@@ -95,7 +63,9 @@ export default function NewParcelPage() {
   const [lookupError, setLookupError] = useState<string | null>(null);
 
   // Lookup 결과
-  const [parcel, setParcel] = useState<LookupResult | null>(null);
+  const [parcel, setParcel] = useState<ParcelLookupComplete | null>(null);
+  const [manualLookup, setManualLookup] =
+    useState<ParcelLookupManualRequired | null>(null);
 
   // 추정 결과
   const [estimate, setEstimate] = useState<EstimateResult | null>(null);
@@ -106,16 +76,41 @@ export default function NewParcelPage() {
     new Date().toISOString().slice(0, 10)
   );
 
+  async function loadEstimate(lookupData: ParcelLookupComplete) {
+    try {
+      const estRes = await fetch("/api/parcels/estimate-price", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: lookupData.address,
+          lotArea: lookupData.lotArea,
+          landPrice: lookupData.landPrice,
+          lawdCd: lookupData.lawdCd,
+          jimokCategory: lookupData.jimokCategory,
+        }),
+      });
+
+      if (estRes.ok) {
+        setEstimate((await estRes.json()) as EstimateResult);
+      } else {
+        console.warn("인수가 추정 실패 — 사용자가 직접 입력해야 함");
+      }
+    } catch (error) {
+      console.warn("인수가 추정 연결 실패:", error);
+    }
+  }
+
   // ─── 부지 조회 ─────────────────────────────────────────────────────
   async function handleLookup() {
     if (!address.trim()) return;
     setIsLookingUp(true);
     setLookupError(null);
     setParcel(null);
+    setManualLookup(null);
     setEstimate(null);
 
     try {
-      // 1. Lookup (Kakao + V월드 + MOLIT 건축물)
+      // 1. Lookup (Kakao + VWorld/MOLIT, VWorld 불가 시 수동 등록)
       const lookupRes = await fetch("/api/parcels/lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -134,36 +129,25 @@ export default function NewParcelPage() {
         );
       }
 
-      const lookupData: LookupResult = await lookupRes.json();
-      setParcel(lookupData);
-
-      // 2. 인수가 추정 (시군구별 multiplier)
-      const estRes = await fetch("/api/parcels/estimate-price", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          address: lookupData.address,
-          lotArea: lookupData.lotArea,
-          landPrice: lookupData.landPrice,
-          lawdCd: lookupData.lawdCd,
-          jimokCategory: lookupData.jimokCategory,
-        }),
-      });
-
-      if (estRes.ok) {
-        const estData: EstimateResult = await estRes.json();
-        setEstimate(estData);
-        // Round H: 자동 pre-fill 제거 — 추정값은 참고 칩으로만
-        // setAcquiredPrice(estData.estimatedPriceManwon);
-      } else {
-        // 추정 실패는 비치명적
-        console.warn("인수가 추정 실패 — 사용자가 직접 입력해야 함");
+      const lookupData = (await lookupRes.json()) as ParcelLookupResponse;
+      if (lookupData.mode === "manual-required") {
+        setManualLookup(lookupData);
+        return;
       }
+      setParcel(lookupData);
+      await loadEstimate(lookupData);
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : "알 수 없는 오류");
     } finally {
       setIsLookingUp(false);
     }
+  }
+
+  function applyManualParcel(next: ParcelLookupComplete) {
+    setManualLookup(null);
+    setParcel(next);
+    setEstimate(null);
+    void loadEstimate(next);
   }
 
   // ─── 철거비 자동 계산 ──────────────────────────────────────────────
@@ -197,6 +181,7 @@ export default function NewParcelPage() {
       heightLimit: parcel.heightLimit,
       regulatoryConstraints: parcel.regulatoryConstraints,
       overlays: parcel.overlays,
+      inputProvenance: parcel.inputProvenance,
       landPrice: parcel.landPrice,
       landPriceYear: parcel.landPriceYear,
       // 법적 최대 외곽선과 분리된 사용자 설계 여유거리. 새 프로젝트는 추가 여유 0m.
@@ -296,6 +281,7 @@ export default function NewParcelPage() {
           </p>
 
           <div
+            className="new-project-acquisition-grid"
             style={{
               marginTop: 16,
               paddingTop: 16,
@@ -373,7 +359,7 @@ export default function NewParcelPage() {
               }}
             >
               <Dot kind="accent" />
-              <span>Kakao 좌표 → V월드 지적·용도지역 → MOLIT 건축물 → 주변 시장 참고자료...</span>
+              <span>Kakao 주소와 MOLIT 건축물을 확인하고 사용 가능한 토지 데이터 경로를 선택하고 있습니다...</span>
             </div>
           )}
           {lookupError && (
@@ -398,6 +384,13 @@ export default function NewParcelPage() {
           )}
         </Panel>
 
+        {manualLookup && (
+          <ManualParcelIntake
+            lookup={manualLookup}
+            onApply={applyManualParcel}
+          />
+        )}
+
         {/* 결과 영역 */}
         {parcel && (
           <>
@@ -420,14 +413,36 @@ export default function NewParcelPage() {
                 <Tag kind="accent">{parcel.zoning}</Tag>
                 <Tag>{parcel.zoneCode}</Tag>
                 {parcel.jimok && <Tag>{parcel.jimok}</Tag>}
+                {parcel.mode === "manual" && <Tag kind="warn">사용자 입력</Tag>}
               </div>
             </div>
+
+            {parcel.mode === "manual" && (
+              <div
+                role="note"
+                style={{
+                  marginBottom: "var(--s4)",
+                  padding: "10px 12px",
+                  borderLeft: "3px solid var(--warn)",
+                  background: "var(--warn-soft)",
+                  color: "var(--warn-fg)",
+                  fontSize: 11.5,
+                  lineHeight: 1.55,
+                }}
+              >
+                토지·규제 값은 사용자 입력이며 원문 확인 전입니다. 필지 경계는{" "}
+                {parcel.boundary ? "업로드한 GeoJSON" : "연결되지 않음"} 상태로 저장됩니다.
+              </div>
+            )}
 
             {/* 좌: 이 땅의 사실(부지·건물) / 우: 인수 의사결정 — 한 화면 2단 */}
             <div className="newp-grid">
               {/* 좌 컬럼 — 사실 정보 */}
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
-                <Panel title="부지 정보" source="V월드">
+                <Panel
+                  title="부지 정보"
+                  source={parcel.mode === "vworld" ? "VWorld" : "사용자 입력 · 원문 확인 전"}
+                >
                   <DataRow
                     label="대지면적"
                     value={`${num(parcel.lotArea, 2)} m²`}
@@ -457,8 +472,16 @@ export default function NewParcelPage() {
                   )}
                   <DataRow
                     label="공시지가"
-                    value={`${num(parcel.landPrice / 10_000)}만원/m²`}
-                    sub={`${parcel.landPriceYear}년 기준`}
+                    value={
+                      parcel.landPrice > 0
+                        ? `${num(parcel.landPrice / 10_000)}만원/m²`
+                        : "미확인"
+                    }
+                    sub={
+                      parcel.landPrice > 0
+                        ? `${parcel.landPriceYear ? `${parcel.landPriceYear}년 기준` : "기준연도 미확인"} · ${parcel.mode === "vworld" ? "VWorld" : "사용자 입력"}`
+                        : "원문 값 입력 필요"
+                    }
                     divider={false}
                   />
                 </Panel>
@@ -469,7 +492,7 @@ export default function NewParcelPage() {
                       info={parcel.currentBuilding}
                       demolitionCost={demolitionCost}
                     />
-                  ) : (
+                  ) : parcel.currentBuilding ? (
                     <div
                       style={{
                         padding: "var(--s3)",
@@ -483,7 +506,23 @@ export default function NewParcelPage() {
                       }}
                     >
                       <Dot kind="pos" />
-                      빈 토지 — 신축 가능
+                      건축물대장상 등록 건물 없음 · 현장 확인 필요
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        padding: "var(--s3)",
+                        background: "var(--warn-soft)",
+                        borderRadius: "var(--r)",
+                        fontSize: "var(--t-sm)",
+                        color: "var(--warn-fg)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "var(--s2)",
+                      }}
+                    >
+                      <Dot kind="warn" />
+                      건축물대장 조회 미확인 · 건물 유무 확인 필요
                     </div>
                   )}
                 </Panel>
@@ -754,7 +793,7 @@ function CurrentBuildingBox({
   info,
   demolitionCost,
 }: {
-  info: NonNullable<LookupResult["currentBuilding"]>;
+  info: NonNullable<ParcelLookupComplete["currentBuilding"]>;
   demolitionCost: number;
 }) {
   const main = info.buildings.find((b) => b.isMainBuilding) ?? info.buildings[0];

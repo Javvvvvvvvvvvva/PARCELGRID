@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   CONCEPT_RENDER_ACCEPT,
   type ConceptRenderMetadata,
@@ -54,6 +55,9 @@ export default function ConceptRenderStudio({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [openAiConfigured, setOpenAiConfigured] = useState<boolean | null>(
+    null,
+  );
   const [quota, setQuota] = useState<{
     limit: number;
     remaining: number;
@@ -61,6 +65,31 @@ export default function ConceptRenderStudio({
   } | null>(null);
 
   const endpoint = `/api/projects/${encodeURIComponent(projectId)}/concept-render`;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/system/readiness", { cache: "no-store" })
+      .then((response) => response.json())
+      .then(
+        (payload: {
+          checks?: Array<{ id?: string; status?: string }>;
+        }) => {
+          if (cancelled) return;
+          const imageCheck = payload.checks?.find(
+            (check) => check.id === "openai-images",
+          );
+          setOpenAiConfigured(
+            imageCheck ? imageCheck.status === "ready" : null,
+          );
+        },
+      )
+      .catch(() => {
+        if (!cancelled) setOpenAiConfigured(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const replaceRenderUrl = (next: string | null) => {
     setRenderUrl((current) => {
@@ -335,6 +364,11 @@ export default function ConceptRenderStudio({
       </div>
 
       <div className="concept-controls">
+        {openAiConfigured === false && (
+          <p className="concept-setup">
+            서버에 <code>OPENAI_API_KEY</code>가 없습니다. <Link href="/system/readiness">환경 진단</Link>에서 설정 항목을 확인하세요.
+          </p>
+        )}
         <label>
           <span>수동 이미지 확인 · 생성 기준으로는 사용 안 함</span>
           <input
@@ -382,6 +416,7 @@ export default function ConceptRenderStudio({
             onClick={generate}
             disabled={
               working ||
+              openAiConfigured === false ||
               !geometryHash ||
               referenceGeometryHash !== geometryHash
             }
@@ -391,7 +426,11 @@ export default function ConceptRenderStudio({
                 : "Stage 2 3D 컨텍스트에서 AI 기준 이미지를 먼저 저장하세요"
             }
           >
-            {working ? "기준 형상 보존 렌더 생성 중…" : "AI 콘셉트 렌더 생성"}
+            {working
+              ? "기준 형상 보존 렌더 생성 중…"
+              : openAiConfigured === false
+                ? "OpenAI 키 설정 필요"
+                : "AI 콘셉트 렌더 생성"}
           </button>
           {render &&
             !renderUrl &&
@@ -448,6 +487,7 @@ export default function ConceptRenderStudio({
       {render && (
         <dl className="concept-audit">
           <div><dt>모델</dt><dd>{render.model} · {render.quality}</dd></div>
+          <div><dt>OpenAI 요청</dt><dd>{render.openAiRequestId ?? "미제공"}</dd></div>
           <div><dt>Geometry</dt><dd>{render.geometryHash ?? "기준 이미지 단독 잠금"}</dd></div>
           <div><dt>원본 SHA-256</dt><dd>{render.sourceImageSha256.slice(0, 16)}…</dd></div>
           <div><dt>결과 SHA-256</dt><dd>{render.sha256.slice(0, 16)}…</dd></div>
@@ -462,10 +502,10 @@ export default function ConceptRenderStudio({
       </p>
 
       <style jsx>{`
-        .concept-studio{margin:24px 0;padding:18px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elev)}
+        .concept-studio{margin:24px 0;padding:18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev)}
         .concept-heading{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:14px}.concept-heading h2{margin:5px 0 4px;font-size:17px}.concept-heading p{margin:0;max-width:660px;color:var(--fg-muted);font-size:11px;line-height:1.55}.concept-kicker{font-size:9px;letter-spacing:.14em;color:var(--accent);font-weight:800}.concept-status{font-size:9.5px;color:var(--pos-fg);font-weight:700;white-space:nowrap}
         .concept-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.concept-reference,.concept-output{display:grid;gap:5px}.concept-reference>span,.concept-output>span{font-size:9px;color:var(--fg-muted)}img{width:100%;aspect-ratio:3/2;object-fit:contain;border:1px solid var(--border-faint);border-radius:8px;background:#f4f5f6}.concept-placeholder{display:grid;place-items:center;aspect-ratio:3/2;padding:20px;border:1px dashed var(--border);border-radius:8px;background:var(--bg-soft);color:var(--fg-muted);font-size:10px;text-align:center;line-height:1.55}
-        .concept-controls{display:grid;grid-template-columns:1.1fr .7fr 1.2fr;gap:10px;margin-top:14px}.concept-controls label{display:grid;gap:5px}.concept-controls label>span{font-size:9.5px;font-weight:700;color:var(--fg-muted)}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);padding:8px;font:inherit;font-size:10px}.concept-prompt{grid-column:1/-1}.concept-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.concept-actions button{min-height:34px;padding:0 12px;border:1px solid var(--fg);border-radius:7px;background:var(--fg);color:var(--bg);font:inherit;font-size:10px;font-weight:800;cursor:pointer}.concept-actions button.secondary{background:var(--bg-elev);color:var(--fg);border-color:var(--border)}.concept-actions button:disabled{opacity:.55;cursor:wait}
+        .concept-controls{display:grid;grid-template-columns:1.1fr .7fr 1.2fr;gap:10px;margin-top:14px}.concept-setup{grid-column:1/-1;margin:0;padding:8px 10px;border-left:3px solid var(--warn);background:var(--warn-soft);color:var(--warn-fg);font-size:10px;line-height:1.5}.concept-setup a{color:inherit;font-weight:800}.concept-controls label{display:grid;gap:5px}.concept-controls label>span{font-size:9.5px;font-weight:700;color:var(--fg-muted)}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);padding:8px;font:inherit;font-size:10px}.concept-prompt{grid-column:1/-1}.concept-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.concept-actions button{min-height:34px;padding:0 12px;border:1px solid var(--fg);border-radius:7px;background:var(--fg);color:var(--bg);font:inherit;font-size:10px;font-weight:800;cursor:pointer}.concept-actions button.secondary{background:var(--bg-elev);color:var(--fg);border-color:var(--border)}.concept-actions button:disabled{opacity:.55;cursor:not-allowed}
         .concept-error,.concept-notice{margin:10px 0 0;padding:8px 10px;border-radius:7px;font-size:10px;line-height:1.5}.concept-error{background:var(--neg-soft);color:var(--neg-fg)}.concept-notice{background:var(--pos-soft);color:var(--pos-fg)}.concept-audit{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 0}.concept-audit div{min-width:0;padding:8px;background:var(--bg-soft);border-radius:6px}.concept-audit dt{font-size:8.5px;color:var(--fg-muted)}.concept-audit dd{margin:3px 0 0;font-size:9px;font-family:var(--font-mono);overflow-wrap:anywhere}.concept-disclaimer{margin:12px 0 0;color:var(--fg-muted);font-size:9px;line-height:1.5}
         @media(max-width:760px){.concept-grid,.concept-controls{grid-template-columns:1fr}.concept-prompt,.concept-actions{grid-column:1}.concept-audit{grid-template-columns:repeat(2,minmax(0,1fr))}.concept-heading{display:grid}}
         @media print{.concept-controls,.concept-error,.concept-notice{display:none}.concept-studio{break-inside:avoid}.concept-grid{grid-template-columns:1fr 1fr}}

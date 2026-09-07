@@ -621,7 +621,7 @@ html, body {
 @media (max-width: 560px) {
   .ui-topbar__name { display: none; }
   .ui-topbar__right { display: none; }
-  .readiness-summary-grid { grid-template-columns: 1fr !important; }
+  .new-project-acquisition-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .handoff-summary-grid { grid-template-columns: 1fr !important; }
   .rpt-head, .rpt-foot { flex-direction: column; gap: 10px; }
   .rpt-meta { text-align: left; }

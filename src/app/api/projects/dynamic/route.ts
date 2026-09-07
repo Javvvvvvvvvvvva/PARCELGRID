@@ -81,6 +81,19 @@ const regulatoryConstraintsSchema = z
   })
   .passthrough();
 
+const inputProvenanceSchema = z.object({
+  mode: z.enum(["vworld", "manual"]),
+  parcelFacts: z.enum(["vworld-cadastral", "user-entered"]),
+  geometry: z.enum([
+    "vworld-cadastral",
+    "user-geojson",
+    "unavailable",
+  ]),
+  zoning: z.enum(["vworld-land-use", "user-entered"]),
+  recordedAt: z.string().max(40),
+  note: z.string().trim().max(2_000).optional(),
+});
+
 const buildingLookupSchema = z
   .object({
     hasBuilding: z.boolean(),
@@ -119,6 +132,7 @@ const parcelSchema = z
     maxBCR: z.number().finite().positive().max(100),
     heightLimit: z.number().finite().nonnegative().max(10_000),
     regulatoryConstraints: regulatoryConstraintsSchema.optional(),
+    inputProvenance: inputProvenanceSchema.optional(),
     overlays: z
       .array(
         z.object({

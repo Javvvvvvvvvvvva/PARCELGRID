@@ -84,11 +84,20 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   const targetPnu = parcel
     ? ((parcel as typeof parcel & { pnu?: string }).pnu ?? parcel.id)
     : "";
+  const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
-    if (!parcel || !targetPnu || !Number.isFinite(parcel.lat) || !Number.isFinite(parcel.lng)) {
+    if (
+      !parcel ||
+      manualParcel ||
+      !targetPnu ||
+      !Number.isFinite(parcel.lat) ||
+      !Number.isFinite(parcel.lng)
+    ) {
       setParcels([]);
+      setSourceSummary(undefined);
       setLoadState("idle");
+      setMessage(null);
       return;
     }
 
@@ -131,7 +140,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       });
 
     return () => controller.abort();
-  }, [parcel, targetPnu]);
+  }, [manualParcel, parcel, targetPnu]);
 
   const packageData = useMemo(() => {
     if (!scenario || !parcel || !targetBoundary || targetBoundary.length < 3 || !targetPnu) {
@@ -445,6 +454,12 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       </div>
 
       {loadState === "loading" && <Notice>지적·UPIS 도로 경계를 조회하고 있습니다.</Notice>}
+      {manualParcel && (
+        <Notice tone="fail">
+          사용자 GeoJSON은 계획 검토에 사용할 수 있지만 측량·지적 원문은 아닙니다.
+          VWorld 지적·도로 경계를 확인하기 전에는 설계 전달 패키지를 내보낼 수 없습니다.
+        </Notice>
+      )}
       {message && <Notice tone={message.tone}>{message.text}</Notice>}
 
       <div

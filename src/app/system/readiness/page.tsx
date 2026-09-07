@@ -38,7 +38,7 @@ export default function ReadinessPage() {
           </p>
         </header>
 
-        <section className="readiness-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+        <section className="readiness-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: 16 }}>
           <Summary label="사용 가능" value={readiness.summary.ready} />
           <Summary label="설정 필요" value={readiness.summary.review} />
           <Summary label="선택 설정" value={readiness.summary.optional} />
@@ -46,7 +46,7 @@ export default function ReadinessPage() {
 
         <section style={{ display: "grid", gap: 10 }}>
           {readiness.checks.map((check) => (
-            <article className="readiness-check-row" key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(150px, .65fr) minmax(170px, .85fr) 2fr", gap: 16, alignItems: "center", padding: "15px 16px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--bg-elev)" }}>
+            <article className="readiness-check-row" key={check.id} style={{ display: "grid", gridTemplateColumns: "minmax(150px, .65fr) minmax(170px, .85fr) 2fr", gap: 16, alignItems: "center", padding: "15px 16px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-elev)" }}>
               <div>
                 <strong style={{ display: "block", fontSize: 13 }}>{check.label}</strong>
                 <span style={{ color: STATUS_COLOR[check.status], fontSize: 10, fontWeight: 800 }}>
@@ -54,7 +54,20 @@ export default function ReadinessPage() {
                 </span>
               </div>
               <span style={{ color: "var(--fg-muted)", fontSize: 11 }}>{check.scope}</span>
-              <span style={{ color: "var(--fg-muted)", fontSize: 11, lineHeight: 1.55 }}>{check.message}</span>
+              <div style={{ minWidth: 0 }}>
+                <span style={{ display: "block", color: "var(--fg-muted)", fontSize: 11, lineHeight: 1.55 }}>
+                  {check.message}
+                </span>
+                {check.environmentVariables && check.environmentVariables.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "3px 10px", marginTop: 6 }}>
+                    {check.environmentVariables.map((variable) => (
+                      <code key={variable} style={{ color: "var(--fg-faint)", fontSize: 9.5 }}>
+                        {variable}
+                      </code>
+                    ))}
+                  </div>
+                )}
+              </div>
             </article>
           ))}
         </section>

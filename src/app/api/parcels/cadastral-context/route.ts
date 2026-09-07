@@ -4,6 +4,7 @@ import {
   fetchUpisRoadBoundaries,
   VWORLD_UPIS_ROAD_DATA,
 } from "@/lib/integrations/vworld-upis-roads";
+import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: "targetPnu, lat, lng가 필요합니다." },
       { status: 400 }
+    );
+  }
+
+  const vworld = vworldRuntimeState();
+  if (vworld.mode !== "enabled") {
+    return NextResponse.json(
+      {
+        code:
+          vworld.mode === "disabled"
+            ? "VWORLD_DISABLED"
+            : "VWORLD_NOT_CONFIGURED",
+        error: "VWorld 지적·도로 컨텍스트가 현재 비활성 상태입니다.",
+        nextAction:
+          "수동 GeoJSON 필지 경계를 사용하거나 VWorld 연결이 가능한 환경에서 다시 조회하세요.",
+        retryable: false,
+      },
+      { status: 503 },
     );
   }
 

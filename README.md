@@ -60,7 +60,7 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-[http://localhost:3000](http://localhost:3000)을 열고 `서울 도봉구 쌍문동 281-23`을 회귀 데모 주소로 사용할 수 있습니다. PostgreSQL과 외부 API 키가 없어도 로컬 시드와 브라우저 저장 기반의 데모 흐름은 동작합니다.
+[http://localhost:3000](http://localhost:3000)을 열고 `서울 도봉구 쌍문동 281-23`을 회귀 데모 주소로 사용할 수 있습니다. PostgreSQL과 외부 API 키가 없어도 로컬 시드와 브라우저 저장 기반의 데모 흐름은 동작합니다. VWorld가 VPN이나 네트워크 정책으로 차단된 환경에서는 `VWORLD_ENABLED=false`로 두면 외부 요청을 건너뛰고 Kakao 주소·MOLIT 건축물대장·사용자 토지 정보·선택 GeoJSON 경계로 신규 부지 등록을 계속합니다.
 
 실행 준비 상태는 [http://localhost:3000/system/readiness](http://localhost:3000/system/readiness) 또는 다음 API로 확인합니다. 비밀 키 원문은 응답에 포함되지 않습니다.
 
@@ -77,6 +77,7 @@ curl http://localhost:3000/api/system/readiness
 | `DATABASE_URL` | 선택 | PostgreSQL 영구 저장과 여러 PC 간 데이터 공유 |
 | `KAKAO_REST_API_KEY` | 실제 주소 조회 | 주소 검색, 좌표와 거리 계산 |
 | `NEXT_PUBLIC_KAKAO_JS_KEY` | 선택 | 브라우저 카카오 지도 표시 |
+| `VWORLD_ENABLED` | 선택 | `false`이면 VWorld 요청을 보내지 않고 수동 부지 등록으로 전환 |
 | `VWORLD_API_KEY` | 실제 필지 조회 | 지적 경계, 용도지역, 도로와 주변 건물 |
 | `VWORLD_API_DOMAIN` | V월드 사용 시 | V월드에 등록된 호출 도메인. 로컬 기본값은 `http://localhost:3000` |
 | `MOLIT_SERVICE_KEY` | 실제 원문 조회 | 건축물대장과 실거래 공공데이터 |
@@ -175,6 +176,7 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 |---|---|
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
 | [파트너 로컬 실행 안내](docs/PARTNER-LOCAL-SETUP-KO.md) | 다른 PC에서 설치·업데이트·문제 해결 |
+| [VWorld 비활성 운영](docs/VWORLD-FREE-WORKFLOW.md) | VPN 차단 시 수동 부지·GeoJSON·AI 키 설정 |
 | [릴리스 체크리스트](docs/RELEASE-CHECKLIST-2026-08-23.md) | 자동·수동 출시 조건 |
 | [릴리스 스모크 테스트](docs/release-smoke-test.md) | 주소 입력부터 보고서·DAE·DXF까지 실제 확인 절차 |
 | [계산식 문서](docs/CALCULATION-FORMULAS-2026-07-08.md) | 면적·사업성 계산 정의와 데이터 출처 |

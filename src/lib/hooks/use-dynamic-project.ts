@@ -36,6 +36,7 @@ export interface StoredParcel {
   heightLimit: number;
   regulatoryConstraints?: RegulatoryConstraintSet;
   overlays?: Array<{ code: string; name: string; conflict: string }>;
+  inputProvenance?: Parcel["inputProvenance"];
   landPrice: number;
   landPriceYear: string;
   setback?: { road: number; side: number; rear: number };
@@ -82,6 +83,7 @@ export function buildDynamicProjectRequest(
       heightLimit: stored.heightLimit,
       regulatoryConstraints: stored.regulatoryConstraints,
       overlays: stored.overlays,
+      inputProvenance: stored.inputProvenance,
       setback: stored.setback ?? { road: 0, side: 0, rear: 0 },
       landPrice: stored.landPrice,
       estMarketPrice: stored.estMarketPrice ?? stored.landPrice,

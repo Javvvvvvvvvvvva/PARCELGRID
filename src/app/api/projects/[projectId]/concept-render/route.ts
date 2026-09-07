@@ -181,6 +181,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       { status: 503 },
     );
   }
+  const openAiRequestId = response.headers.get("x-request-id")?.trim() || undefined;
 
   const payload = (await response.json().catch(() => null)) as
     | {
@@ -206,6 +207,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ? "이미지 안전 정책에 따라 요청이 차단됐습니다. 프롬프트를 확인하세요."
           : payload?.error?.message || "AI 이미지 생성에 실패했습니다.",
         code: payload?.error?.code ?? "OPENAI_IMAGE_ERROR",
+        requestId: openAiRequestId,
       },
       { status: response.status >= 400 ? response.status : 502 },
     );
@@ -248,6 +250,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     createdAt: new Date().toISOString(),
     model,
     quality,
+    openAiRequestId,
     geometryHash,
     sourceImageSha256,
     prompt: lockedPrompt,

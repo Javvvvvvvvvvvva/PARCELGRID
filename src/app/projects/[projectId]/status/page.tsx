@@ -218,6 +218,16 @@ export default function StatusPage({
   const buildingStatus = getBuildingRegistryStatus(currentBuilding);
   const bcrHeadroom = ratios ? headroomPct(ratios.bcrPct, parcel.maxBCR) : null;
   const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
+  const manualParcel = parcel.inputProvenance?.mode === "manual";
+  const parcelSource = manualParcel
+    ? "사용자 토지 정보 · Kakao 주소 · MOLIT 건축물대장"
+    : "VWorld · 공시지가 · 건축물대장";
+  const boundarySource =
+    parcel.inputProvenance?.geometry === "user-geojson"
+      ? "사용자 GeoJSON 경계"
+      : parcel.boundary
+        ? "VWorld 필지 경계"
+        : "필지 경계 없음";
   const farUtilization =
     ratios && parcel.maxFAR > 0 ? (ratios.farPct / parcel.maxFAR) * 100 : null;
   const purpose = main
@@ -429,7 +439,7 @@ export default function StatusPage({
           <OverviewMetric
             label="데이터 상태"
             value={buildingStatus === "unknown" ? "대장 미확인" : "대장 연동"}
-            sub={parcel.boundary ? "필지 경계 확보" : "필지 경계 없음"}
+            sub={boundarySource}
           />
         </div>
       </section>
@@ -452,7 +462,7 @@ export default function StatusPage({
           alignItems: "start",
         }}
       >
-        <Panel title="① 토지 기본 정보" source="V월드 · 공시지가 · 건축물대장">
+        <Panel title="① 토지 기본 정보" source={parcelSource}>
           <DataRow label="주소" value={parcel.address} />
           {parcel.addressRoad && <DataRow label="도로명 주소" value={parcel.addressRoad} />}
           <DataRow
@@ -498,13 +508,13 @@ export default function StatusPage({
           )}
           <DataRow
             label="공시지가"
-            value={`${num(parcel.landPrice / 10_000)}만/m²`}
-            sub="V월드 개별공시지가"
+            value={parcel.landPrice > 0 ? `${num(parcel.landPrice / 10_000)}만/m²` : "미확인"}
+            sub={manualParcel ? "사용자 입력 · 원문 확인 전" : "VWorld 개별공시지가"}
           />
           <DataRow
             label="도로 데이터"
             value={parcel.roads && parcel.roads.length > 0 ? `${parcel.roads.length}개 중심선` : "추가 확인 필요"}
-            sub="도로 폭은 현재 데이터에 포함되지 않음"
+            sub={manualParcel ? "VWorld 비활성 · 도로 원문 별도 확인" : "도로 폭은 현재 데이터에 포함되지 않음"}
           />
         </Panel>
 

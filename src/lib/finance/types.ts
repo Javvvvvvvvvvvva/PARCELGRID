@@ -56,6 +56,15 @@ export interface AcquisitionEstimateSnapshot {
   };
 }
 
+export interface ParcelInputProvenance {
+  mode: "vworld" | "manual";
+  parcelFacts: "vworld-cadastral" | "user-entered";
+  geometry: "vworld-cadastral" | "user-geojson" | "unavailable";
+  zoning: "vworld-land-use" | "user-entered";
+  recordedAt: string;
+  note?: string;
+}
+
 export interface Parcel {
   id: string;
   address: string;
@@ -85,6 +94,8 @@ export interface Parcel {
   regulatoryConstraints?: RegulatoryConstraintSet;
   /** VWorld NED overlapping zone/district records retained for review. */
   overlays?: Array<{ code: string; name: string; conflict: string }>;
+  /** 원문 자동 조회와 사용자 수동 입력을 화면·내보내기에서 구분하기 위한 출처. */
+  inputProvenance?: ParcelInputProvenance;
 
   setback: {
     road: number; // m

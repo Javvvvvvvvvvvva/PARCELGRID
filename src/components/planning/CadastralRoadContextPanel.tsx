@@ -50,11 +50,19 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
   const targetPnu = parcel
     ? ((parcel as typeof parcel & { pnu?: string }).pnu ?? parcel.id)
     : "";
+  const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
-    if (!parcel || !targetPnu || !Number.isFinite(parcel.lat) || !Number.isFinite(parcel.lng)) {
+    if (
+      !parcel ||
+      manualParcel ||
+      !targetPnu ||
+      !Number.isFinite(parcel.lat) ||
+      !Number.isFinite(parcel.lng)
+    ) {
       setSourceParcels([]);
       setLoadState("idle");
+      setLoadError(null);
       return;
     }
 
@@ -95,7 +103,7 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
       });
 
     return () => controller.abort();
-  }, [parcel, targetPnu]);
+  }, [manualParcel, parcel, targetPnu]);
 
   const planning = useMemo(() => {
     if (!scenario || !parcel?.boundary || parcel.boundary.length < 3) return null;
@@ -119,7 +127,7 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
     });
   }, [planning, sourceParcels, targetPnu]);
 
-  if (!parcel || !scenario || !planning || !snapshot) return null;
+  if (manualParcel || !parcel || !scenario || !planning || !snapshot) return null;
 
   const primary = snapshot.frontages[0] ?? null;
   const widthAvailable = primary?.widthAvgM != null;
