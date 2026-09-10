@@ -90,7 +90,7 @@ export default function HomePage() {
           새 부지 분석 →
         </Link>
         <Link
-          href={`/projects/${DEMO_PROJECT_ID}/status`}
+          href={`/projects/${DEMO_PROJECT_ID}/overview`}
           style={{
             display: "inline-flex",
             alignItems: "center",
