@@ -355,6 +355,7 @@ export interface TaxLine {
 }
 
 export interface TaxBreakdown {
+  modelVersion?: string;
   lines: TaxLine[];
   /** 계산 가능한 항목만 합산한 부분 추정액. 완결된 세후 세액이 아니다. */
   total: ManWon;

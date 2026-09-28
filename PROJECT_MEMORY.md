@@ -15,7 +15,7 @@
 
 ## 현재 코드 경로
 
-한국판 업그레이드: 내부 구획·사업성 대사·예비 일영·DXF/3DM 인계를 추가했다. 사용법·현재 한계는 `docs/KR-INTERIOR-UPGRADE.md`, 라이선스와 후속 구현 순서는 `docs/KR-UPGRADE-RESOURCES-2026-09-28.md`를 참조한다. 미국판 변경은 포함하지 않는다.
+한국판 업그레이드: 내부 구획·사업성 대사·예비 일영·DXF/3DM 인계를 추가했다. 사용법·현재 한계는 `docs/KR-INTERIOR-UPGRADE.md`, 라이선스와 후속 구현 순서는 `docs/KR-UPGRADE-RESOURCES-2026-09-28.md`를 참조한다. 미국판 변경은 포함하지 않는다. 후속 공공 원문 품질 구현은 `docs/KR-BUILDING-EVIDENCE.md`: 건축HUB 페이지/오류 상태, 층별·전유공용 속성, PK·면적제외 대조, 키 없는 근거 JSON을 연결했다. 실제 승인 계정 검증은 남아 있다.
 
 | 역할 | 현재 구현 |
 |---|---|
@@ -27,6 +27,7 @@
 | 대표안·Geometry 잠금 | `project-store.ts` + `planning-geometry.ts` |
 | 내부 구획 편집 | `components/planning/interior/InteriorPlanWorkspace.tsx` |
 | 독립 구획·검증·사업성·출력 | `lib/planning/interior/` |
+| 건축물대장 조회·근거 | `lib/integrations/molit-building-client.ts` + `lib/building-registry/` + `BuildingRegistryEvidence.tsx` |
 | 예비 일영·Worker | `solar-access.ts` + `workers/interior.worker.ts` |
 | Stage 3 연결 | `recompute-from-planning-scenarios.ts` |
 | 전문가 인계 | `/projects/[projectId]/handoff` |
@@ -51,6 +52,9 @@ V1~V3 Plan Studio 컴포넌트와 중복 대시보드 UI는 제거됐습니다. 
 - 내부 구획의 추정 수익 면적은 명시적 반영 후 사용한다. 총 층 면적은 보존하고 공용 구획·잔여 면적은 비수익으로 처리한다.
 - 내부 구획이나 재무 구역 변경 후 반영 서명이 달라지면 대표안 확정을 차단한다. 개념 내부 도면은 별도로 내보낼 수 있다.
 
+- 대장 0건은 실제 나대지를 뜻하지 않는다. 이전 `hasBuilding: false`는 조회 미확인으로 두고 토지 단독 취득세를 자동 계산하지 않는다. `tax-evidence-2026.2` 이전 세금 부분 추정값은 Stage 3 재저장을 안내한다.
+- 표제부·층별개요는 정확한 원본 PK와 면적제외 값으로 대조한다. 전유공용의 수신 행 합계를 신축 면적이나 동 연면적에 더하지 않는다.
+
 ## 남은 실제 확인
 
 자동 테스트가 대신할 수 없는 아래 항목은 수동 확인이 필요합니다.
@@ -60,6 +64,7 @@ V1~V3 Plan Studio 컴포넌트와 중복 대시보드 UI는 제거됐습니다. 
 - 내보낸 DXF를 AutoCAD 호환 프로그램에서 열어 meter 단위와 `PG_*` 레이어 확인
 - 보고서 A4 인쇄 미리보기의 잘림·겹침
 - 실제 API 키를 넣은 `/system/readiness`와 외부 API 실패 안내
+- 건축HUB 승인 계정의 실제 다동·집합건물·0건·페이지 초과 응답과 PK/면적제외 값 확인
 - 다른 PC에서 인계 패키지 가져오기와 원문 재연결
 
 수동 체크의 상세 절차는 `docs/release-smoke-test.md`를 사용합니다.

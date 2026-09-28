@@ -1,3 +1,4 @@
+import { fixtureEvidence } from "./helpers/building-registry-fixture";
 import { describe, expect, it } from "vitest";
 import type { Parcel } from "@/lib/finance/types";
 import {
@@ -31,9 +32,12 @@ function parcelWithBuildingState(
 }
 
 describe("building registry status", () => {
-  it("keeps an unavailable lookup distinct from a confirmed empty registry", () => {
+  it("keeps an unavailable lookup distinct from a successful zero-row query", () => {
     const unknownParcel = parcelWithBuildingState(null);
+    const registry = fixtureEvidence();
+    registry.title = { ...registry.title, rows: [], totalCount: 0, fetchedCount: 0 };
     const emptyParcel = parcelWithBuildingState({
+      registry,
       buildings: [],
       hasBuilding: false,
       totalBuildingArea: 0,
@@ -47,13 +51,13 @@ describe("building registry status", () => {
 
     expect(getBuildingRegistryStatus(unknownParcel.currentBuilding)).toBe("unknown");
     expect(getBuildingRegistryStatus(emptyParcel.currentBuilding)).toBe(
-      "confirmed-empty",
+      "no-records",
     );
     expect(buildStatusSummary(unknownParcel)[0]).toMatchObject({
       kind: "check",
       tone: "warning",
     });
     expect(buildStatusSummary(unknownParcel)[0].text).toContain("확보하지 못했습니다");
-    expect(buildStatusSummary(emptyParcel)[0].text).toContain("등록된 현재 건물이 없습니다");
+    expect(buildStatusSummary(emptyParcel)[0].text).toContain("표제부 조회가 0건");
   });
 });

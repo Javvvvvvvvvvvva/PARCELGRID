@@ -93,6 +93,7 @@ export interface ScenarioVM {
   irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
   taxBurden: number;
+  taxModelVersion?: string;
   maxExposure: number;
   paybackMonths: number | null;
   timeline: number;
@@ -168,6 +169,7 @@ export function toScenarioVM(
     irrStatus: result.irrStatus,
     equityMultiple: equityMult,
     taxBurden: taxes.total,
+    taxModelVersion: taxes.modelVersion,
     maxExposure: result.maxExposure,
     paybackMonths: result.paybackMonths,
     timeline: result.totalMonths,

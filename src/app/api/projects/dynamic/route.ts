@@ -1,3 +1,4 @@
+import { buildingRegistryEvidenceSchema } from "@/lib/building-registry/types";
 /**
  * POST /api/projects/dynamic
  *
@@ -97,12 +98,14 @@ const inputProvenanceSchema = z.object({
 const buildingLookupSchema = z
   .object({
     hasBuilding: z.boolean(),
-    buildings: z.array(z.record(z.unknown())).max(500),
+    buildings: z.array(z.record(z.unknown())).max(1000),
+    registry: buildingRegistryEvidenceSchema.optional(),
+    source: z.enum(["building-registry", "vworld-gis"]).optional(),
     totalBuildingArea: z.number().finite().nonnegative(),
     oldestApprovalDate: z.string().max(40),
     maxAgeYears: z.number().finite().nonnegative(),
     averageAgeYears: z.number().finite().nonnegative(),
-    redevelopmentSignal: z.enum(["vacant", "rebuild", "renovate", "keep"]),
+    redevelopmentSignal: z.enum(["vacant", "rebuild", "renovate", "keep", "unknown"]),
     signalLabel: z.string().max(200),
     signalReasoning: z.string().max(2_000),
   })

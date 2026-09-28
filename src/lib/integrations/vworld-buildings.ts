@@ -447,6 +447,7 @@ function signalText(signal: RedevelopmentSignal, age: number): { label: string; 
   if (signal === "rebuild") {
     return { label: "노후 건물 · 재건축 검토", reasoning: `${age}년 경과한 건물입니다.` };
   }
+  if (signal === "unknown") return { label: "노후도 미확인", reasoning: "GIS 속성의 일부 사용승인일이 없어 노후도를 확정하지 않습니다." };
   if (signal === "renovate") {
     return { label: "리모델링·신축 비교", reasoning: `${age}년 경과한 건물입니다.` };
   }
@@ -462,8 +463,8 @@ export function attachExistingBuildingGeometry(
   geometry: ExistingBuildingGeometry,
   lotAreaSqm: number
 ): BuildingLookupResultWithGeometry | null {
-  if (current) return { ...current, geometry };
-  if (geometry.status !== "matched" || geometry.footprints.length === 0) return null;
+  if (current?.hasBuilding) return { ...current, geometry };
+  if (geometry.status !== "matched" || geometry.footprints.length === 0) return current ? { ...current, geometry } : null;
 
   const largestId = geometry.footprints[0]?.id;
   const buildings: BuildingInfo[] = geometry.footprints.map((footprint) => {
@@ -472,6 +473,7 @@ export function attachExistingBuildingGeometry(
       footprint.footprintAreaSqm * Math.max(1, footprint.groundFloors);
     const ageYears = ageFromApprovalDate(footprint.useApprovalDate);
     return {
+      source: "vworld-gis" as const,
       name: footprint.buildingName,
       mainPurpose: "건축물",
       detailPurpose: "GIS건물통합정보",
@@ -503,10 +505,12 @@ export function attachExistingBuildingGeometry(
     .map((building) => building.approvalDate)
     .filter(Boolean)
     .sort();
-  const signal = redevelopmentSignalFromAge(maxAgeYears);
+  const signal = buildings.some((building) => !building.approvalDate) ? "unknown" : redevelopmentSignalFromAge(maxAgeYears);
   const text = signalText(signal, maxAgeYears);
 
   return {
+    registry: current?.registry,
+    source: "vworld-gis",
     buildings,
     hasBuilding: true,
     totalBuildingArea: buildings.reduce((sum, building) => sum + building.totalArea, 0),

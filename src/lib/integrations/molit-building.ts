@@ -1,27 +1,22 @@
-/**
- * 국토교통부 건축물대장 API adapter.
- *
- * 부지의 현재 건물 상태를 가져와서 시행 의사결정에 활용:
- *   - 빈 땅 → 즉시 신축 시행 가능
- *   - 30년+ 노후 → 재건축 검토
- *   - 15-30년 → 리모델링 검토
- *   - 15년 미만 → 시행 부적합 (이미 신축)
- *
- * Required key: MOLIT_SERVICE_KEY (data.go.kr).
- * 같은 키를 실거래가 API에도 사용. 별도 신청 불필요한 경우 많음.
- *
- * Endpoint: 건축물대장 표제부 (getBrTitleInfo)
- *   같은 부지에 여러 동 있을 수 있음 — 모든 동 반환.
- */
+/** 건축HUB 관측값. 조회 0건은 실제 빈 토지나 신축 허가를 뜻하지 않는다. */
+import {
+  BUILDING_REGISTRY_SOURCE, BUILDING_REGISTRY_VERSION, registryNumber,
+  type BuildingRegistryEvidence, type RegistryQuery, type RegistryRecord,
+} from "@/lib/building-registry/types";
+import { emptyRegistryDataset, fetchRegistryDataset } from "./molit-building-client";
 
-const SERVICE_KEY = process.env.MOLIT_SERVICE_KEY;
-
-const ENDPOINT =
-  "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo";
-
-export type RedevelopmentSignal = "vacant" | "rebuild" | "renovate" | "keep";
+export type RedevelopmentSignal = "vacant" | "rebuild" | "renovate" | "keep" | "unknown";
 
 export interface BuildingInfo {
+  /** Provider PK verbatim; absent in legacy/GIS-only observations. */
+  registryId?: string;
+  dongName?: string;
+  source?: "building-registry" | "vworld-gis";
+  missingFields?: string[];
+  parkingCount?: number | null;
+  passengerElevators?: number | null;
+  emergencyElevators?: number | null;
+  roof?: string;
   /** 동 이름. 없으면 빈 문자열 (단독주택 등) */
   name: string;
   /** 주용도 (단독주택, 업무시설, 공동주택 등) */
@@ -58,17 +53,14 @@ export interface BuildingInfo {
   unitCount: number;
 }
 
-export interface PnuParts {
-  sigunguCd: string;  // 5자리
-  bjdongCd: string;   // 5자리
-  platGbCd: string;   // "0" 일반, "1" 산
-  bun: string;        // 4자리
-  ji: string;         // 4자리
-}
+export type PnuParts = RegistryQuery;
 
 export interface BuildingLookupResult {
+  /** Optional for older saved parcels. Without provenance, false is unverified. */
+  registry?: BuildingRegistryEvidence;
+  source?: "building-registry" | "vworld-gis";
   buildings: BuildingInfo[];
-  /** 건물 있는가 */
+  /** 수신한 건물 속성이 있는가. false만으로 실제 나대지를 판정하지 않는다. */
   hasBuilding: boolean;
   /** 모든 동 연면적 합계 (m²) */
   totalBuildingArea: number;
@@ -94,7 +86,7 @@ export interface BuildingLookupResult {
 export function estimateUnitAreaSqm(
   result: BuildingLookupResult | null
 ): { unitAreaSqm: number; basis: string; count: number; sourceBuilding: string } | null {
-  if (!result || !result.hasBuilding || result.buildings.length === 0) {
+  if (!result || !result.hasBuilding || result.buildings.length === 0 || (result.registry && result.registry.title.status !== "complete")) {
     return null;
   }
 
@@ -139,7 +131,7 @@ export function estimateUnitAreaSqm(
 
   return {
     unitAreaSqm: Math.round((main.totalArea / count) * 10) / 10,
-    basis,
+    basis: `연면적 ÷ ${basis} (전유면적 아님)`,
     count,
     sourceBuilding: main.name || main.detailPurpose || "기존 건물",
   };
@@ -152,7 +144,7 @@ export function estimateUnitAreaSqm(
 export function estimateFloorHeightM(
   result: BuildingLookupResult | null
 ): number | null {
-  if (!result || !result.hasBuilding || result.buildings.length === 0) {
+  if (!result || !result.hasBuilding || result.buildings.length === 0 || (result.registry && result.registry.title.status !== "complete")) {
     return null;
   }
   const main =
@@ -177,6 +169,7 @@ export function estimateFloorHeightM(
 export function pnuToBuildingQuery(pnu: string): PnuParts | null {
   if (!/^\d{19}$/.test(pnu)) return null;
   const special = pnu.slice(10, 11);
+  if (special !== "1" && special !== "2") return null;
   return {
     sigunguCd: pnu.slice(0, 5),
     bjdongCd: pnu.slice(5, 10),
@@ -202,7 +195,8 @@ export function geocodeToBuildingQuery(
   mountainYn: string
 ): PnuParts | null {
   if (!/^\d{10}$/.test(bCode)) return null;
-  if (!mainAddressNo) return null;
+  if (!/^\d{1,4}$/.test(mainAddressNo) || !/^\d{0,4}$/.test(subAddressNo)) return null;
+  if (mountainYn !== "Y" && mountainYn !== "N") return null;
   return {
     sigunguCd: bCode.slice(0, 5),
     bjdongCd: bCode.slice(5, 10),
@@ -212,26 +206,12 @@ export function geocodeToBuildingQuery(
   };
 }
 
-/* ─────────────────────────── XML helpers ─────────────────────────── */
-
-function extractAll(xml: string, tag: string): string[] {
-  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g");
-  const out: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) out.push(m[1]);
-  return out;
-}
-
-function extractField(xml: string, tag: string): string {
-  const re = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`);
-  const m = xml.match(re);
-  return m ? m[1].trim() : "";
-}
-
 function parseDate(yyyymmdd: string): string {
   const s = yyyymmdd.trim();
-  if (s.length !== 8) return "";
-  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  if (!/^\d{8}$/.test(s)) return "";
+  const iso = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  const date = new Date(`${iso}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === iso && date.getTime() <= Date.now() ? iso : "";
 }
 
 function yearsSince(dateStr: string): number {
@@ -239,7 +219,7 @@ function yearsSince(dateStr: string): number {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return 0;
   const now = new Date();
-  return Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24 * 365.25));
+  return Math.max(0, Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24 * 365.25)));
 }
 
 /* ─────────────────────────── Signal computation ─────────────────────────── */
@@ -250,19 +230,23 @@ function computeSignal(
   if (buildings.length === 0) {
     return {
       redevelopmentSignal: "vacant",
-      signalLabel: "빈 토지",
-      signalReasoning: "현재 건물이 없어 즉시 신축 시행 가능합니다.",
+      signalLabel: "조회 범위 내 표제부 0건",
+      signalReasoning: "요청 지번의 표제부 조회 결과가 0건입니다. 부속지번·미등재·멸실·현장 상태는 별도 확인해야 합니다.",
     };
   }
 
-  // 가장 오래된 건물 기준으로 판단
+  if (buildings.some((building) => !building.approvalDate)) {
+    return { redevelopmentSignal: "unknown", signalLabel: "노후도 미확인",
+      signalReasoning: "일부 사용승인일이 없어 전체 건물의 노후도를 판단하지 않습니다." };
+  }
+  // 가장 오래된 확인 가능한 사용승인일 기준의 참고
   const oldestAge = Math.max(...buildings.map((b) => b.ageYears));
 
   if (oldestAge >= 30) {
     return {
       redevelopmentSignal: "rebuild",
       signalLabel: "재건축 검토",
-      signalReasoning: `가장 오래된 건물 ${oldestAge}년 노후 — 철거 후 신축 시행 적합.`,
+      signalReasoning: `가장 오래된 건물 ${oldestAge}년 노후 — 유지·보수·철거 후 신축 비교 필요.`,
     };
   }
 
@@ -270,143 +254,63 @@ function computeSignal(
     return {
       redevelopmentSignal: "renovate",
       signalLabel: "리모델링 검토",
-      signalReasoning: `${oldestAge}년 노후 — 리모델링 또는 운영 유지가 일반적.`,
+      signalReasoning: `${oldestAge}년 노후 — 구조·설비·운영 현황 확인 후 대안 비교 필요.`,
     };
   }
 
   return {
     redevelopmentSignal: "keep",
-    signalLabel: "신축 (유지 권장)",
-    signalReasoning: `${oldestAge}년 노후 — 시행 부적합. 이미 신축 상태.`,
+    signalLabel: "기존 건물 유지 검토",
+    signalReasoning: `${oldestAge}년 노후 — 노후도만으로 철거나 개발 적합성을 판단하지 않습니다.`,
   };
 }
 
-/* ─────────────────────────── Main fetcher ─────────────────────────── */
-
-/**
- * Internal: fetch building registry given pre-computed parts.
- */
-async function lookupBuildingByParts(
-  parts: PnuParts
-): Promise<BuildingLookupResult | null> {
-  if (!SERVICE_KEY) {
-    throw new Error("MOLIT_SERVICE_KEY environment variable is not set.");
-  }
-
-  const qs = new URLSearchParams({
-    serviceKey: SERVICE_KEY,
-    sigunguCd: parts.sigunguCd,
-    bjdongCd: parts.bjdongCd,
-    platGbCd: parts.platGbCd,
-    bun: parts.bun,
-    ji: parts.ji,
-    numOfRows: "30",
-    pageNo: "1",
-  });
-
-  const res = await fetch(`${ENDPOINT}?${qs.toString()}`, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; PARCELGRID/2.4; +https://parcelgrid.app)",
-      Accept: "application/xml",
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`MOLIT building HTTP ${res.status}`);
-  }
-
-  const xml = await res.text();
-
-  const resultCode = extractField(xml, "resultCode");
-  if (resultCode && resultCode !== "00" && resultCode !== "000") {
-    const msg = extractField(xml, "resultMsg");
-    throw new Error(`MOLIT building error ${resultCode}: ${msg}`);
-  }
-
-  const totalCount = parseInt(extractField(xml, "totalCount") || "0", 10);
-
-  // 빈 땅
-  if (totalCount === 0) {
-    const sig = computeSignal([]);
-    return {
-      buildings: [],
-      hasBuilding: false,
-      totalBuildingArea: 0,
-      oldestApprovalDate: "",
-      maxAgeYears: 0,
-      averageAgeYears: 0,
-      ...sig,
-    };
-  }
-
-  // 각 동(棟) 파싱
-  const items = extractAll(xml, "item");
-  const buildings: BuildingInfo[] = items.map((item) => parseBuilding(item));
-
-  // 주건축물 우선 정렬
-  buildings.sort((a, b) => {
-    if (a.isMainBuilding && !b.isMainBuilding) return -1;
-    if (!a.isMainBuilding && b.isMainBuilding) return 1;
-    return b.totalArea - a.totalArea; // 큰 동부터
-  });
-
-  // 집계
-  const totalBuildingArea = buildings.reduce((sum, b) => sum + b.totalArea, 0);
-  const approvalDates = buildings.map((b) => b.approvalDate).filter(Boolean);
-  approvalDates.sort();
-  const oldestApprovalDate = approvalDates[0] || "";
-  const ages = buildings.map((b) => b.ageYears).filter((a) => a > 0);
-  const maxAgeYears = ages.length > 0 ? Math.max(...ages) : 0;
-  const averageAgeYears =
-    ages.length > 0
-      ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length)
-      : 0;
-
-  const sig = computeSignal(buildings);
-
+/** Shared deadline bounds pagination and optional detail requests together. */
+async function lookupBuildingByParts(parts: PnuParts, includeDetails: boolean): Promise<BuildingLookupResult> {
+  const signal = AbortSignal.timeout(25_000);
+  const title = await fetchRegistryDataset("getBrTitleInfo", parts, signal);
+  const [floors, exclusiveCommon] = includeDetails && title.rows.length
+    ? await Promise.all([
+        fetchRegistryDataset("getBrFlrOulnInfo", parts, signal),
+        fetchRegistryDataset("getBrExposPubuseAreaInfo", parts, signal),
+      ])
+    : [emptyRegistryDataset("getBrFlrOulnInfo", parts), emptyRegistryDataset("getBrExposPubuseAreaInfo", parts)];
+  const registry: BuildingRegistryEvidence = { version: BUILDING_REGISTRY_VERSION,
+    sourceUrl: BUILDING_REGISTRY_SOURCE, query: parts, title, floors, exclusiveCommon };
+  const buildings = title.rows.map(parseBuilding).sort((a, b) =>
+    Number(b.isMainBuilding) - Number(a.isMainBuilding) || b.totalArea - a.totalArea);
+  const approvalDates = buildings.map((b) => b.approvalDate).filter(Boolean).sort();
+  const ages = buildings.filter((b) => b.approvalDate).map((b) => b.ageYears);
+  const unknown = title.status !== "complete";
+  const sig = unknown ? { redevelopmentSignal: "unknown" as const,
+    signalLabel: buildings.length ? "일부 대장 확보 · 추가 확인" : "대장 조회 미확인",
+    signalReasoning: "조회가 완결되지 않아 건물 부재나 전체 노후도를 확정하지 않습니다." } : computeSignal(buildings);
   return {
-    buildings,
-    hasBuilding: true,
-    totalBuildingArea,
-    oldestApprovalDate,
-    maxAgeYears,
-    averageAgeYears,
+    registry, source: "building-registry", buildings, hasBuilding: buildings.length > 0,
+    totalBuildingArea: buildings.reduce((sum, b) => sum + b.totalArea, 0),
+    oldestApprovalDate: approvalDates[0] || "", maxAgeYears: ages.length ? Math.max(...ages) : 0,
+    averageAgeYears: ages.length ? Math.round(ages.reduce((a, b) => a + b, 0) / ages.length) : 0,
     ...sig,
   };
 }
 
-function parseBuilding(item: string): BuildingInfo {
-  const str = (tag: string) => extractField(item, tag);
-  const num = (tag: string) => {
-    const v = str(tag);
-    if (!v) return 0;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-
+function parseBuilding(record: RegistryRecord): BuildingInfo {
+  const str = (tag: string) => record.fields[tag] || "";
+  const nullable = (tag: string) => registryNumber(record.fields[tag]);
+  const num = (tag: string) => nullable(tag) ?? 0;
   const approvalDate = parseDate(str("useAprDay"));
-  const isMainBuilding = str("mainAtchGbCd") === "0";
-
+  const parking = ["indrMechUtcnt", "oudrMechUtcnt", "indrAutoUtcnt", "oudrAutoUtcnt"].map(nullable);
   return {
-    name: str("bldNm").trim(),
-    mainPurpose: str("mainPurpsCdNm"),
-    detailPurpose: str("etcPurps"),
-    groundFloors: num("grndFlrCnt"),
-    undergroundFloors: num("ugrndFlrCnt"),
-    totalArea: num("totArea"),
-    buildingArea: num("archArea"),
-    buildingCoverage: num("bcRat"),
-    floorAreaRatio: num("vlRat"),
-    structure: str("strctCdNm"),
-    height: num("heit"),
-    approvalDate,
-    ageYears: yearsSince(approvalDate),
-    isMainBuilding,
-    householdCount: num("hhldCnt"),
-    familyCount: num("fmlyCnt"),
-    unitCount: num("hoCnt"),
+    registryId: record.registryPk || undefined, dongName: str("dongNm"), source: "building-registry",
+    missingFields: ["totArea", "archArea", "grndFlrCnt", "ugrndFlrCnt", "heit", "bcRat", "vlRat"].filter((key) => nullable(key) == null),
+    parkingCount: parking.every((value) => value != null) ? parking.reduce<number>((sum, value) => sum + (value ?? 0), 0) : null,
+    passengerElevators: nullable("rideUseElvtCnt"), emergencyElevators: nullable("emgenUseElvtCnt"),
+    roof: str("roofCdNm") || str("etcRoof"),
+    name: str("bldNm"), mainPurpose: str("mainPurpsCdNm"), detailPurpose: str("etcPurps"),
+    groundFloors: num("grndFlrCnt"), undergroundFloors: num("ugrndFlrCnt"),
+    totalArea: num("totArea"), buildingArea: num("archArea"), buildingCoverage: num("bcRat"), floorAreaRatio: num("vlRat"),
+    structure: str("strctCdNm"), height: num("heit"), approvalDate, ageYears: yearsSince(approvalDate),
+    isMainBuilding: str("mainAtchGbCd") === "0", householdCount: num("hhldCnt"), familyCount: num("fmlyCnt"), unitCount: num("hoCnt"),
   };
 }
 
@@ -419,7 +323,7 @@ export async function lookupBuildingByPnu(
 ): Promise<BuildingLookupResult | null> {
   const parts = pnuToBuildingQuery(pnu);
   if (!parts) return null;
-  return lookupBuildingByParts(parts);
+  return lookupBuildingByParts(parts, false);
 }
 
 /**
@@ -433,5 +337,5 @@ export async function lookupBuildingByJibun(
 ): Promise<BuildingLookupResult | null> {
   const parts = geocodeToBuildingQuery(bCode, mainAddressNo, subAddressNo, mountainYn);
   if (!parts) return null;
-  return lookupBuildingByParts(parts);
+  return lookupBuildingByParts(parts, true);
 }
