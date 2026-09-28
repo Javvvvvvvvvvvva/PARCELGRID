@@ -46,7 +46,7 @@
     "rhino3dm": "8.35.0",
     "suncalc": "2.0.2",
     "tailwind-merge": "^2.5.2",
-    "three": "^0.184.0",
+    "three": "^0.186.1",
     "three-mesh-bvh": "0.9.15",
     "zod": "^3.23.8",
     "zustand": "^5.0.0"
