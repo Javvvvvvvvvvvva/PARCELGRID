@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
 import { PlanningGuidedEditor } from "@/components/planning/PlanningGuidedEditor";
@@ -35,6 +36,9 @@ import type {
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num, pyeong, won } from "@/lib/utils/format";
+
+const InteriorPlanWorkspace = dynamic(() => import("./interior/InteriorPlanWorkspace"), { ssr: false });
+const PlanningSolarPanel = dynamic(() => import("./interior/PlanningSolarPanel"), { ssr: false });
 
 const ORIGIN_LABEL: Record<PlanningScenarioOrigin, string> = {
   "algorithm-safe": "안정형",
@@ -994,6 +998,12 @@ export function PlanningScenarioWorkspaceV4({
                   parkingGeometry={selectedParkingGeometry}
                   height={430}
                 />
+
+                {selectedGeometry && <>
+                  <InteriorPlanWorkspace scenario={selectedScenario} planning={selectedGeometry} disabled={geometryLocked}
+                    onChange={(floorPrograms) => editPlanningScenarioDraft(selectedScenario.id, { floorPrograms })} />
+                  <PlanningSolarPanel planning={selectedGeometry} />
+                </>}
 
                 <div className="selected-metrics">
                   <Metric

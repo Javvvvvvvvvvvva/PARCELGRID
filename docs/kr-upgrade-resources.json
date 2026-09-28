@@ -1,0 +1,492 @@
+[
+  {
+    "category": "공간 편집",
+    "repository": "https://github.com/xyflow/xyflow",
+    "name": "React Flow",
+    "licenseObserved": "MIT",
+    "purpose": "방·용도 노드와 인접/분리 관계를 편집하는 버블 화면",
+    "status": "적용 · @xyflow/react 12.12.0",
+    "condition": "그래프 UI다. 방 경계·치수·복도를 자동 생성하지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "공간 편집",
+    "repository": "https://github.com/dagrejs/dagre",
+    "name": "Dagre",
+    "licenseObserved": "MIT",
+    "purpose": "버블 그래프의 초기 정렬",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "ELK와 대안 관계. 화면상 배치일 뿐 건축 공간 배치가 아니다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "공간 편집",
+    "repository": "https://github.com/kieler/elkjs",
+    "name": "ELK.js",
+    "licenseObserved": "EPL-2.0",
+    "purpose": "복잡한 관계 그래프 정렬",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "단순 그래프면 Dagre로 충분. 배포·수정 방식에 맞춰 EPL 조건 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "공간 편집",
+    "repository": "https://github.com/konvajs/react-konva",
+    "name": "React Konva",
+    "licenseObserved": "MIT",
+    "purpose": "방 경계·치수·문·선택 핸들의 2D 편집기",
+    "status": "현재 미도입 · 자체 SVG 편집",
+    "condition": "기존 SVG 편집 확장과 먼저 비교. 제약·스냅·undo는 직접 구현.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "공간 편집",
+    "repository": "https://github.com/pmndrs/drei",
+    "name": "Drei",
+    "licenseObserved": "MIT",
+    "purpose": "3D 이동·회전 핸들, 단면/선택 조작 보조",
+    "status": "기존 의존성 재사용 · 3D 구획",
+    "condition": "이미 설치됨. 현재 SVG 이동·회전을 유지하고 3D 편집 연결을 추가.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/google/or-tools",
+    "name": "OR-Tools CP-SAT",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "방·코어·주차 후보의 제약식 기반 조합 탐색",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "완성형 건축 솔버가 아니다. 정수 좌표, 자체 제약 모델, 별도 Python/C++ 실행부 필요.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/anyoptimization/pymoo",
+    "name": "pymoo",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "수익·채광·동선·연면적의 다목적 대안 비교",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "우선 기존 후보에 Pareto 필터를 적용. 최적성·법규 적합성을 보증하지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/shervinazadi/topoGenesis",
+    "name": "topoGenesis 라이브러리",
+    "licenseObserved": "MIT",
+    "purpose": "격자·이웃관계·공간 적합도 분석의 참고 구현",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "topogenesis.xyz 전체 구현과 동일시 금지. Python 의존성과 구현 범위를 따로 검토.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/ennauata/houseganpp",
+    "name": "House-GAN++",
+    "licenseObserved": "연구용 제한 + GPL 본문",
+    "purpose": "공간 관계 그래프 기반 평면 생성 연구",
+    "status": "제품 제외 · 독립 엔진으로 구현",
+    "condition": "LICENSE 첫머리에 연구용 제한 명시. 코드·학습 데이터·가중치 권한 확인 전 제품에 복사하지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/HanHan55/Graph2plan",
+    "name": "Graph2Plan",
+    "licenseObserved": "명시적 허가 미확인",
+    "purpose": "그래프·건물 경계에서 평면을 생성하는 연구",
+    "status": "제품 제외 · 독립 엔진으로 구현",
+    "condition": "저장소 트리에서 LICENSE/COPYING 미발견. RPLAN 권리 및 Matlab 후처리 의존성도 별도.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "생성·최적화",
+    "repository": "https://github.com/furnishup/blueprint3d",
+    "name": "Blueprint3D",
+    "licenseObserved": "MIT",
+    "purpose": "2D 평면과 3D 실내 편집의 상호작용 참고",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "저장소 마지막 push는 2021년. 현재 React/Three 기반에 통째 도입하는 방식은 비추천.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/proj4js/proj4js",
+    "name": "Proj4js",
+    "licenseObserved": "MIT 계열 본문 확인",
+    "purpose": "국내 GIS 좌표계와 로컬 미터 좌표 변환",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "원본 CRS/축/원점/단위를 기록. 자료마다 EPSG가 달라 하나로 가정하면 안 된다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/Turfjs/turf",
+    "name": "Turf",
+    "licenseObserved": "MIT",
+    "purpose": "필지·도로·주변 건물 공간 연산",
+    "status": "기존 의존성 재사용 · 평면 검증",
+    "condition": "이미 설치됨. 지리 좌표 연산과 투영 좌표 연산의 단위 계약을 구분.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/AngusJohnson/Clipper2",
+    "name": "Clipper2",
+    "licenseObserved": "Boost Software License 1.0",
+    "purpose": "폴리곤 교차·차집합·오프셋",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "원본은 C++/C#/Delphi. JS/WASM 바인딩은 별도 선택·검증. 변별 후퇴 규칙은 직접 구현.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/elalish/manifold",
+    "name": "Manifold",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "코어·보이드·테라스 등의 솔리드 Boolean",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "JS/TS/WASM 지원. 입력 유효성·허용오차·면적 대사를 확인해야 한다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/shapely/shapely",
+    "name": "Shapely",
+    "licenseObserved": "BSD-3-Clause",
+    "purpose": "서버에서 폴리곤 유효성·교차·면적 재검증",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "Python/GEOS 구성. 브라우저와 서버가 서로 다른 허용오차로 판정하지 않도록 통일.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/gkjohnson/three-mesh-bvh",
+    "name": "three-mesh-bvh",
+    "licenseObserved": "MIT",
+    "purpose": "광선 교차·가시성·충돌 후보 조회 가속",
+    "status": "적용 · three-mesh-bvh 0.9.15",
+    "condition": "일조 계산의 일부를 가속한다. 자체로 일조시간·일사량을 산출하는 엔진은 아니다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "형상·좌표",
+    "repository": "https://github.com/gkjohnson/three-bvh-csg",
+    "name": "three-bvh-csg",
+    "licenseObserved": "MIT",
+    "purpose": "빠른 3D Boolean 편집 미리보기",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "README가 실험적이라고 명시. 핵심 면적·공사량 판정의 유일한 기반으로 두지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/mourner/suncalc",
+    "name": "SunCalc",
+    "licenseObserved": "BSD-2-Clause",
+    "purpose": "날짜·위치별 태양 방위/고도",
+    "status": "적용 · suncalc 2.0.2",
+    "condition": "차폐 판정은 주변 3D 모델과 raycast로 별도 구현. API 버전 변화와 좌표축 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/ladybug-tools/ladybug",
+    "name": "Ladybug",
+    "licenseObserved": "AGPL-3.0",
+    "purpose": "기후 데이터 및 환경 분석",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "서버에서 실행한다는 이유만으로 AGPL 의무가 사라진다고 가정하지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/ladybug-tools/honeybee-core",
+    "name": "Honeybee Core",
+    "licenseObserved": "AGPL-3.0",
+    "purpose": "환경 시뮬레이션용 건물 모델",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "내부 공간·개구부·재료가 있어야 의미 있는 모델이 된다. 구형 honeybee 저장소와 구분.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/ladybug-tools/honeybee-radiance",
+    "name": "Honeybee Radiance",
+    "licenseObserved": "AGPL-3.0",
+    "purpose": "Radiance 기반 상세 채광 시뮬레이션 연계",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "하늘·재료·개구부·기후 입력과 결과 검증 필요. 단순 그림자와 다른 범위.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/NatLabRockies/EnergyPlus",
+    "name": "EnergyPlus",
+    "licenseObserved": "BSD 계열 별도 조건",
+    "purpose": "건물 열·에너지 성능 시뮬레이션",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "명칭 사용 조건 포함. 외피·용도 스케줄·설비·기후가 없으면 결과 신뢰 불가.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/geotiffjs/geotiff.js",
+    "name": "GeoTIFF.js",
+    "licenseObserved": "MIT",
+    "purpose": "브라우저의 DEM/GeoTIFF 높이 샘플링",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "IMG를 직접 읽는 도구로 간주하지 말 것. 래스터 CRS·NoData·표고 기준 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "환경·지형",
+    "repository": "https://github.com/OSGeo/gdal",
+    "name": "GDAL",
+    "licenseObserved": "주로 MIT 계열, 구성별 고지",
+    "purpose": "국내 DEM·벡터 자료 전처리/변환",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "원본 포맷 확인 후 GeoTIFF/COG 등으로 변환. 번들 드라이버별 조건도 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "지도·주변",
+    "repository": "https://github.com/NASA-AMMOS/3DTilesRendererJS",
+    "name": "3D Tiles Renderer",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "현재 Three.js/R3F 화면에 주변 건물·지형 타일 표시",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "타일 공급원·좌표 정합·LOD·사용권이 먼저다. VWorld가 바로 호환된다는 보장은 없다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "지도·주변",
+    "repository": "https://github.com/maplibre/maplibre-gl-js",
+    "name": "MapLibre GL JS",
+    "licenseObserved": "BSD-3-Clause",
+    "purpose": "부지·규제·비교사례 지도 레이어 편집",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "지도 렌더러와 배경지도 데이터 이용권은 별개. 현재 지도와 교체 필요성부터 검토.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "지도·주변",
+    "repository": "https://github.com/CesiumGS/cesium",
+    "name": "CesiumJS",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "광역 지형·지구 좌표 기반 3D 분석",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "같은 화면에 Three와 대형 엔진을 중복 탑재하지 않도록 화면 책임 분리.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "지도·주변",
+    "repository": "https://github.com/visgl/deck.gl",
+    "name": "deck.gl",
+    "licenseObserved": "MIT",
+    "purpose": "대규모 필지·거래·통계의 지도 시각화",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "단일 소규모 부지 편집에는 우선순위가 낮다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "도면·BIM",
+    "repository": "https://github.com/mcneel/rhino3dm",
+    "name": "rhino3dm",
+    "licenseObserved": "MIT",
+    "purpose": "레이어·속성을 유지하는 Rhino .3dm 입출력",
+    "status": "적용 · rhino3dm 8.35.0",
+    "condition": "Rhino와 독립적으로 사용 가능. Rhino Compute의 전체 모델링 기능과는 다름.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "도면·BIM",
+    "repository": "https://github.com/mozman/ezdxf",
+    "name": "ezdxf",
+    "licenseObserved": "MIT",
+    "purpose": "치수·해치·레이어를 갖춘 DXF 생성/검증",
+    "status": "DXF 교차 검증 도구 · 런타임 미포함",
+    "condition": "기존 TypeScript DXF와 비용 비교. DWG는 ODA 변환 등 별도 의존성·권리 필요.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "도면·BIM",
+    "repository": "https://github.com/ThatOpen/engine_web-ifc",
+    "name": "web-ifc",
+    "licenseObserved": "MPL-2.0",
+    "purpose": "브라우저 IFC 읽기/쓰기",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "IFC 의미 구조·단위·층·부재 매핑은 우리 구현. MPL 적용 파일과 WASM 배포 조건 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "도면·BIM",
+    "repository": "https://github.com/ThatOpen/engine_components",
+    "name": "That Open Components",
+    "licenseObserved": "MIT",
+    "purpose": "BIM 선택·분류·검토 도구",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "의존하는 web-ifc 등은 별도 라이선스. Three 버전과 실제 선택 패키지를 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "도면·BIM",
+    "repository": "https://github.com/IfcOpenShell/IfcOpenShell",
+    "name": "IfcOpenShell",
+    "licenseObserved": "코어 LGPL-3.0-or-later",
+    "purpose": "서버 IFC 생성·수량·모델 감사·변경 비교",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "Bonsai 등 일부 구성은 GPL. IfcTester/IDS 검증은 한국 법규 전부를 판정하는 기능이 아니다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "주차·동선",
+    "repository": "https://github.com/AtsushiSakai/PythonRobotics",
+    "name": "PythonRobotics",
+    "licenseObserved": "MIT",
+    "purpose": "Hybrid A*/Reeds–Shepp 등 차량 경로 알고리즘 참고",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "차체 폭·휠베이스·조향·앞뒤 돌출·회전 포락선을 모델링해야 주차 검증에 쓸 수 있다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "문서·근거",
+    "repository": "https://github.com/docling-project/docling",
+    "name": "Docling",
+    "licenseObserved": "MIT, 모델은 별도",
+    "purpose": "PDF 표·문서 구조의 추출",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "한국어 고시·도면으로 정확도 시험. 코드 라이선스가 모든 모델 사용권을 포함하지 않는다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "문서·근거",
+    "repository": "https://github.com/PaddlePaddle/PaddleOCR",
+    "name": "PaddleOCR",
+    "licenseObserved": "Apache-2.0, 모델 확인",
+    "purpose": "스캔 고시·대장 문자의 OCR",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "숫자·소수점·단위 오류 가능. 추출값 승인과 원문 좌표 연결이 필요.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "문서·근거",
+    "repository": "https://github.com/mozilla/pdf.js",
+    "name": "PDF.js",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "원문 PDF 표시와 인용 페이지 검토",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "OCR 엔진은 아니다. 원문 확인 UI와 추출 엔진을 구분.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "문서·근거",
+    "repository": "https://github.com/pgvector/pgvector",
+    "name": "pgvector",
+    "licenseObserved": "PostgreSQL License",
+    "purpose": "법령·고시 근거 검색",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "소규모면 검색 DB 추가 전 기존 필터/전문검색부터. 유사 문장이 적용 법규라는 뜻은 아니다.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "보고서·재무",
+    "repository": "https://github.com/exceljs/exceljs",
+    "name": "ExcelJS",
+    "licenseObserved": "MIT",
+    "purpose": "계산 근거·가정·민감도 표를 XLSX로 인계",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "Excel 수식 자체를 계산하는 엔진은 아님. Decimal 결과와 저장값을 대사.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "보고서·재무",
+    "repository": "https://github.com/Hopding/pdf-lib",
+    "name": "pdf-lib",
+    "licenseObserved": "MIT",
+    "purpose": "PDF 합치기·표지·벡터 주석·페이지 가공",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "HTML 페이지 조판 도구가 아님. 한글 폰트 임베딩과 폰트 사용권 확인.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/GoogleChromeLabs/comlink",
+    "name": "Comlink",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "브라우저 형상·추천 연산을 Worker로 분리",
+    "status": "적용 · comlink 4.4.2",
+    "condition": "알고리즘 복잡도를 줄이지는 않는다. 취소·진행률·오래된 결과 폐기 구현.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/dexie/Dexie.js",
+    "name": "Dexie",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "IndexedDB 자동 저장·버전·대용량 로컬 데이터",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "브라우저 저장은 별도 PC 동기화·백업과 다름. 서버 동기화 및 복구 경로 별도.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/yjs/yjs",
+    "name": "Yjs",
+    "licenseObserved": "MIT",
+    "purpose": "공동 편집과 코멘트 동기화",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "동시 수정의 데이터 병합이 유효한 형상·승인을 보장하지 않음.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/taskforcesh/bullmq",
+    "name": "BullMQ",
+    "licenseObserved": "MIT",
+    "purpose": "긴 솔버·렌더·BIM 변환 작업의 큐·재시도",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "현재 배포 구조와 영속 작업 실행 환경을 먼저 정한다. Pro 기능과 별개.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/microsoft/playwright",
+    "name": "Playwright",
+    "licenseObserved": "Apache-2.0",
+    "purpose": "실제 입력→편집→보고서 흐름과 PDF 회귀 검증",
+    "status": "브라우저 검증 도구 · 런타임 미포함",
+    "condition": "스크린샷만으로 면적·재무 정합성을 증명할 수 없음. 단위/통합 테스트와 함께.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "성능·운영",
+    "repository": "https://github.com/postgis/postgis",
+    "name": "PostGIS",
+    "licenseObserved": "GPL-2.0",
+    "purpose": "서버의 필지·도로·규제 공간 질의",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "별도 DB 확장. 애플리케이션과 결합·배포 방식을 검토하며 무조건 전체 앱 공개라고 단정하지 않음.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "한국 연동 참고",
+    "repository": "https://github.com/WooilJeong/PublicDataReader",
+    "name": "PublicDataReader",
+    "licenseObserved": "MIT",
+    "purpose": "국내 API 명세·정규화·조회 사례 참고",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "기존 TS 어댑터를 전부 Python으로 바꾸지 말고 필요한 처리와 테스트 사례만 선별.",
+    "reviewedAt": "2026-09-28"
+  },
+  {
+    "category": "한국 연동 참고",
+    "repository": "https://github.com/UrbanWatcherKr/korean-land-mcp",
+    "name": "Korean Land MCP",
+    "licenseObserved": "MIT",
+    "purpose": "VWorld 도시계획·규제 레이어 매핑 참고",
+    "status": "후속 검토 · 현재 미도입",
+    "condition": "실제 backend는 VWorld. 토지이음 공식 API나 독립 장애 대체원으로 취급하면 안 됨.",
+    "reviewedAt": "2026-09-28"
+  }
+]

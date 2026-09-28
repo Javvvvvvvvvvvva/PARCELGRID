@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import "@/lib/three/guard-empty-paths";
 import {
@@ -249,17 +249,14 @@ function FloorMassMesh({
           opacity={unsupported ? 0.95 : 0.58}
         />
       </lineSegments>
-      <Text
+      <Html
         position={[
           labelPoint.x + extent * 0.07,
           (mass.baseHeightM + mass.topHeightM) / 2,
           labelPoint.z,
         ]}
-        fontSize={Math.max(0.65, extent * 0.055)}
-        color={invalid ? "#991b1b" : "#334155"}
-        anchorX="left"
-        anchorY="middle"
-        maxWidth={extent * 1.1}
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none", color: invalid ? "#991b1b" : "#334155", fontSize: 11, fontWeight: 650, whiteSpace: "nowrap", textShadow: "0 1px 2px white" }}
       >
         {`${mass.label} · ${floorUseSummary(mass)}${
           unsupported
@@ -268,7 +265,7 @@ function FloorMassMesh({
               ? " · 면적 초과"
               : ""
         }`}
-      </Text>
+      </Html>
     </group>
   );
 }
@@ -411,15 +408,13 @@ function ParkingGeometryLayer({
 function NorthArrow({ extent }: { extent: number }) {
   return (
     <group position={[0, 0.08, -extent * 0.86]}>
-      <Text
-        fontSize={Math.max(0.9, extent * 0.1)}
-        color="#dc2626"
-        anchorX="center"
-        anchorY="middle"
-        rotation={[-Math.PI / 2, 0, 0]}
+      <Html
+        center
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none", color: "#dc2626", fontSize: 16, fontWeight: 800 }}
       >
         N
-      </Text>
+      </Html>
     </group>
   );
 }

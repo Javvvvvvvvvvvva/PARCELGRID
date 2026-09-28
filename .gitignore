@@ -9,9 +9,11 @@
 
 # production build
 /build
+/public/vendor/rhino3dm/
 
 # testing
 /coverage
+/test-results/
 
 # PARCELGRID local runtime data
 /.parcelgrid-data/

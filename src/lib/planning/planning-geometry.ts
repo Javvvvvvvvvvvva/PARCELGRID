@@ -13,6 +13,9 @@ import {
 } from "@/lib/planning/planning-massing";
 import type { PlanningScenario } from "@/lib/planning/types";
 import { resolvePlanningGeometrySource } from "@/lib/planning/geometry-source";
+import { validateInteriorLayout } from "@/lib/planning/interior/geometry";
+import { isInteriorFinanceCurrent } from "@/lib/planning/interior/finance";
+import type { InteriorLayout, InteriorAssessment } from "@/lib/planning/interior/types";
 
 export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v2" as const;
 export const GEOMETRY_AREA_PASS_TOLERANCE_PCT = 0.1;
@@ -43,6 +46,7 @@ export interface PlanningGeometryFloor extends PlanningFloorMass {
   areaDifferenceSqm: number;
   areaStatus: "pass" | "review" | "fail";
   selfIntersects: boolean;
+  interior?: { layout: InteriorLayout; assessment: InteriorAssessment };
 }
 
 export interface PlanningGeometrySnapshot {
@@ -502,11 +506,13 @@ export function buildPlanningGeometry(
   );
   const floors: PlanningGeometryFloor[] = model.floors.map((floor) => {
     const absDifferencePct = Math.abs(floor.areaDifferencePct);
+    const interior = scenario.floorPrograms.find(program => program.id === floor.id)?.interior;
     return {
       ...floor,
       areaDifferenceSqm: floor.visualAreaSqm - floor.programAreaSqm,
       areaStatus: areaStatus(absDifferencePct),
       selfIntersects: polygonSelfIntersects(floor.shape),
+      ...(interior ? { interior: { layout: interior, assessment: validateInteriorLayout(interior, floor.shape) } } : {}),
     };
   });
   const aboveGroundFloors = floors.filter((floor) => floor.level > 0);
@@ -537,6 +543,24 @@ export function buildPlanningGeometry(
         100
       : 0;
   const baseValidation = buildValidation(floors, officialArea, measuredArea);
+  const interiorFailures = floors.flatMap(floor =>
+    (floor.interior?.assessment.issues ?? []).filter(issue => issue.severity === "fail").map(issue => ({
+      code: `interior-${issue.code}`, severity: "fail" as const,
+      floorId: floor.id, floorLabel: floor.label, message: `${floor.label}: ${issue.message}`,
+    }))
+  );
+  for (const floor of scenario.floorPrograms) {
+    if (floor.interior && !isInteriorFinanceCurrent(floor)) interiorFailures.push({
+      code: "interior-finance-stale", severity: "fail", floorId: floor.id, floorLabel: floor.label,
+      message: `${floor.label}: 내부 구획과 사업성 면적을 다시 대조·반영해야 합니다.`,
+    });
+  }
+  if (interiorFailures.length) {
+    baseValidation.issues.push(...interiorFailures);
+    baseValidation.status = "fail";
+    baseValidation.exportable = false;
+    baseValidation.representativeEligible = false;
+  }
   const roads = (input.roads ?? []).map((road) => ({
     name: road.name,
     points: lineToLocalMeters(road.points, origin),
@@ -557,6 +581,7 @@ export function buildPlanningGeometry(
       programAreaSqm: round(floor.programAreaSqm),
       visualAreaSqm: round(floor.visualAreaSqm),
       shape: floor.shape.map(canonicalPoint),
+      ...(floor.interior ? { interior: floor.interior.layout } : {}),
     })),
     roads: roads.map((road) => ({
       name: road.name,

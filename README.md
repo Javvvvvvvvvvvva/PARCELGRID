@@ -2,9 +2,9 @@
 
 주소 하나에서 시작해 필지 현황, 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 연결하는 **한국 저층 개발 의사결정 도구**입니다.
 
-PARCELGRID는 자동 설계 도구가 아니라, 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
+PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 초기 공간 구획 생성·편집·검증도 지원합니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
 
-> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 변경은 [2026-08-26 릴리스 노트](docs/RELEASE-NOTES-2026-08-26.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
+> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [한국판 내부 구획·일영 업그레이드](docs/KR-INTERIOR-UPGRADE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
 
 ## 제품 원칙
 
@@ -22,10 +22,13 @@ PARCELGRID는 자동 설계 도구가 아니라, 공공데이터와 사용자 �
 | 현황 분석 | 출처·신뢰도 표시, 기존 건축물과 접도 조건, 주변 거래·역세권·리스크 요약 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
+| 내부 구획 | 독립 템플릿 후보, 2D 편집·수동 문 연결, 공간 관계, 3D 구획, 경계·겹침·코어 연결 검사, 명시적 사업성 반영 |
+| 예비 일영 | KST 기준 계획 매스의 외부 지면 그림자 계산. 주변 건물·지형·실내 채광·법정 판정은 미포함 |
 | 사업성 | 토지비, 공사비, 금융비, 매출, 손익, 수익률과 자금조달·사용액 대사 |
 | 전문가 인계 | 건축·시공·금융·세무 근거, 승인 기록, 다른 PC로 옮길 수 있는 프로젝트 패키지 |
 | 보고서 | 현황·계획·사업성·리스크·근거·승인·AI 외장 콘셉트를 포함한 A4 인쇄형 결과 |
 | 내보내기 | SketchUp용 COLLADA DAE, AutoCAD 호환 R2000 ASCII DXF, 메타데이터·안내문 |
+| 내부 구획 인계 | 별도 개념 DXF ZIP과 Rhino 3DM, 미터·층·원점·레이어·Geometry Hash. 벽체 상세/허가도면은 미포함 |
 
 ## 사용자 흐름
 
@@ -161,6 +164,8 @@ pnpm verify
 
 GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행합니다. 프로젝트의 출시 기준은 로컬 우선이며, 호스팅 플랫폼의 PR 미리보기는 보조 확인 수단으로만 사용합니다.
 
+새 내부 구획은 Plan Studio의 **내부 구획 열기**에서 사용합니다. 외곽·구획·사업성 입력이 달라지면 대표안 확정 전에 면적을 다시 반영해야 합니다. 사용 조건과 전체 리소스의 도입 상태는 [49개 리소스·10개 데이터 축](docs/KR-UPGRADE-RESOURCES-2026-09-28.md)을 참고하세요. `pnpm notices:generate`는 설치한 production 의존성의 [오픈소스 고지](public/third-party-notices.txt)를 갱신합니다.
+
 자동 검증이 통과해도 다음 항목은 실제 프로그램과 브라우저에서 확인해야 합니다.
 
 - 새 브라우저에서 주소 검색부터 보고서까지 전체 흐름
@@ -175,6 +180,8 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 | 문서 | 용도 |
 |---|---|
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
+| [내부 구획·일영 가이드](docs/KR-INTERIOR-UPGRADE.md) | 사용법, 면적·문·좌표·사업성 동기화 계약과 현재 한계 |
+| [한국판 업그레이드 리소스](docs/KR-UPGRADE-RESOURCES-2026-09-28.md) | 오픈소스 49개와 한국 데이터 10개 축의 채택 상태·후속 순서 |
 | [파트너 로컬 실행 안내](docs/PARTNER-LOCAL-SETUP-KO.md) | 다른 PC에서 설치·업데이트·문제 해결 |
 | [VWorld 비활성 운영](docs/VWORLD-FREE-WORKFLOW.md) | VPN 차단 시 수동 부지·GeoJSON·AI 키 설정 |
 | [릴리스 체크리스트](docs/RELEASE-CHECKLIST-2026-08-23.md) | 자동·수동 출시 조건 |

@@ -1,4 +1,5 @@
 import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
+import type { InteriorLayout } from "@/lib/planning/interior/types";
 
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
@@ -50,6 +51,10 @@ export interface FloorProgram {
   /** 북측 방향 후퇴량. 실제 법규 판정은 별도 엔진에서 수행한다. */
   northSetbackM: number;
   zones: FloorZone[];
+  /** Optional independently authored concept layout. Existing floor programs remain compatible. */
+  interior?: InteriorLayout;
+  /** Records the exact concept layout and financial zone inputs explicitly accepted together. */
+  interiorFinanceSignature?: string;
 }
 
 export type ParkingStrategy =

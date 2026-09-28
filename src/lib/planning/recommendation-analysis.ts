@@ -125,6 +125,7 @@ export function recommendationCandidateKey(scenario: PlanningScenario): string {
         footprintScalePct: round(floor.footprintScalePct, 3),
         northSetbackM: round(floor.northSetbackM, 3),
         zones: floor.zones.map(stableZone),
+        ...(floor.interior ? { interior: floor.interior } : {}),
       })),
     placement: {
       rotationDeg: round(scenario.placement.rotationDeg, 3),

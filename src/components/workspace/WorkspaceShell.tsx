@@ -72,7 +72,7 @@ export function WorkspaceShell({ projectId, address, children }: { projectId: st
               })}
             </nav>
             <div className="pg-rail-meta"><span>현재 대표안</span><strong>{model.plan?.name ?? "미선택"}</strong><small>{model.geometry ? `v${model.plan?.version} · 형상 검증 통과` : "검증 매스 없음"}</small></div>
-            <div className="pg-rail-foot"><Link href={projectHref(projectId, "comps")}>실거래 근거</Link><Link href="/system/readiness">연결·환경 점검</Link><Link href="/projects/new">새 부지 분석</Link></div>
+            <div className="pg-rail-foot"><Link href={projectHref(projectId, "comps")}>실거래 근거</Link><Link href="/system/readiness">연결·환경 점검</Link><Link href="/projects/new">새 부지 분석</Link><a href="/third-party-notices.txt" target="_blank" rel="noopener noreferrer">오픈소스 고지</a></div>
           </aside>
           <main id="pg-main" tabIndex={-1} className="scroll-host pg-main">
             {report && <nav className="pg-report-nav" aria-label="보고서 영역"><Link href={projectHref(projectId, "overview")}>← 작업 화면</Link><Link href={projectHref(projectId, "report/brief")} aria-current={pathname.endsWith("/brief") ? "page" : undefined}>경영진 요약</Link><Link href={projectHref(projectId, "report")} aria-current={pathname === `${base}/report` ? "page" : undefined}>상세 보고서·근거</Link></nav>}

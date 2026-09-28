@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Line, OrbitControls, Text } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { Panel } from "@/components/ui/primitives";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
@@ -410,18 +410,16 @@ function RoadClearanceMarker({
           lineWidth={2.4}
         />
       )}
-      <Text
+      <Html
         position={midpoint}
-        rotation={[-Math.PI / 2, 0, 0]}
-        fontSize={0.7}
-        color={color}
-        anchorX="center"
-        anchorY="bottom"
+        center
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none", color, fontSize: 11, fontWeight: 650, whiteSpace: "nowrap", background: "rgba(255,255,255,0.85)", borderRadius: 3, padding: "2px 4px" }}
       >
         {assessment.intrudes
           ? `도로 저촉 ${assessment.intrusionAreaSqm.toFixed(2)}㎡`
           : `도로 경계 ${assessment.minimumClearanceM.toFixed(2)}m`}
-      </Text>
+      </Html>
     </group>
   );
 }
@@ -557,16 +555,14 @@ function SiteScene({
         <RoadClearanceMarker assessment={roadClearance} />
       )}
 
-      <Text
+      <Html
         position={[0, 0.1, -extent * 0.9]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        fontSize={Math.max(0.8, extent * 0.04)}
-        color="#dc2626"
-        anchorX="center"
-        anchorY="middle"
+        center
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none", color: "#dc2626", fontSize: 16, fontWeight: 800 }}
       >
         N
-      </Text>
+      </Html>
 
       <OrbitControls
         makeDefault
