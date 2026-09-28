@@ -48,12 +48,16 @@ export interface ProjectComputed {
   /** 시나리오별 최대 시행 가능 인수가 (IRR 10/15/20% 역산). 백엔드에서 계산 후 주입. */
   maxAcquisition: import("@/lib/finance/max-acquisition").ScenarioMaxAcquisition[];
   meta: {
+    mode?: "site-only";
+    intakeRevision?: string;
     lastSyncedAt: string;
     version: string;
   };
 }
 
 export interface ComputeOptions {
+  /** The selected parcel revision that these calculations describe. */
+  intakeRevision?: string;
   /** Project start ISO date for cashflow phasing. */
   startDate?: string;
   /** Force a specific scenario as recommended. */
@@ -115,6 +119,7 @@ export function computeProject(
     comps,
     maxAcquisition,
     meta: {
+      intakeRevision: options.intakeRevision,
       lastSyncedAt: new Date().toISOString(),
       version: "v218",
     },

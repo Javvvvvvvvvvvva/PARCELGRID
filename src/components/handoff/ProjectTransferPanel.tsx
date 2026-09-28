@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesProjectIntake } from "@/lib/services/project-intake";
+
 import { useRef, useState } from "react";
 import {
   createProjectTransferBundle,
@@ -61,7 +63,8 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
         draftAcquisitionPrice:
           project.draftAcquisitionPrices[projectId] ?? null,
         financialSources: project.financialSources[projectId] ?? {},
-        stage3Snapshot: project.stage3FeasibilitySnapshots[projectId] ?? null,
+        stage3Snapshot: matchesProjectIntake(project.stage3FeasibilitySnapshots[projectId]?.data, currentData)
+          ? project.stage3FeasibilitySnapshots[projectId] : null,
         priceVerifications: review.priceVerifications[projectId] ?? {},
         expertReviews: review.expertReviews[projectId] ?? {},
       },

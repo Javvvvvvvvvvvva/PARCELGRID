@@ -77,6 +77,7 @@ export default function StatusPage({
   const data = useProjectStore((s) => s.data);
   const parcel = data?.parcel;
   const currentBuilding = parcel?.currentBuilding;
+  const [showDetails, setShowDetails] = useState(false);
 
   const [layers, setLayers] = useState<Record<MapLayer, boolean>>({
     subject: true,
@@ -116,8 +117,8 @@ export default function StatusPage({
   }, [parcel?.acquiredPrice, parcel?.lotArea]);
 
   const { stations, status: stationLookupStatus } = useNearbyStations(
-    parcel?.lat,
-    parcel?.lng,
+    showDetails ? parcel?.lat : undefined,
+    showDetails ? parcel?.lng : undefined,
   );
 
   const compsForMap = useMemo(() => {
@@ -311,6 +312,17 @@ export default function StatusPage({
 
   return (
     <div className="status-page" style={{ padding: "var(--s6)", maxWidth: 1200, margin: "0 auto" }}>
+      <section className="site-status-summary" aria-label="부지 현황 요약">
+        <div className="site-status-heading"><div><p className="site-eyebrow">선택한 부지 · 현재 상태</p><h1>{parcel.address}</h1><p>{parcel.addressRoad || "현황을 먼저 확인한 뒤 계획을 검토하세요."}</p></div><Link href="/projects/new">다른 부지 선택</Link></div>
+        <div className="site-status-cards">
+          <article className="site-status-card"><span>어떤 땅인가요?</span><strong>{num(parcel.lotArea, 2)}㎡ <small style={{fontSize: 13, fontWeight: 400}}>· {pyeong(parcel.lotArea)}</small></strong><p>{parcel.zoning}</p><p>{boundarySource}</p></article>
+          <article className="site-status-card"><span>현재 건물은요?</span><strong>{main ? main.missingFields?.includes("grndFlrCnt") ? "층수 미확인" : `지상 ${main.groundFloors}층` : "현장 확인 필요"}</strong><p>{main ? purpose : buildingRegistryLabel(currentBuilding)}</p><p>{main ? ageYears == null ? "사용승인일 미확인" : `사용승인 후 ${ageYears}년 · 관측값 기준` : "조회 결과만으로 빈 땅을 판단하지 않아요."}</p></article>
+          <article className="site-status-card"><span>무엇을 확인해야 하나요?</span><strong>{farDecisionGrade && bcrDecisionGrade ? "세부 조건 검토" : "규제 원문 확인"}</strong><p>{farDecisionGrade && bcrDecisionGrade ? "도로·주차·일조 조건을 계획에서 함께 검토하세요." : "표시된 건폐율·용적률 참고값은 관할 원문과 대조해야 해요."}</p><p>{parcel.acquiredPrice > 0 ? "취득대금 입력됨" : "취득대금 미입력 · 현황 확인 가능"}</p></article>
+        </div>
+        <div className="site-status-next"><div><strong>이 땅에 어떤 계획이 가능할까요?</strong><p>{parcel.acquiredPrice > 0 ? "계획 스튜디오에서 규모와 배치를 비교해보세요." : "현재 계획 화면은 손익도 함께 비교하므로, 다음 단계에서 취득대금을 입력해요."}</p></div><Link className="site-primary" href={`/projects/${projectId}/envelope`}>계획 검토하기 →</Link></div>
+      </section>
+      <button type="button" className="site-detail-toggle" aria-expanded={showDetails} aria-controls="site-condition-details" onClick={() => setShowDetails(value => !value)}><span>{showDetails ? "상세 현황 접기 −" : "상세 현황과 근거 보기 +"}</span><small>토지 · 건축물대장 · 3D · 도로 · 지도</small></button>
+      {showDetails && <div id="site-condition-details">
       <div
         style={{
           display: "flex",
@@ -418,7 +430,7 @@ export default function StatusPage({
               main
                 ? `지상 ${main.groundFloors}층`
                 : buildingStatus === "no-records"
-                  ? "없음"
+                  ? "현장 미확인"
                   : "미확인"
             }
             sub={main && main.undergroundFloors > 0 ? `지하 ${main.undergroundFloors}층` : purpose}
@@ -686,6 +698,7 @@ export default function StatusPage({
         </div>
       )}
 
+      {data?.meta.mode === "site-only" && <p className="site-muted" style={{marginTop: 20}}>현황 단계에서는 실거래·사업성 계산을 실행하지 않았습니다. 시장 비교는 가격 입력 후 검토 화면에서 확인할 수 있습니다.</p>}
       <Panel
         title="⑥ 지도와 주변 시장"
         source="Kakao Map · MOLIT 실거래"
@@ -787,6 +800,7 @@ export default function StatusPage({
           </Button>
         </Link>
       </div>
+      </div>}
     </div>
   );
 }

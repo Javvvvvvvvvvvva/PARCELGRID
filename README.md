@@ -1,10 +1,10 @@
 # PARCELGRID
 
-주소 하나에서 시작해 필지 현황, 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 연결하는 **한국 저층 개발 의사결정 도구**입니다.
+주소 검색이나 지도에서 부지를 선택해 필지 현황, 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 연결하는 **한국 저층 개발 의사결정 도구**입니다.
 
 PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 초기 공간 구획 생성·편집·검증도 지원합니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
 
-> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [내부 구획·일영](docs/KR-INTERIOR-UPGRADE.md)과 [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
+> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [지도·주소 부지 선택](docs/KR-MAP-INTAKE.md), [내부 구획·일영](docs/KR-INTERIOR-UPGRADE.md)과 [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
 
 ## 제품 원칙
 
@@ -18,8 +18,8 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 
 | 영역 | 현재 기능 |
 |---|---|
-| 부지 입력 | 주소 자동완성, PNU, 지적 경계, 용도지역, 도로·주변 건물, 건축물대장, 실거래 조회 |
-| 현황 분석 | 대장 0건/실패/부분 조회 구분, 층별·전유공용 원문과 PK·면적 대조, 접도·주변 거래·리스크 요약 |
+| 부지 입력 | 주소 자동완성·지역 검색, 지도 이동·확대·위성 보기·클릭 선택, PNU·경계 대조, 명시적 부지 확인 |
+| 현황 분석 | 가격 없이 토지·기존 건물·규제 확인 상태 요약, 펼쳐보는 대장·3D·접도 근거, 대장 0건/실패/부분 조회 구분 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
 | 내부 구획 | 독립 템플릿 후보, 2D 편집·수동 문 연결, 공간 관계, 3D 구획, 경계·겹침·코어 연결 검사, 명시적 사업성 반영 |
@@ -34,12 +34,14 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 
 | 단계 | 경로 | 주요 결과 |
 |---|---|---|
-| 0. 새 프로젝트 | `/projects/new` | 주소, PNU, 필지, 규제 출처 확인 |
-| 1. 현황 분석 | `/projects/[projectId]/status` | 기존 건축물·도로·실거래·주변 환경 검토 |
-| 2. 계획 스튜디오 | `/projects/[projectId]/envelope` | 추천 비교, 층별 프로그램, 배치, 주차, 3D, 대표안 확정 |
+| 0. 부지 선택 | `/`, `/projects/new` | 주소 또는 지도에서 선택 → 경계·면적 확인 → 이 부지 살펴보기 |
+| 1. 현황 확인 | `/projects/[projectId]/status` | 취득대금 없이 요약 확인, 상세 대장·3D·도로는 펼쳐보기 |
+| 2. 계획 스튜디오 | `/projects/[projectId]/envelope` | 취득대금 입력 후 추천 비교·층별 프로그램·배치·주차·3D·대표안 확정 |
 | 3. 사업성 | `/projects/[projectId]` | 인수가·공사비·금융비·매출·수익성 재계산 |
 | 4. 전문가 인계 | `/projects/[projectId]/handoff` | 근거·승인 기록과 로컬 인계 패키지 |
 | 5. 보고서 | `/projects/[projectId]/report` | 인쇄 가능한 통합 예비 검토 보고서 |
+
+현황 단계에서는 실거래 조회나 재무 계산을 실행하지 않습니다. 기존 계획 스튜디오에는 손익 비교가 포함되므로 계획 검토로 넘어갈 때 총 취득대금과 취득 예정일을 받습니다. 주변 토지 거래 분포는 이 단계에서 사용자가 펼칠 때만 조회하며, 가격을 자동 입력하지 않습니다.
 
 보조 화면으로 거래사례 비교(`/comps`), 가격 검토(`/price-review`), 시나리오 비교(`/comparison`), 계산 수정 근거(`/overrides`), 실행 환경 점검(`/system/readiness`)을 제공합니다.
 
@@ -78,8 +80,8 @@ curl http://localhost:3000/api/system/readiness
 | 변수 | 필요도 | 용도 |
 |---|---|---|
 | `DATABASE_URL` | 선택 | PostgreSQL 영구 저장과 여러 PC 간 데이터 공유 |
-| `KAKAO_REST_API_KEY` | 실제 주소 조회 | 주소 검색, 좌표와 거리 계산 |
-| `NEXT_PUBLIC_KAKAO_JS_KEY` | 선택 | 브라우저 카카오 지도 표시 |
+| `KAKAO_REST_API_KEY` | 실제 주소·지도 선택 | 주소 검색, 클릭 좌표의 지번 주소 조회, 좌표와 거리 계산 |
+| `NEXT_PUBLIC_KAKAO_JS_KEY` | 지도 선택 | 브라우저 카카오 지도. 카카오 개발자 설정에 사용 도메인 등록 필요 |
 | `VWORLD_ENABLED` | 선택 | `false`이면 VWorld 요청을 보내지 않고 수동 부지 등록으로 전환 |
 | `VWORLD_API_KEY` | 실제 필지 조회 | 지적 경계, 용도지역, 도로와 주변 건물 |
 | `VWORLD_API_DOMAIN` | V월드 사용 시 | V월드에 등록된 호출 도메인. 로컬 기본값은 `http://localhost:3000` |
@@ -125,11 +127,15 @@ AI 렌더 모델·저장 경로·호출 제한과 원문 저장 경로는 `OPENA
 - **계산·저장:** Decimal.js, Drizzle ORM, 선택형 PostgreSQL
 - **품질:** ESLint, TypeScript, Vitest, Next.js production build
 
+지도 선택은 기존 Kakao Maps SDK·Local REST API와 Turf를 재사용합니다. 이번 흐름 변경으로 추가한 npm 의존성은 없습니다. 지도 키가 없거나 SDK 연결이 실패하면 주소 검색을 계속 사용할 수 있습니다.
+
 ### 주요 코드 경로
 
 | 역할 | 경로 |
 |---|---|
 | 페이지·서버 API | `src/app` |
+| 부지 선택·현황 접근 | `src/components/project/ParcelSelectionMap.tsx`, `SiteProjectAccess.tsx` |
+| 필지 선택 계약 | `src/lib/parcels/selection.ts`, `site-intake.ts` |
 | 현재 Plan Studio UI | `src/components/planning/PlanningScenarioWorkspaceV4.tsx` |
 | 추천 비교 UI | `src/components/planning/PlanningRecommendationPanelV2.tsx` |
 | 추천·형상 생성 | `src/lib/planning` |
@@ -151,6 +157,8 @@ V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은
 - 현재 접근 제한과 호출 제한은 단일 Node 프로세스 기준입니다. 다중 인스턴스 운영에는 외부 인증과 공유 rate limiter가 필요합니다.
 
 ## 검증
+
+지도·주소 진입 흐름은 프로덕션 빌드 후 `pnpm test:browser:intake`로 확인합니다. 합성 지도 SDK·API 응답을 사용하므로 실제 지도 타일과 승인된 공공 API의 정확성 검증은 별도로 필요합니다. [지도 선택 가이드](docs/KR-MAP-INTAKE.md)에 범위와 실제 확인 절차를 기록했습니다.
 
 건축물대장 근거의 별도 브라우저 검사는 프로덕션 빌드 후 `pnpm test:browser:registry`로 실행합니다. 실제 API 승인 계정 검증은 합성 응답 검사와 별개이며 [가이드](docs/KR-BUILDING-EVIDENCE.md)에 남은 조건을 기록합니다.
 

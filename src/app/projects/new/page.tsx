@@ -1,893 +1,146 @@
 "use client";
 
-
-import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
-import { buildingRegistryLabel } from "@/lib/building-registry/evidence";
-import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
-import ManualParcelIntake from "@/components/project/ManualParcelIntake";
-import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
-/**
- * /projects/new — 새 부지 분석 페이지
- *
- * 흐름:
- *   1. 주소 입력 → POST /api/parcels/lookup (Kakao + 선택 VWorld + MOLIT 건축물)
- *      VWorld 불가 시 사용자 토지 정보 + 선택 GeoJSON 경계로 전환
- *   2. 사용자가 알고 있는 부동산 총 취득대금을 직접 입력
- *   3. lookup 성공 → 주변 실거래·공시지가를 참고자료로 조회
- *   4. "분석 시작" → 입력값과 조회 사실을 분리 저장 → /projects/${pnu}/status 이동
- *
- * 살아있는 어댑터들:
- *   - calculateDemolitionCost(buildings, signal) → 철거비 (만원)
- *   - won/pct/num/koreanDate/pyeong → 포맷터
- *   - Tag/Dot/Source → 디자인 토큰 컴포넌트
- */
-
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Tag, Dot } from "@/components/ui/Tag";
-import { TopBar } from "@/components/ui/TopBar";
-import { Panel, DataRow, DateField, Button, SectionTitle } from "@/components/ui/primitives";
+import dynamic from "next/dynamic";
+import { ArrowRight, Check, MapPin, Search, SquareDashed, X } from "lucide-react";
 import { AddressAutocomplete } from "@/components/ui/AddressAutocomplete";
-import { num, pyeong, koreanDate } from "@/lib/utils/format";
-import { calculateDemolitionCost } from "@/lib/finance/demolition-cost";
-import type { AcquisitionEstimateSnapshot } from "@/lib/finance/types";
-import type { StoredParcel } from "@/lib/hooks/use-dynamic-project";
-import type {
-  ParcelLookupComplete,
-  ParcelLookupManualRequired,
-  ParcelLookupResponse,
-} from "@/lib/parcels/lookup-contract";
+import ManualParcelIntake from "@/components/project/ManualParcelIntake";
+import { SiteHeader } from "@/components/project/SiteProjectAccess";
+import type { MapLocation } from "@/components/project/ParcelSelectionMap";
+import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
+import { createSiteIntake } from "@/lib/parcels/site-intake";
+import { useProjectStore } from "@/lib/stores/project-store";
+import { writeStoredParcel } from "@/lib/hooks/use-dynamic-project";
+import { boundaryContainsLocation } from "@/lib/parcels/selection";
+import type { ParcelLookupComplete, ParcelLookupManualRequired, ParcelLookupResponse } from "@/lib/parcels/lookup-contract";
+import { num, pyeong } from "@/lib/utils/format";
+import "@/components/project/site-picker.css";
 
-/* ─────────────────────────── 타입 ─────────────────────────── */
-
-interface EstimateResult extends AcquisitionEstimateSnapshot {
-  /** 추정 C: 구축 단독/다가구 토지 proxy (사례·근거) */
-  houseEstimate?: import("@/lib/finance/land-price-from-comps").LandPriceEstimate;
-  marketMedianPerPyeong?: number;
-  marketMedianManwon?: number;
-  details?: AcquisitionEstimateSnapshot["details"];
-  transactionCount?: number;
-  transactions?: Array<{
-    priceManwon: number;
-    areaSqm: number;
-    date: string;
-    address: string;
-  }>;
-}
-
-/* ─────────────────────────── 페이지 ─────────────────────────── */
+const ParcelSelectionMap = dynamic(() => import("@/components/project/ParcelSelectionMap"), { ssr: false,
+  loading: () => <section className="picker-map"><div className="picker-map-empty" role="status">지도를 준비하고 있어요…</div></section> });
+type SelectionInput = { address: string } | { location: MapLocation };
 
 export default function NewParcelPage() {
   const router = useRouter();
   const [address, setAddress] = useState("");
-  const [isLookingUp, setIsLookingUp] = useState(false);
-  const [lookupError, setLookupError] = useState<string | null>(null);
-
-  // Lookup 결과
   const [parcel, setParcel] = useState<ParcelLookupComplete | null>(null);
-  const [manualLookup, setManualLookup] =
-    useState<ParcelLookupManualRequired | null>(null);
+  const [manual, setManual] = useState<ParcelLookupManualRequired | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<MapLocation>();
+  const [pendingLocation, setPendingLocation] = useState<MapLocation>();
+  const [area, setArea] = useState<MapLocation>();
+  const [origin, setOrigin] = useState<SelectionInput | null>(null);
+  const [phase, setPhase] = useState<"idle" | "searching" | "confirming">("idle");
+  const [error, setError] = useState("");
+  const [manualOpen, setManualOpen] = useState(false);
+  const requestId = useRef(0), controller = useRef<AbortController | null>(null);
+  useEffect(() => () => { requestId.current++; controller.current?.abort(); }, []);
 
-  // 추정 결과
-  const [estimate, setEstimate] = useState<EstimateResult | null>(null);
-
-  // 사용자 수정 가능한 인수가 (만원)
-  const [acquiredPrice, setAcquiredPrice] = useState<number>(0);
-  const [acquiredDate, setAcquiredDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
-  );
-
-  async function loadEstimate(lookupData: ParcelLookupComplete) {
-    try {
-      const estRes = await fetch("/api/parcels/estimate-price", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          address: lookupData.address,
-          lotArea: lookupData.lotArea,
-          landPrice: lookupData.landPrice,
-          lawdCd: lookupData.lawdCd,
-          jimokCategory: lookupData.jimokCategory,
-        }),
-      });
-
-      if (estRes.ok) {
-        setEstimate((await estRes.json()) as EstimateResult);
-      } else {
-        console.warn("인수가 추정 실패 — 사용자가 직접 입력해야 함");
-      }
-    } catch (error) {
-      console.warn("인수가 추정 연결 실패:", error);
-    }
+  function resetSelection() {
+    requestId.current++; controller.current?.abort();
+    setParcel(null); setManual(null); setOrigin(null); setSelectedLocation(undefined); setPendingLocation(undefined);
+    setError(""); setPhase("idle"); setManualOpen(false);
+    setArea(undefined);
   }
-
-  // ─── 부지 조회 ─────────────────────────────────────────────────────
-  async function handleLookup() {
-    if (!address.trim()) return;
-    setIsLookingUp(true);
-    setLookupError(null);
-    setParcel(null);
-    setManualLookup(null);
-    setEstimate(null);
-
+  function changeAddress(value: string) { resetSelection(); setAddress(value); }
+  async function request(input: SelectionInput, nextPhase: "selection" | "details", signal: AbortSignal, expectedPnu?: string): Promise<ParcelLookupResponse> {
+    const response = await fetch("/api/parcels/lookup", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, phase: nextPhase, expectedPnu }), signal });
+    const result = await response.json();
+    if (!response.ok) throw new Error([result.error || "부지를 확인하지 못했습니다.", result.nextAction].filter(Boolean).join(" "));
+    return result as ParcelLookupResponse;
+  }
+  async function select(input: SelectionInput) {
+    resetSelection(); const id = ++requestId.current;
+    const ac = new AbortController(); controller.current = ac;
+    setPhase("searching"); setOrigin(input);
+    if ("location" in input) setPendingLocation(input.location);
     try {
-      // 1. Lookup (Kakao + VWorld/MOLIT, VWorld 불가 시 수동 등록)
-      const lookupRes = await fetch("/api/parcels/lookup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: address.trim() }),
-      });
-
-      if (!lookupRes.ok) {
-        const err = (await lookupRes.json().catch(() => ({}))) as {
-          error?: string;
-          nextAction?: string;
-        };
-        throw new Error(
-          [err.error ?? `부지 조회 실패 (${lookupRes.status})`, err.nextAction]
-            .filter(Boolean)
-            .join(" ")
-        );
-      }
-
-      const lookupData = (await lookupRes.json()) as ParcelLookupResponse;
-      if (lookupData.mode === "manual-required") {
-        setManualLookup(lookupData);
-        return;
-      }
-      setParcel(lookupData);
-      await loadEstimate(lookupData);
+      const result = await request(input, "selection", ac.signal);
+      if (id !== requestId.current) return;
+      if (result.mode === "area") { setAddress(result.address); setArea({ lat: result.lat, lng: result.lng }); return; }
+      setAddress(result.address); setSelectedLocation({ lat: result.lat, lng: result.lng }); setPendingLocation(undefined);
+      if (result.mode === "manual-required") setManual(result); else setParcel(result);
     } catch (err) {
-      setLookupError(err instanceof Error ? err.message : "알 수 없는 오류");
-    } finally {
-      setIsLookingUp(false);
+      if (id === requestId.current && !ac.signal.aborted) setError(err instanceof Error ? err.message : "다시 선택해주세요.");
+    } finally { if (id === requestId.current) setPhase("idle"); }
+  }
+  function applyManual(next: ParcelLookupComplete) {
+    if (origin && "location" in origin && next.boundary?.length && !boundaryContainsLocation(next.boundary, origin.location)) {
+      setError("입력한 경계 안에 지도에서 선택한 위치가 없습니다. 경계 또는 선택 위치를 확인하세요."); return;
     }
+    setParcel(next); setManual(null); setManualOpen(false); setError("");
+  }
+  async function confirm() {
+    if (!parcel || !origin || phase !== "idle") return;
+    const current = parcel, id = ++requestId.current;
+    controller.current?.abort(); const ac = new AbortController(); controller.current = ac;
+    setPhase("confirming"); setError("");
+    try {
+      const result = await request(origin, "details", ac.signal, current.pnu);
+      if (id !== requestId.current) return;
+      if (result.mode === "area") throw new Error("정확한 필지를 다시 선택해주세요.");
+      if (result.pnu !== current.pnu) throw new Error("선택한 필지가 변경됐습니다. 다시 선택해주세요.");
+      let complete: ParcelLookupComplete;
+      if (current.mode === "manual") {
+        complete = { ...current, currentBuilding: result.currentBuilding, existingUnitArea: result.existingUnitArea };
+      } else if (result.mode === "manual-required") {
+        setParcel(null); setManual(result); setError("토지 정보를 다시 확인하지 못했습니다. 확인된 자료로 직접 입력하거나 다시 조회해주세요."); return;
+      } else complete = result;
+      const stored = createSiteIntake(complete, crypto.randomUUID(), new Date().toISOString());
+      try { writeStoredParcel(stored); } catch { throw new Error("부지를 브라우저에 저장하지 못했습니다. 사이트 저장 권한과 남은 공간을 확인해주세요."); }
+      // Keep saved plans/history, but revalidate the representative against this new intake.
+      const workspace = useProjectStore.getState();
+      workspace.setRepresentativePlanningScenarioId(null);
+      workspace.clearEnvelopePlan();
+      workspace.resetDraftAcquisitionPrice(complete.pnu);
+      router.push(`/projects/${complete.pnu}/status`);
+    } catch (err) {
+      if (id === requestId.current && !ac.signal.aborted) setError(err instanceof Error ? err.message : "현황을 불러오지 못했습니다.");
+    } finally { if (id === requestId.current) setPhase("idle"); }
   }
 
-  function applyManualParcel(next: ParcelLookupComplete) {
-    setManualLookup(null);
-    setParcel(next);
-    setEstimate(null);
-    void loadEstimate(next);
-  }
-
-  // ─── 철거비 자동 계산 ──────────────────────────────────────────────
-  const demolitionResult = parcel?.currentBuilding
-    ? calculateDemolitionCost(
-        parcel.currentBuilding.buildings,
-        parcel.currentBuilding.redevelopmentSignal
-      )
-    : null;
-  const demolitionCost: number = demolitionResult?.totalManwon ?? 0;
-
-  // ─── 분석 시작: sessionStorage 저장 + 대시보드 이동 ─────────────────
-  function handleStart() {
-    if (!parcel || !acquiredPrice) return;
-
-    const storedParcel: StoredParcel = {
-      id: parcel.pnu,
-      address: parcel.address,
-      addressRoad: parcel.addressRoad,
-      lat: parcel.lat,
-      lng: parcel.lng,
-      lawdCd: parcel.lawdCd,
-      pnu: parcel.pnu,
-      lotArea: parcel.lotArea,
-      boundary: parcel.boundary,
-      roads: parcel.roads,
-      zoning: parcel.zoning,
-      zoneCode: parcel.zoneCode,
-      maxFAR: parcel.maxFAR,
-      maxBCR: parcel.maxBCR,
-      heightLimit: parcel.heightLimit,
-      regulatoryConstraints: parcel.regulatoryConstraints,
-      overlays: parcel.overlays,
-      inputProvenance: parcel.inputProvenance,
-      landPrice: parcel.landPrice,
-      landPriceYear: parcel.landPriceYear,
-      // 법적 최대 외곽선과 분리된 사용자 설계 여유거리. 새 프로젝트는 추가 여유 0m.
-      setback: { road: 0, side: 0, rear: 0 },
-      estMarketPrice: estimate
-        ? Math.round((estimate.estimatedPriceManwon * 10_000) / parcel.lotArea)
-        : parcel.landPrice * 2,
-      acquisitionEstimate: estimate
-        ? {
-            modelVersion: estimate.modelVersion,
-            modelStatus: estimate.modelStatus,
-            warnings: estimate.warnings,
-            estimatedPriceManwon: estimate.estimatedPriceManwon,
-            estimatedPricePerPyeong: estimate.estimatedPricePerPyeong,
-            method: estimate.method,
-            confidence: estimate.confidence,
-            marketMedianPerPyeong: estimate.marketMedianPerPyeong,
-            marketMedianManwon: estimate.marketMedianManwon,
-            houseProxy: estimate.houseEstimate
-              ? {
-                  sampleSize: estimate.houseEstimate.count,
-                  medianPricePerPyeong: estimate.houseEstimate.medianPPPLand,
-                  estimatedPriceManwon: estimate.houseEstimate.estimateManwon,
-                  basis: estimate.houseEstimate.basis,
-                }
-              : undefined,
-            transactionCount: estimate.transactionCount,
-            details: estimate.details,
-          }
-        : undefined,
-      acquired: acquiredDate,
-      acquiredPrice,
-      demolitionCost,
-      currentBuilding: parcel.currentBuilding ?? null,
-    };
-
-    sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(storedParcel));
-    router.push(`/projects/${parcel.pnu}/status`);
-  }
-
-  // ─── UI ───────────────────────────────────────────────────────────
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg)",
-      }}
-    >
-      <TopBar crumb={["새 부지 분석"]} />
-
-      {/* Content */}
-      <div
-        style={{
-          flex: 1,
-          maxWidth: 1160,
-          margin: "0 auto",
-          padding: "var(--s8) var(--s6)",
-          width: "100%",
-        }}
-      >
-        <SectionTitle
-          size="lg"
-          title="새 부지 분석"
-          desc="주소와 알고 있는 총 취득대금을 입력하면 토지·건물·법규·주변 시장 현황을 분석합니다."
-          style={{ marginBottom: "var(--s6)" }}
-        />
-
-        {/* Address input */}
-        <Panel title="주소와 총 취득대금">
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-            <AddressAutocomplete
-              value={address}
-              onChange={setAddress}
-              onSubmit={handleLookup}
-              disabled={isLookingUp}
-              placeholder="예: 서울 도봉구 쌍문동 281-23"
-            />
-            <Button
-              variant="primary"
-              onClick={handleLookup}
-              disabled={isLookingUp || !address.trim()}
-              style={{ height: 36, flexShrink: 0 }}
-            >
-              {isLookingUp ? "조회중..." : "조회 →"}
-            </Button>
+  const selected = parcel ?? manual;
+  return <div className="site-flow site-picker"><a className="site-skip" href="#site-search">주소 검색으로 이동</a><SiteHeader />
+    <main className="picker-grid">
+      <section className="picker-search" id="site-search">
+        <p className="site-eyebrow">SITE EXPLORER · 부지 탐색</p>
+        <h1>어떤 땅을 <br />살펴볼까요?</h1>
+        <p className="picker-intro">주소로 찾거나, 지도를 움직여<br className="picker-desktop-break" /> 원하는 부지를 선택하세요.</p>
+        <form className="picker-search-form" onSubmit={event => { event.preventDefault(); if (address.trim().length >= 2) void select({ address: address.trim() }); }}>
+          <label htmlFor="site-address">주소 검색</label>
+          <div className="picker-search-field"><Search size={18} aria-hidden="true" />
+            <AddressAutocomplete inputId="site-address" value={address} onChange={changeAddress} onSelect={item => void select({ address: item.address })}
+              onSubmit={() => { if (address.trim().length >= 2) void select({ address: address.trim() }); }} disabled={phase === "confirming"} placeholder="동 이름, 지번 또는 도로명 주소" />
+            {address && <button type="button" className="picker-clear" aria-label="주소 지우기" disabled={phase === "confirming"} onClick={() => changeAddress("")}><X size={16} /></button>}
           </div>
-          <p
-            style={{
-              margin: "8px 0 0",
-              fontSize: 11.5,
-              color: "var(--fg-faint)",
-            }}
-          >
-            2글자 이상 입력 시 주소 후보가 표시됩니다. 목록에서 선택하거나 Enter로 조회하세요.
-          </p>
-
-          <div
-            className="new-project-acquisition-grid"
-            style={{
-              marginTop: 16,
-              paddingTop: 16,
-              borderTop: "1px solid var(--border)",
-              display: "grid",
-              gridTemplateColumns: "minmax(0, 1fr) minmax(220px, 0.45fr)",
-              gap: 18,
-              alignItems: "end",
-            }}
-          >
-            <div>
-              <label
-                htmlFor="initial-acquisition-price"
-                style={{ display: "block", fontSize: 13, fontWeight: 700 }}
-              >
-                현재 알고 있는 부동산 총 취득대금
-              </label>
-              <p
-                style={{
-                  margin: "5px 0 0",
-                  fontSize: 11.5,
-                  color: "var(--fg-muted)",
-                  lineHeight: 1.55,
-                }}
-              >
-                토지와 기존 건물을 함께 취득하는 금액입니다. 주변 시세나 알고리즘 추정값으로 자동 입력하지 않습니다.
-              </p>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input
-                id="initial-acquisition-price"
-                type="number"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-                value={acquiredPrice > 0 ? acquiredPrice / 10_000 : ""}
-                onChange={(event) => {
-                  const eok = Number(event.target.value);
-                  setAcquiredPrice(Number.isFinite(eok) && eok > 0 ? Math.round(eok * 10_000) : 0);
-                }}
-                placeholder="예: 20.6"
-                aria-label="부동산 총 취득대금 억원"
-                style={{
-                  width: "100%",
-                  height: 40,
-                  padding: "0 12px",
-                  border: "1px solid var(--border-strong)",
-                  borderRadius: 8,
-                  background: "var(--bg-elev)",
-                  color: "var(--fg)",
-                  font: "inherit",
-                  fontSize: 16,
-                  fontWeight: 700,
-                  textAlign: "right",
-                }}
-              />
-              <span style={{ flexShrink: 0, fontSize: 12.5, color: "var(--fg-muted)" }}>억원</span>
-            </div>
-          </div>
-
-          {/* 진행 상태 / 에러 */}
-          {isLookingUp && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: "10px 12px",
-                background: "var(--accent-soft)",
-                border: "1px solid var(--accent)",
-                borderRadius: 5,
-                fontSize: 12.5,
-                color: "var(--accent-fg)",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <Dot kind="accent" />
-              <span>Kakao 주소와 MOLIT 건축물을 확인하고 사용 가능한 토지 데이터 경로를 선택하고 있습니다...</span>
-            </div>
-          )}
-          {lookupError && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: "10px 12px",
-                background: "var(--neg-soft)",
-                border: "1px solid var(--neg)",
-                borderRadius: 5,
-                fontSize: 12.5,
-                color: "var(--neg-fg)",
-              }}
-            >
-              {lookupError}
-              <div style={{ marginTop: 6 }}>
-                <Link href="/system/readiness" style={{ color: "inherit", fontWeight: 700 }}>
-                  환경 연결 상태 확인 →
-                </Link>
-              </div>
-            </div>
-          )}
-        </Panel>
-
-        {manualLookup && (
-          <ManualParcelIntake
-            lookup={manualLookup}
-            onApply={applyManualParcel}
-          />
-        )}
-
-        {/* 결과 영역 */}
-        {parcel && (
-          <>
-            {/* 부지 헤더 */}
-            <div style={{ marginTop: "var(--s6)", marginBottom: "var(--s4)" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-                <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>
-                  {parcel.sido} {parcel.sigungu} {parcel.dong} {parcel.jibun ?? ""}
-                </h2>
-                <span className="mono" style={{ fontSize: 11, color: "var(--fg-faint)" }}>
-                  PNU {parcel.pnu}
-                </span>
-              </div>
-              {parcel.addressRoad && (
-                <div style={{ fontSize: 12.5, color: "var(--fg-muted)", marginTop: 2 }}>
-                  도로명 · {parcel.addressRoad}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
-                <Tag kind="accent">{parcel.zoning}</Tag>
-                <Tag>{parcel.zoneCode}</Tag>
-                {parcel.jimok && <Tag>{parcel.jimok}</Tag>}
-                {parcel.mode === "manual" && <Tag kind="warn">사용자 입력</Tag>}
-              </div>
-            </div>
-
-            {parcel.mode === "manual" && (
-              <div
-                role="note"
-                style={{
-                  marginBottom: "var(--s4)",
-                  padding: "10px 12px",
-                  borderLeft: "3px solid var(--warn)",
-                  background: "var(--warn-soft)",
-                  color: "var(--warn-fg)",
-                  fontSize: 11.5,
-                  lineHeight: 1.55,
-                }}
-              >
-                토지·규제 값은 사용자 입력이며 원문 확인 전입니다. 필지 경계는{" "}
-                {parcel.boundary ? "업로드한 GeoJSON" : "연결되지 않음"} 상태로 저장됩니다.
-              </div>
-            )}
-
-            {/* 좌: 이 땅의 사실(부지·건물) / 우: 인수 의사결정 — 한 화면 2단 */}
-            <div className="newp-grid">
-              {/* 좌 컬럼 — 사실 정보 */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s4)" }}>
-                <Panel
-                  title="부지 정보"
-                  source={parcel.mode === "vworld" ? "VWorld" : "사용자 입력 · 원문 확인 전"}
-                >
-                  <DataRow
-                    label="대지면적"
-                    value={`${num(parcel.lotArea, 2)} m²`}
-                    sub={pyeong(parcel.lotArea)}
-                  />
-                  <DataRow
-                    label="건폐율 전국 상한 참고"
-                    value={parcel.maxBCR > 0 ? `${parcel.maxBCR}%` : "미확인"}
-                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
-                  />
-                  <DataRow
-                    label="용적률 전국 상한 참고"
-                    value={parcel.maxFAR > 0 ? `${parcel.maxFAR}%` : "미확인"}
-                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
-                  />
-                  <DataRow
-                    label="필지별 최고높이"
-                    value="미확인"
-                    sub="VWorld 용도지역 조회만으로 확정하지 않음 · Stage 2 원문 검증"
-                  />
-                  {parcel.overlays.length > 0 && (
-                    <DataRow
-                      label="중첩 용도지구·구역"
-                      value={`${parcel.overlays.length}건`}
-                      sub={parcel.overlays.map((item) => item.name).join(" · ")}
-                    />
-                  )}
-                  <DataRow
-                    label="공시지가"
-                    value={
-                      parcel.landPrice > 0
-                        ? `${num(parcel.landPrice / 10_000)}만원/m²`
-                        : "미확인"
-                    }
-                    sub={
-                      parcel.landPrice > 0
-                        ? `${parcel.landPriceYear ? `${parcel.landPriceYear}년 기준` : "기준연도 미확인"} · ${parcel.mode === "vworld" ? "VWorld" : "사용자 입력"}`
-                        : "원문 값 입력 필요"
-                    }
-                    divider={false}
-                  />
-                </Panel>
-
-                <Panel title="현재 건물" source="MOLIT 건축물대장">
-                  {parcel.currentBuilding && parcel.currentBuilding.hasBuilding ? (
-                    <CurrentBuildingBox
-                      info={parcel.currentBuilding}
-                      demolitionCost={demolitionCost}
-                    />
-                  ) : parcel.currentBuilding ? (
-                    <div
-                      style={{
-                        padding: "var(--s3)",
-                        background: "var(--bg-sunken)",
-                        borderRadius: "var(--r)",
-                        fontSize: "var(--t-sm)",
-                        color: "var(--fg-muted)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--s2)",
-                      }}
-                    >
-                      <Dot kind="warn" />
-                      {buildingRegistryLabel(parcel.currentBuilding)}
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        padding: "var(--s3)",
-                        background: "var(--warn-soft)",
-                        borderRadius: "var(--r)",
-                        fontSize: "var(--t-sm)",
-                        color: "var(--warn-fg)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--s2)",
-                      }}
-                    >
-                      <Dot kind="warn" />
-                      건축물대장 조회 미확인 · 건물 유무 확인 필요
-                    </div>
-                  )}
-                  <BuildingRegistryEvidencePanel info={parcel.currentBuilding} />
-                </Panel>
-              </div>
-
-              {/* 우 컬럼 — 인수 의사결정 */}
-              <Panel
-                title="입력값 확인과 주변 시장"
-                source={
-                  estimate
-                    ? estimate.method === "house-comps"
-                      ? "구축 다가구 실거래 참고"
-                      : `주변 실거래·공시지가 참고 · ${estimate.method}`
-                    : "사용자 직접 입력"
-                }
-              >
-                <AcquisitionPriceInput
-                  subjectAreaPyeong={sqmToPyeong(parcel.lotArea)}
-                  chartHeight={200}
-                  transactions={
-                    estimate?.transactions?.map<RawTransaction>((t) => ({
-                      amount: t.priceManwon * 10_000,
-                      areaSqm: t.areaSqm,
-                      date: t.date,
-                      label: t.address,
-                    })) ?? []
-                  }
-                  value={acquiredPrice > 0 ? acquiredPrice * 10_000 : null}
-                  onChange={(won) =>
-                    setAcquiredPrice(won == null ? 0 : Math.round(won / 10_000))
-                  }
-                  estimatedTotalWon={null}
-                />
-                {estimate?.houseEstimate && (
-                  <LandProxyNote
-                    estimate={estimate.houseEstimate}
-                    onApply={(priceManwon) => setAcquiredPrice(priceManwon)}
-                  />
-                )}
-                {estimate?.marketMedianManwon != null && estimate.marketMedianManwon > 0 && (
-                  <div
-                    style={{
-                      marginTop: "var(--s3)",
-                      padding: "10px 12px",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      background: "var(--bg-sunken)",
-                    }}
-                  >
-                    <strong style={{ display: "block", fontSize: 11.5 }}>주변 토지 거래 중앙값 참고</strong>
-                    <span style={{ display: "block", marginTop: 3, color: "var(--fg-muted)", fontSize: 10.5 }}>
-                      {(estimate.marketMedianManwon / 10_000).toFixed(1)}억 · {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
-                    </span>
-                    <small style={{ display: "block", marginTop: 4, color: "var(--fg-faint)", fontSize: 9.5 }}>
-                      대상 부지와 동일한 매입가가 아닙니다. 현재 입력값을 바꾸지 않는 주변 시장 참고자료입니다.
-                    </small>
-                  </div>
-                )}
-                {estimate && (
-                  <div
-                    role="note"
-                    style={{
-                      marginTop: "var(--s3)",
-                      padding: "10px 12px",
-                      border: "1px solid #d8a92e",
-                      borderRadius: 8,
-                      background: "#fff8dc",
-                      color: "#5f4600",
-                      fontSize: 11,
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    <strong>주변 시장 참고자료</strong>
-                    <div>
-                      아래 값은 사용자가 입력한 총 취득대금이 아닙니다. 거래 표본의 위치와 분포를 이해하는 용도로만 사용합니다.
-                    </div>
-                    <div className="mono" style={{ marginTop: 3 }}>
-                      {estimate.method === "house-comps" && estimate.houseEstimate
-                        ? `활성 추정 · 구축 단독/다가구 ${estimate.houseEstimate.count}건 · ${estimate.houseEstimate.medianPPPLand.toLocaleString()}만원/평`
-                        : `활성 추정 · 동일 지목 ${estimate.details?.sampleSize ?? 0}건`}
-                    </div>
-                    <div className="mono" style={{ marginTop: 2 }}>
-                      토지 분포 {estimate.transactionCount ?? 0}건 · 중앙값 {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
-                    </div>
-                  </div>
-                )}
-                <div style={{ marginTop: "var(--s4)", maxWidth: 220 }}>
-                  <DateField
-                    label="인수일"
-                    value={acquiredDate}
-                    onChange={setAcquiredDate}
-                    hint={koreanDate(acquiredDate)}
-                  />
-                </div>
-              </Panel>
-            </div>
-
-            {/* 분석 시작 */}
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "var(--s6)" }}>
-              <Button
-                variant="primary"
-                size="lg"
-                onClick={handleStart}
-                disabled={!parcel || !acquiredPrice}
-              >
-                분석 시작 → 현황 분석
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────── 헬퍼 컴포넌트 ─────────────────────────── */
-
-function LandProxyNote({
-  estimate,
-  onApply,
-}: {
-  estimate: NonNullable<EstimateResult["houseEstimate"]>;
-  onApply: (priceManwon: number) => void;
-}) {
-  return (
-    <div
-      role="note"
-      style={{
-        marginTop: "var(--s3)",
-        padding: "12px",
-        border: "1px solid var(--accent)",
-        borderRadius: 8,
-        background: "var(--accent-soft)",
-        color: "var(--fg)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <strong style={{ display: "block", fontSize: 12.5 }}>
-            구축 단독·다가구 거래 기반 토지 proxy
-          </strong>
-          <div
-            className="mono"
-            style={{ marginTop: 4, fontSize: 11.5, fontWeight: 700 }}
-          >
-            사례 {estimate.count}건 · 중앙값{" "}
-            {estimate.medianPPPLand.toLocaleString()}만원/평 · 대상 부지 환산{" "}
-            {(estimate.estimateManwon / 10_000).toFixed(1)}억원
-          </div>
-          <div
-            style={{
-              marginTop: 4,
-              fontSize: 10.5,
-              color: "var(--fg-muted)",
-              lineHeight: 1.55,
-            }}
-          >
-            {estimate.basis} · {confidenceLabel(estimate.confidence)}
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="default"
-          onClick={() => onApply(estimate.estimateManwon)}
-          aria-label={`토지 proxy 환산가 ${(
-            estimate.estimateManwon / 10_000
-          ).toFixed(1)}억원을 총 취득대금으로 입력`}
-          style={{ flexShrink: 0 }}
-        >
-          이 값으로 입력
-        </Button>
-      </div>
-
-      <div
-        style={{
-          marginTop: 9,
-          paddingTop: 8,
-          borderTop: "1px solid var(--border)",
-          fontSize: 10,
-          color: "var(--fg-muted)",
-          lineHeight: 1.55,
-        }}
-      >
-        {estimate.caution}. 버튼을 눌러야만 총 취득대금 입력값이 변경되며,
-        감정평가나 계약금액을 대신하지 않습니다.
-      </div>
-
-      <details style={{ marginTop: 9 }}>
-        <summary
-          style={{
-            cursor: "pointer",
-            fontSize: 11,
-            fontWeight: 700,
-            color: "var(--accent-fg)",
-          }}
-        >
-          비교사례 {estimate.cases.length}건 펼쳐보기
-        </summary>
-        <div style={{ marginTop: 8, overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              minWidth: 620,
-              borderCollapse: "collapse",
-              fontSize: 10.5,
-            }}
-          >
-            <thead>
-              <tr style={{ color: "var(--fg-faint)", textAlign: "left" }}>
-                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)" }}>
-                  사례
-                </th>
-                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)" }}>
-                  거래일·연식
-                </th>
-                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
-                  대지
-                </th>
-                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
-                  거래가
-                </th>
-                <th style={{ padding: "6px 7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
-                  대지 평당
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {estimate.cases.map((item, index) => (
-                <tr key={`${item.address}-${item.date}-${index}`}>
-                  <td style={{ padding: "7px", borderBottom: "1px solid var(--border)" }}>
-                    <div style={{ fontWeight: 650 }}>{item.address || "주소 미확인"}</div>
-                    <div style={{ marginTop: 2, color: "var(--fg-faint)", fontSize: 9.5 }}>
-                      {item.sameDong ? "같은 동" : "같은 구"} · 유사도 점수 {item.score}
-                    </div>
-                  </td>
-                  <td style={{ padding: "7px", borderBottom: "1px solid var(--border)", color: "var(--fg-muted)" }}>
-                    {item.date || "거래일 미확인"} ·{" "}
-                    {item.buildYear ? `${item.buildYear}년 준공` : "연식 미확인"}
-                  </td>
-                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
-                    {sqmToPyeong(item.lotAreaSqm).toFixed(1)}평
-                  </td>
-                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right" }}>
-                    {(item.priceManwon / 10_000).toFixed(1)}억
-                  </td>
-                  <td className="mono" style={{ padding: "7px", borderBottom: "1px solid var(--border)", textAlign: "right", fontWeight: 700 }}>
-                    {item.pricePerPyeongLand.toLocaleString()}만원
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
-    </div>
-  );
-}
-
-function CurrentBuildingBox({
-  info,
-  demolitionCost,
-}: {
-  info: NonNullable<ParcelLookupComplete["currentBuilding"]>;
-  demolitionCost: number;
-}) {
-  const main = info.buildings.find((b) => b.isMainBuilding) ?? info.buildings[0];
-  if (!main) return null;
-
-  const signalKind: "pos" | "warn" | "neg" =
-    info.redevelopmentSignal === "rebuild"
-      ? "neg"
-      : (info.redevelopmentSignal === "renovate" || info.redevelopmentSignal === "unknown")
-        ? "warn"
-        : "pos";
-
-  return (
-    <div>
-      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--fg)", marginBottom: 4 }}>
-        {main.approvalDate ? `${main.approvalDate.slice(0, 4)}년 ${main.approvalDate.slice(5, 7)}월 사용승인` : "사용승인일 미제공"}
-        {main.approvalDate && main.ageYears != null && (
-          <span style={{ color: "var(--fg-muted)", marginLeft: 8 }}>
-            ({main.ageYears}년 노후)
-          </span>
-        )}
-      </div>
-      <div style={{ fontSize: 12, color: "var(--fg-muted)", marginBottom: 10 }}>
-        {main.mainPurpose} · 지상 {main.groundFloors}층
-        {main.undergroundFloors > 0 && ` / 지하 ${main.undergroundFloors}층`}
-        {" · "}
-        연면적 {main.missingFields?.includes("totArea") ? "미제공" : `${num(main.totalArea, 2)} m²`}
-        {main.structure && ` · ${main.structure}`}
-      </div>
-
-      <div
-        style={{
-          padding: "8px 10px",
-          background:
-            signalKind === "neg"
-              ? "var(--neg-soft)"
-              : signalKind === "warn"
-                ? "var(--warn-soft)"
-                : "var(--pos-soft)",
-          borderRadius: 5,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          fontSize: 12.5,
-          fontWeight: 500,
-          color:
-            signalKind === "neg"
-              ? "var(--neg-fg)"
-              : signalKind === "warn"
-                ? "var(--warn-fg)"
-                : "var(--pos-fg)",
-        }}
-      >
-        <Dot kind={signalKind} />
-        <span>{info.signalLabel}</span>
-      </div>
-      <div style={{ fontSize: 11.5, color: "var(--fg-muted)", marginTop: 6, lineHeight: 1.5 }}>
-        {info.signalReasoning}
-      </div>
-
-      {/* 철거비 */}
-      {demolitionCost > 0 && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: "8px 10px",
-            background: "var(--bg-sunken)",
-            borderRadius: 5,
-            fontSize: 12,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <span style={{ color: "var(--fg-muted)" }}>예상 철거비</span>
-          <span className="mono" style={{ fontWeight: 500 }}>
-            약 {num(demolitionCost)}만원
-            <span style={{ color: "var(--fg-faint)", marginLeft: 6, fontSize: 11 }}>
-              ({pyeong(main.totalArea)})
-            </span>
-          </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────── 헬퍼 함수 ─────────────────────────── */
-
-function confidenceLabel(c: "high" | "medium" | "low"): string {
-  if (c === "high") return "표본 근거 충분";
-  if (c === "medium") return "표본 근거 보통";
-  return "표본 근거 부족";
+          <button type="submit" className="picker-search-submit" disabled={phase === "confirming" || address.trim().length < 2}>주소로 찾기 <ArrowRight size={15} /></button>
+        </form>
+        <p className="picker-search-note">2글자 이상 입력하면 주소 후보가 나와요.</p>
+      </section>
+      <ParcelSelectionMap selected={selectedLocation} pending={pendingLocation} area={area} boundary={parcel?.boundary} onSelect={location => void select({ location })} disabled={phase === "confirming"} />
+      <section className="picker-selection" aria-label="선택한 부지" aria-busy={phase !== "idle"}>
+        {phase === "searching" && <div className="picker-progress" role="status"><span className="picker-spinner" />주소와 필지 경계를 확인하고 있어요…<button type="button" onClick={resetSelection}>취소</button></div>}
+        {error && <div className="site-error" role="alert">{error}</div>}
+        {area && <p className="picker-boundary" role="status">검색한 지역에는 여러 필지가 있어요. 지번을 더 입력하거나 지도에서 한 곳을 선택하세요.</p>}
+        {selected ? <article className="picker-result">
+          <span className="picker-result-label"><MapPin size={15} /> 선택한 부지</span>
+          <h2>{selected.address}</h2>{selected.addressRoad && <p className="site-muted">{selected.addressRoad}</p>}
+          {parcel ? <>
+            <div className="picker-facts"><div><span>대지면적</span><strong>{num(parcel.lotArea, 2)}<small>㎡</small></strong><p>{pyeong(parcel.lotArea)}</p></div><div><span>용도지역</span><strong className="picker-zoning">{parcel.zoning}</strong><p>{parcel.mode === "manual" ? "사용자 입력" : "조회된 지역 구분"}</p></div></div>
+            <p className="picker-boundary"><SquareDashed size={16} />{parcel.boundary?.length ? parcel.mode === "manual" ? "사용자가 제공한 경계 · 원문 확인 필요" : "선택한 필지 경계를 지도에 표시했어요" : "필지 경계 미확인 · 주소 기준으로 살펴봅니다"}</p>
+            <button type="button" className="site-primary" onClick={() => void confirm()} disabled={phase !== "idle"}>{phase === "confirming" ? "현재 건물 자료를 불러오는 중…" : "이 부지 살펴보기"}<ArrowRight size={17} /></button>
+            {phase === "confirming" && <button type="button" className="site-text-button" onClick={() => { requestId.current++; controller.current?.abort(); setPhase("idle"); }}>조회 취소</button>}
+            <p className="picker-next-note"><Check size={14} /> 가격 입력 없이 현황부터 확인해요</p>
+          </> : <>
+            <p className="picker-boundary">주소를 찾았지만 토지 면적과 경계를 확인하지 못했어요. 확인된 자료가 있으면 직접 입력할 수 있어요.</p>
+            <button type="button" className="site-primary" onClick={() => setManualOpen(!manualOpen)} aria-expanded={manualOpen}>토지 정보 직접 입력 <ArrowRight size={16} /></button>
+            {manualOpen && manual && <ManualParcelIntake key={manual.pnu} lookup={manual} onApply={applyManual} />}
+          </>}
+        </article> : phase !== "searching" && <div className="picker-empty-card"><span className="picker-empty-icon"><SquareDashed size={28} strokeWidth={1.3} /></span><h2>부지 한 곳에서 시작하세요</h2><p>선택한 주소와 경계를 확인한 다음,<br />현재 토지와 건물 상태를 살펴볼 수 있어요.</p></div>}
+        <div className="picker-footer"><span>처음 사용하시나요?</span><Link href={`/projects/${DEMO_PROJECT_ID}/status`}>예시 부지 살펴보기 <ArrowRight size={14} /></Link></div>
+      </section>
+    </main>
+  </div>;
 }

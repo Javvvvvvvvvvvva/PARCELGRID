@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesProjectIntake } from "@/lib/services/project-intake";
+
 import { use, useMemo, useState } from "react";
 import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
@@ -94,7 +96,8 @@ export default function HandoffPage({
     priceVerificationProjects[projectId] ?? EMPTY_PRICE_VERIFICATIONS;
   const expertReviews =
     expertReviewProjects[projectId] ?? EMPTY_EXPERT_REVIEWS;
-  const stage3Snapshot = stage3Snapshots[projectId] ?? null;
+  const savedSnapshot = stage3Snapshots[projectId];
+  const stage3Snapshot = savedSnapshot && matchesProjectIntake(savedSnapshot.data, liveData) ? savedSnapshot : null;
   const currentScenario =
     planningScenarios.find(
       (scenario) =>

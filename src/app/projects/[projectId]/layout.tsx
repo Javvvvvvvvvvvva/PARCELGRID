@@ -5,6 +5,7 @@ import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { recomputeFromEnvelope } from "@/lib/services/recompute-from-envelope";
 import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
+import { AcquisitionAccess, SiteProjectShell } from "@/components/project/SiteProjectAccess";
 import { WorkspaceShell } from "@/components/workspace/WorkspaceShell";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -22,12 +23,14 @@ const STANDALONE_SUBROUTES = ["/acquisition-check"];
 
 export default function ProjectLayout({ children, params }: ProjectLayoutProps) {
   const pathname = usePathname();
+  const { projectId } = use(params);
 
   if (STANDALONE_SUBROUTES.some((sub) => pathname.endsWith(sub))) {
     return <>{children}</>;
   }
 
-  return <ProjectShell params={params}>{children}</ProjectShell>;
+  if (pathname.endsWith("/status")) return <SiteProjectShell projectId={projectId}>{children}</SiteProjectShell>;
+  return <AcquisitionAccess key={projectId} projectId={projectId}><ProjectShell params={params}>{children}</ProjectShell></AcquisitionAccess>;
 }
 
 function ProjectShell({
@@ -40,6 +43,7 @@ function ProjectShell({
   const { projectId } = use(params);
   const { data, isLoading, error, refetch, isFetching } = useDynamicProject(projectId);
   const setData = useProjectStore((s) => s.setData);
+  const activeData = useProjectStore((s) => s.data);
   const envelopePlan = useProjectStore((s) => s.envelopePlan);
   const planningScenarios = useProjectStore((s) => s.planningScenarios);
   const representativePlanningScenarioId = useProjectStore(
@@ -66,6 +70,7 @@ function ProjectShell({
     if (representativeScenario && representativePlanningScenarioId) {
       const savedSnapshotMatches =
         savedStage3Snapshot?.projectId === projectId &&
+        savedStage3Snapshot.data.meta.intakeRevision === data.meta.intakeRevision &&
         savedStage3Snapshot.representativeScenarioId ===
           representativePlanningScenarioId &&
         savedStage3Snapshot.representativeScenarioVersion ===
@@ -170,6 +175,11 @@ function ProjectShell({
         </div>
       </div>
     );
+  }
+
+  // Never mount financial child screens against the lightweight site-only store snapshot.
+  if (!activeData || activeData.parcel.id !== projectId || activeData.meta.mode === "site-only" || activeData.meta.intakeRevision !== data.meta.intakeRevision) {
+    return <p className="site-message" role="status">입력한 가격으로 계획 검토를 준비하고 있어요…</p>;
   }
 
   return (

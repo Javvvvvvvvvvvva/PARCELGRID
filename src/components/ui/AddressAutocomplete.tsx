@@ -25,6 +25,7 @@ export interface AddressSuggestionItem {
 }
 
 interface AddressAutocompleteProps {
+  inputId?: string;
   value: string;
   onChange: (value: string) => void;
   onSelect?: (item: AddressSuggestionItem) => void;
@@ -37,6 +38,7 @@ const DEBOUNCE_MS = 300;
 const MIN_QUERY_LEN = 2;
 
 export function AddressAutocomplete({
+  inputId,
   value,
   onChange,
   onSelect,
@@ -55,6 +57,7 @@ export function AddressAutocomplete({
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const pickedAddress = useRef<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -107,6 +110,7 @@ export function AddressAutocomplete({
       const data = (await res.json()) as {
         suggestions?: AddressSuggestionItem[];
       };
+      if (ac.signal.aborted) return;
       const items = data.suggestions ?? [];
       setSuggestions(items);
       setOpen(items.length > 0);
@@ -122,13 +126,15 @@ export function AddressAutocomplete({
   }, []);
 
   useEffect(() => {
-    if (disabled) return;
+    abortRef.current?.abort();
+    if (disabled || pickedAddress.current === value) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       fetchSuggestions(value);
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      abortRef.current?.abort();
     };
   }, [value, disabled, fetchSuggestions]);
 
@@ -155,6 +161,8 @@ export function AddressAutocomplete({
   }, []);
 
   const pick = (item: AddressSuggestionItem) => {
+    pickedAddress.current = item.address;
+    abortRef.current?.abort();
     onChange(item.address);
     onSelect?.(item);
     setOpen(false);
@@ -181,6 +189,7 @@ export function AddressAutocomplete({
         pick(suggestions[highlight]);
         return;
       }
+      e.preventDefault();
       setOpen(false);
       onSubmit?.();
       return;
@@ -255,6 +264,8 @@ export function AddressAutocomplete({
   return (
     <div ref={wrapRef} style={{ position: "relative", flex: 1, minWidth: 0 }}>
       <input
+        id={inputId}
+        aria-label={inputId ? undefined : "주소 검색"}
         type="text"
         role="combobox"
         aria-expanded={open}
@@ -265,6 +276,7 @@ export function AddressAutocomplete({
         }
         value={value}
         onChange={(e) => {
+          pickedAddress.current = null;
           onChange(e.target.value);
           if (e.target.value.trim().length >= MIN_QUERY_LEN) setOpen(true);
         }}

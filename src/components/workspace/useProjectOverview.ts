@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesProjectIntake } from "@/lib/services/project-intake";
+
 import { useMemo } from "react";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
@@ -35,7 +37,7 @@ export function useProjectOverview(projectId: string) {
       scopedGeometry.validation.status === "pass" && scopedGeometry.validation.representativeEligible &&
       scopedGeometry.validation.exportable);
     const geometry = geometryReady ? scopedGeometry : null;
-    const ownedSnapshot = snapshot?.projectId === projectId && snapshot.data.parcel.id === projectId ? snapshot : null;
+    const ownedSnapshot = snapshot?.projectId === projectId && matchesProjectIntake(snapshot.data, data) ? snapshot : null;
     const alignment = validateReviewSnapshotAlignment({ snapshot: ownedSnapshot, geometry, currentScenario: plan });
     const context = resolveStage3DashboardContext({
       projectId, representativeScenarioId: representativeId,

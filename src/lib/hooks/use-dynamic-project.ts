@@ -27,6 +27,7 @@ export interface StoredParcel {
   lawdCd: string;
   pnu: string | null;
   lotArea: number;
+  jimokCategory?: "buildable" | "farmland" | "forest" | "other";
   boundary?: [number, number][];
   roads?: { name: string | null; points: [number, number][] }[];
   zoning: string;
@@ -43,7 +44,10 @@ export interface StoredParcel {
   estMarketPrice?: number;
   acquisitionEstimate?: AcquisitionEstimateSnapshot;
   acquired: string;
-  acquiredPrice: number;
+  /** null is an unpriced site intake, never a zero-cost acquisition. */
+  acquiredPrice: number | null;
+  intakeRevision?: string;
+  selectedAt?: string;
   demolitionCost?: number;
   /** MOLIT 건축물대장 — Stage 1 현황 분석용 */
   currentBuilding?: BuildingLookupResult | null;
@@ -53,11 +57,13 @@ export interface DynamicProjectRequest {
   parcel: Parcel;
   lawdCd: string;
   parcelDong: string;
+  intakeRevision?: string;
 }
 
 export function buildDynamicProjectRequest(
   stored: StoredParcel,
 ): DynamicProjectRequest {
+  if (!hasAcquisitionPrice(stored)) throw new Error("사업성 계산 전에 총 취득대금을 입력하세요.");
   const parcelDong =
     stored.address
       .split(/\s+/)
@@ -89,25 +95,45 @@ export function buildDynamicProjectRequest(
       estMarketPrice: stored.estMarketPrice ?? stored.landPrice,
       acquisitionEstimate: stored.acquisitionEstimate,
       acquired: stored.acquired,
-      acquiredPrice: stored.acquiredPrice,
+      acquiredPrice: stored.acquiredPrice!,
       demolitionCost: stored.demolitionCost,
       currentBuilding: stored.currentBuilding ?? null,
     },
     lawdCd: stored.lawdCd,
     parcelDong,
+    intakeRevision: stored.intakeRevision,
   };
 }
 
 /** Read the stored parcel. Returns null if nothing stored. */
 export function readStoredParcel(): StoredParcel | null {
   if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem("parcelgrid:draft-parcel");
-  if (!raw) return null;
   try {
-    return JSON.parse(raw) as StoredParcel;
+    const raw = sessionStorage.getItem("parcelgrid:draft-parcel");
+    if (!raw) return null;
+    const value = JSON.parse(raw) as StoredParcel;
+    return value && typeof value.id === "string" && typeof value.address === "string" && Number.isFinite(value.lotArea) && value.lotArea > 0 ? value : null;
   } catch {
     return null;
   }
+}
+
+export function hasAcquisitionPrice(stored: StoredParcel): boolean {
+  return typeof stored.acquiredPrice === "number" && Number.isFinite(stored.acquiredPrice) && stored.acquiredPrice > 0;
+}
+
+export function writeStoredParcel(stored: StoredParcel): void {
+  sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(stored));
+  window.dispatchEvent(new Event("parcelgrid:parcel-changed"));
+}
+
+/** No scenario, taxes, profitability, or market requests are run for site inspection. */
+export function buildSiteProject(stored: StoredParcel): ProjectComputed {
+  const parcel = { ...stored, addressRoad: stored.addressRoad ?? "", acquiredPrice: stored.acquiredPrice ?? 0,
+    setback: stored.setback ?? { road: 0, side: 0, rear: 0 }, estMarketPrice: stored.estMarketPrice ?? stored.landPrice,
+    risks: [], status: "현황 확인", risk: "미평가" };
+  return { parcel, scenarios: [], pfSchedule: [], parcelRisks: [], comps: [], maxAcquisition: [],
+    meta: { lastSyncedAt: stored.selectedAt ?? "", version: "site-only-2026.1", mode: "site-only", intakeRevision: stored.intakeRevision } };
 }
 
 /**
@@ -116,10 +142,12 @@ export function readStoredParcel(): StoredParcel | null {
  * validated demo project is served by its deterministic seed endpoint.
  */
 export function useDynamicProject(projectId: string) {
+  const storedAtRender = readStoredParcel();
+  const owned = storedAtRender?.id === projectId ? storedAtRender : null;
   return useQuery<ProjectComputed>({
-    queryKey: ["dynamic-project", projectId],
+    queryKey: ["dynamic-project", projectId, owned?.intakeRevision ?? (owned ? JSON.stringify(owned) : "seed")],
     queryFn: async () => {
-      if (projectId === DEMO_PROJECT_ID) {
+      if (projectId === DEMO_PROJECT_ID && !owned) {
         const res = await fetch(`/api/projects/${projectId}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
