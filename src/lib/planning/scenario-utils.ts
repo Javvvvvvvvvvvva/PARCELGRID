@@ -147,6 +147,7 @@ export function clonePlanningScenario(
       ...floor,
       id: uid("floor"),
       zones: floor.zones.map((zone) => ({ ...zone, id: uid("zone") })),
+      interior: floor.interior ? structuredClone(floor.interior) : undefined,
     })),
     placement: { ...source.placement },
     parking: { ...source.parking },

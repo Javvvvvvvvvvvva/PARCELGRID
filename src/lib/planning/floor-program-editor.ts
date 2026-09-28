@@ -36,6 +36,8 @@ export function cloneFloorProgramAtLevel(
     ),
     footprintScalePct: source.footprintScalePct,
     northSetbackM: source.northSetbackM,
+    interior: source.interior ? structuredClone(source.interior) : undefined,
+    interiorFinanceSignature: source.interiorFinanceSignature,
   };
 }
 

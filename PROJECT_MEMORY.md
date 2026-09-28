@@ -1,6 +1,6 @@
 # PARCELGRID 현재 작업 기준
 
-최종 갱신: 2026-08-26
+최종 갱신: 2026-09-28
 
 이 파일은 다음 작업자가 오래된 “다음 세션” 메모를 현재 요구사항으로 오해하지 않도록, 실제 코드 기준의 짧은 인계 문서만 유지합니다. 6~7월 구현 과정은 `docs/PROGRESS-2026-07-10.md`와 `docs/SESSION-2026-07-08.md`의 역사 기록을 참고하세요.
 
@@ -15,6 +15,8 @@
 
 ## 현재 코드 경로
 
+한국판 업그레이드: 내부 구획·사업성 대사·예비 일영·DXF/3DM 인계를 추가했다. 사용법·현재 한계는 `docs/KR-INTERIOR-UPGRADE.md`, 라이선스와 후속 구현 순서는 `docs/KR-UPGRADE-RESOURCES-2026-09-28.md`를 참조한다. 미국판 변경은 포함하지 않는다.
+
 | 역할 | 현재 구현 |
 |---|---|
 | Plan Studio 화면 | `src/app/projects/[projectId]/envelope/page.tsx` |
@@ -23,6 +25,9 @@
 | 추천 생성 | `recommendation-engine-v2.ts` + `recommendation-analysis.ts` |
 | 실제 층별 매스 | `planning-massing.ts` + `scenario-spatial-validation.ts` |
 | 대표안·Geometry 잠금 | `project-store.ts` + `planning-geometry.ts` |
+| 내부 구획 편집 | `components/planning/interior/InteriorPlanWorkspace.tsx` |
+| 독립 구획·검증·사업성·출력 | `lib/planning/interior/` |
+| 예비 일영·Worker | `solar-access.ts` + `workers/interior.worker.ts` |
 | Stage 3 연결 | `recompute-from-planning-scenarios.ts` |
 | 전문가 인계 | `/projects/[projectId]/handoff` |
 | 보고서 | `/projects/[projectId]/report` |
@@ -43,6 +48,8 @@ V1~V3 Plan Studio 컴포넌트와 중복 대시보드 UI는 제거됐습니다. 
 - Stage 3는 대표 PlanningScenario의 실현 형상 면적을 사용한다. 산술 법정 BCR/FAR를 실제 계획 면적으로 대체하지 않는다.
 - 총사업비 + 손익 = 매출, 자금조달과 사용액의 기준 차이를 자동 대사한다.
 - 토지 매입가와 주요 금융·가격 가정은 원문 근거 상태를 함께 저장한다.
+- 내부 구획의 추정 수익 면적은 명시적 반영 후 사용한다. 총 층 면적은 보존하고 공용 구획·잔여 면적은 비수익으로 처리한다.
+- 내부 구획이나 재무 구역 변경 후 반영 서명이 달라지면 대표안 확정을 차단한다. 개념 내부 도면은 별도로 내보낼 수 있다.
 
 ## 남은 실제 확인
 
