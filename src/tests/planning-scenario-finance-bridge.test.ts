@@ -116,10 +116,12 @@ describe("PlanningScenario → finance bridge", () => {
       [scenario],
       scenario.id,
       null,
-      { calculateMaxAcquisition: false }
+      { calculateMaxAcquisition: false, intakeRevision: "current-intake" }
     );
 
     expect(computed).not.toBeNull();
+    const refreshed = recomputeFromPlanningScenarios(parcel, [scenario], scenario.id, computed, { calculateMaxAcquisition: false });
+    expect(refreshed?.meta.intakeRevision).toBe("current-intake");
     const representative = computed!.scenarios[0];
     expect(representative.id).toBe(scenario.id);
     expect(representative.recommended).toBe(true);

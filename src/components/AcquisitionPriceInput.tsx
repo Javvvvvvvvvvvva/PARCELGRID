@@ -7,7 +7,7 @@
 //   - 사용자가 직접 입력 (총액 억 ↔ 평당가 만원/평 토글, 부지면적으로 동기화)
 //   - 입력하는 즉시 "주변 시세 대비 N%ile" 컨텍스트 + 분포 위 위치
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import PriceDistributionChart from './PriceDistributionChart';
 import {
   buildDistribution,
@@ -51,6 +51,7 @@ export default function AcquisitionPriceInput({
   chartHeight = 320,
   className,
 }: Props) {
+  const inputId = useId();
   const [mode, setMode] = useState<Mode>('total');
   // 입력창 표시용 로컬 텍스트 — 편집 중엔 사용자가 친 그대로 보존(재포맷 X)
   const [draft, setDraft] = useState('');
@@ -95,8 +96,8 @@ export default function AcquisitionPriceInput({
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* 헤더 + 토글 */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <label style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>부동산 총 취득대금 직접 입력</label>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <label htmlFor={inputId} style={{ fontSize: 14, fontWeight: 600, color: 'var(--pg-fg, #111827)' }}>부동산 총 취득대금 직접 입력</label>
         <div style={{ display: 'inline-flex', border: '1px solid var(--pg-border, #e5e7eb)', borderRadius: 8, overflow: 'hidden' }}>
           {(['total', 'perPyeong'] as Mode[]).map((m) => (
             <button
@@ -121,6 +122,7 @@ export default function AcquisitionPriceInput({
       {/* 입력 + 단위 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <input
+          id={inputId}
           inputMode="decimal"
           value={draft}
           onChange={(e) => handleInput(e.target.value)}
@@ -129,6 +131,7 @@ export default function AcquisitionPriceInput({
           placeholder={mode === 'total' ? '예: 35.0' : '예: 4500'}
           style={{
             flex: 1,
+            minWidth: 0,
             padding: '10px 12px',
             fontSize: 18,
             fontWeight: 600,

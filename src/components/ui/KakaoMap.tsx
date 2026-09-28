@@ -12,42 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const SDK_ID = "kakao-map-sdk";
-const JS_KEY = process.env.NEXT_PUBLIC_KAKAO_JS_KEY;
-
-declare global {
-  interface Window {
-    kakao: any;
-  }
-}
-
-function loadKakaoSdk(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") return reject(new Error("no window"));
-    if (window.kakao && window.kakao.maps) {
-      resolve();
-      return;
-    }
-    const existing = document.getElementById(SDK_ID) as HTMLScriptElement | null;
-    if (existing) {
-      existing.addEventListener("load", () => window.kakao.maps.load(() => resolve()));
-      return;
-    }
-    if (!JS_KEY) {
-      reject(new Error("NEXT_PUBLIC_KAKAO_JS_KEY 없음"));
-      return;
-    }
-    const script = document.createElement("script");
-    script.id = SDK_ID;
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${JS_KEY}&autoload=false`;
-    script.async = true;
-    script.onload = () => {
-      window.kakao.maps.load(() => resolve());
-    };
-    script.onerror = () => reject(new Error("Kakao SDK 로드 실패"));
-    document.head.appendChild(script);
-  });
-}
+import { loadKakaoSdk } from "@/lib/integrations/kakao-maps-sdk";
 
 export interface StationMarker {
   name: string;

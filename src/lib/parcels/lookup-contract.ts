@@ -60,4 +60,5 @@ export interface ParcelLookupManualRequired extends ParcelLookupBase {
 
 export type ParcelLookupResponse =
   | ParcelLookupComplete
-  | ParcelLookupManualRequired;
+  | ParcelLookupManualRequired
+  | { mode: "area"; address: string; lat: number; lng: number };

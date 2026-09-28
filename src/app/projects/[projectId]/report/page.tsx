@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesProjectIntake } from "@/lib/services/project-intake";
+
 /**
  * 예비 사업성 검토서 — 전문가 검토 전 한 장 요약.
  *
@@ -107,7 +109,8 @@ export default function ReportPage({
     (state) => state.expertReviews[projectId] ?? EMPTY_EXPERT_REVIEWS
   );
 
-  const stage3Snapshot = stage3Snapshots[projectId] ?? null;
+  const savedSnapshot = stage3Snapshots[projectId];
+  const stage3Snapshot = savedSnapshot && matchesProjectIntake(savedSnapshot.data, liveData) ? savedSnapshot : null;
   const geometry =
     representativeGeometry?.projectId === projectId
       ? representativeGeometry

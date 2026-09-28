@@ -111,6 +111,7 @@ export function recomputeFromEnvelope(
   const scenarios = [main, ...comparisons];
 
   const computed = computeProject(parcel, scenarios, {
+    intakeRevision: prev?.meta.intakeRevision,
     calculateMaxAcquisition: true, // 대시보드 최대 인수가 패널 유지 (~100ms)
     ...options,
     recommendedId: main.id, // 내 계획을 메인으로 고정

@@ -63,6 +63,7 @@ try {
     await route.fulfill({response,json:data});
   });
   await page.goto(`http://127.0.0.1:3100/projects/${projectId}/status`,{waitUntil:'domcontentloaded',timeout:60000});
+  await page.getByRole('button',{name:'상세 현황과 근거 보기 +',exact:false}).click();
   const panel=page.getByRole('region',{name:'건축물대장 조회 근거'});
   await panel.getByText('기존 건물 속성 확보',{exact:true}).waitFor({timeout:20000});
   await panel.locator('summary').filter({hasText:'층별개요'}).click();
@@ -91,6 +92,7 @@ try {
     mode=next;
     await page.goto(`http://127.0.0.1:3100/projects/${projectId}/status`,{waitUntil:'domcontentloaded'});
     await page.reload({waitUntil:'domcontentloaded'});
+    await page.getByRole('button',{name:'상세 현황과 근거 보기 +',exact:false}).click();
     if(mode==='partial') {
       await panel.locator('summary').filter({hasText:'층별개요'}).click();
       await panel.getByText(/최대 10페이지 도달/).waitFor();

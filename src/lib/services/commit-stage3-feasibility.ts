@@ -25,6 +25,7 @@ export function commitStage3FeasibilitySnapshot(
   if (!replaced) scenarios.unshift(activeScenario);
 
   const computed = computeProject(parcel, scenarios, {
+    intakeRevision: previous.meta.intakeRevision,
     startDate: parcel.acquired,
     recommendedId: activeScenario.id,
     calculateMaxAcquisition: true,

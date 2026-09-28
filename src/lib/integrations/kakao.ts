@@ -172,6 +172,20 @@ export async function geocodeAddress(
   return parseAddressDoc(docs[0]);
 }
 
+/** Official coord2address returns the lot address, then address search supplies its legal code. */
+export async function reverseGeocodeLocation(lat: number, lng: number): Promise<GeocodeResult | null> {
+  const key = process.env.KAKAO_REST_API_KEY;
+  if (!key) throw new Error("Kakao 주소 연결이 설정되지 않았습니다.");
+  const url = new URL(`${BASE}/v2/local/geo/coord2address.json`);
+  url.searchParams.set("x", String(lng)); url.searchParams.set("y", String(lat));
+  url.searchParams.set("input_coord", "WGS84");
+  const response = await fetch(url, { headers: { Authorization: `KakaoAK ${key}` }, signal: AbortSignal.timeout(8_000), cache: "no-store" });
+  if (!response.ok) throw new Error(`Kakao 좌표 조회 실패 (${response.status})`);
+  const payload = z.object({ documents: z.array(z.object({ address: z.object({ address_name: z.string().min(1) }).nullable() })) }).parse(await response.json());
+  const address = payload.documents.find(item => item.address)?.address?.address_name;
+  return address ? geocodeAddress(address) : null;
+}
+
 /** 주소 자동완성 — 입력 중 후보 목록 (지번·도로명) */
 export async function searchAddressSuggestions(
   query: string,

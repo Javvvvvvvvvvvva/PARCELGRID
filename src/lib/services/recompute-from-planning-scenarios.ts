@@ -95,6 +95,7 @@ export function recomputeFromPlanningScenarios(
   });
 
   const computed = computeProject(parcel, financeScenarios, {
+    intakeRevision: previous?.meta.intakeRevision,
     calculateMaxAcquisition: true,
     ...options,
     recommendedId: representativeId,

@@ -34,6 +34,7 @@ interface DynamicBody {
   lawdCd?: string;
   /** 본인 부지의 법정동 이름 (예: "역삼동") — 같은 동 표시용 */
   parcelDong?: string;
+  intakeRevision?: string;
 }
 
 const coordinateSchema = z.tuple([
@@ -170,6 +171,7 @@ const parcelSchema = z
   });
 
 const dynamicBodySchema = z.object({
+  intakeRevision: z.string().uuid().optional(),
   parcel: parcelSchema,
   lawdCd: z.string().regex(/^\d{5}$/).optional(),
   parcelDong: z.string().trim().max(40).optional(),
@@ -278,6 +280,7 @@ export async function POST(req: NextRequest) {
 
     // 3. 시나리오 계산 + 실거래 변환
     const computed = computeProject(parcel, scenarios, {
+      intakeRevision: body.intakeRevision,
       transactions,
       parcelDong: parcelDong ?? "",
       calculateMaxAcquisition: true, // 역산 활성화 (~100ms)

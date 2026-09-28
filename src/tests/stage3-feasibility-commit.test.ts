@@ -45,6 +45,7 @@ describe("Stage 3 feasibility snapshot", () => {
   it("commits the edited representative scenario and acquisition price", () => {
     const baseScenario = scenario();
     const previous = computeProject(parcel, [baseScenario], {
+      intakeRevision: "current-intake",
       recommendedId: baseScenario.id,
       calculateMaxAcquisition: false,
     });
@@ -64,6 +65,7 @@ describe("Stage 3 feasibility snapshot", () => {
     );
     const saved = committed.scenarios.find((item) => item.id === baseScenario.id);
 
+    expect(committed.meta.intakeRevision).toBe("current-intake");
     expect(committed.parcel.acquiredPrice).toBe(95_000);
     expect(saved?.recommended).toBe(true);
     expect(saved?._raw.assumptions.constCostPerSqM).toBe(

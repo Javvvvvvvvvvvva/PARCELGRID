@@ -291,7 +291,8 @@ function selectBestCadastralFeature(
 
 async function featureToCadastralInfo(
   f: CadastralResponseFeature,
-  roadsCenter: { lat: number; lng: number }
+  roadsCenter: { lat: number; lng: number },
+  includeRoads = true,
 ): Promise<CadastralInfo> {
   const props = f.properties;
   let ring: [number, number][] = [];
@@ -323,14 +324,15 @@ async function featureToCadastralInfo(
     jimokCategory: jimokToCategory(jimokName),
     boundary: ring,
     centroid,
-    roads: await fetchRoads(roadsCenter.lat, roadsCenter.lng),
+    roads: includeRoads ? await fetchRoads(roadsCenter.lat, roadsCenter.lng) : [],
   };
 }
 
 export async function lookupCadastral(
   lat: number,
   lng: number,
-  hint?: CadastralMatchHint
+  hint?: CadastralMatchHint,
+  options?: { includeRoads?: boolean },
 ): Promise<CadastralInfo | null> {
   if (!KEY) throw new Error("VWORLD_API_KEY not set");
 
@@ -368,7 +370,7 @@ export async function lookupCadastral(
   const parsed = parseCadastralFeature(best);
   if (!parsed) return null;
 
-  return featureToCadastralInfo(best, parsed.centroid);
+  return featureToCadastralInfo(best, parsed.centroid, options?.includeRoads ?? true);
 }
 
 function parseCadastralFeature(f: CadastralResponseFeature): {
