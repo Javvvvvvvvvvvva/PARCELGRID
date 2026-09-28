@@ -1,3 +1,4 @@
+import { fixtureBuildingLookup } from "../helpers/building-registry-fixture";
 import { describe, it, expect } from "vitest";
 import { calculateScenario, defaultProgram, defaultAssumptions } from "../../lib/finance/scenario";
 import { generatePFSchedule } from "../../lib/finance/cashflow";
@@ -89,27 +90,23 @@ describe("calculateTaxes", () => {
     expect(acquisition?.note).toContain("건축물 존재 여부");
   });
 
-  it("estimates the land rate only when the parcel is confirmed vacant", () => {
+  it("does not use registry absence alone as a verified land-only tax base", () => {
     const vacantParcel: Parcel = {
       ...parcel,
-      currentBuilding: {
-        hasBuilding: false,
-      } as NonNullable<Parcel["currentBuilding"]>,
+      currentBuilding: { hasBuilding: false } as NonNullable<Parcel["currentBuilding"]>,
     };
-    const vacantResult = calculateScenario({ parcel: vacantParcel, scenario });
-    const vacantTaxes = calculateTaxes({
-      parcel: vacantParcel,
-      result: vacantResult,
-      residentialSaleShare: scenario.program.mix.residentialSale,
-    });
-    const acquisition = vacantTaxes.lines.find(
-      (line) => line.tax === "취득세" && line.base === "토지",
-    );
-    expect(acquisition).toMatchObject({ status: "estimated" });
-    expect(acquisition!.amount).toBeCloseTo(
-      vacantParcel.acquiredPrice * TAX_RATES.acquisitionLandGeneral,
-      -1,
-    );
+    const vacantTaxes = calculateTaxes({ parcel: vacantParcel, result });
+    const acquisition = vacantTaxes.lines.find((line) => line.tax === "취득세" && line.base === "부동산 총 취득대금");
+    expect(acquisition).toMatchObject({ status: "not-calculated", amount: 0 });
+    expect(acquisition?.note).toContain("대장 조회 0건만으로");
+  });
+
+  it("also withholds land-only tax for a complete zero-row official-query snapshot", () => {
+    const currentBuilding = fixtureBuildingLookup();
+    currentBuilding.hasBuilding = false; currentBuilding.buildings = [];
+    currentBuilding.registry!.title = { ...currentBuilding.registry!.title, rows: [], totalCount: 0, fetchedCount: 0 };
+    const snapshotTaxes = calculateTaxes({ parcel: { ...parcel, currentBuilding }, result });
+    expect(snapshotTaxes.lines.find((line) => line.base === "부동산 총 취득대금")?.status).toBe("not-calculated");
   });
 
   it("blocks acquisition tax when an existing building is confirmed", () => {

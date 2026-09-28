@@ -180,6 +180,7 @@ export function buildDataReadinessInsight(
   comps: CompVM[],
   stations: StationSummaryInput[]
 ): DataReadinessInsight {
+  const main = mainBuilding(parcel);
   const buildingStatus = getBuildingRegistryStatus(parcel.currentBuilding);
   const hasBuilding = buildingStatus === "present";
   const hasRegistryResponse = buildingStatus !== "unknown";
@@ -261,12 +262,14 @@ export function buildDataReadinessInsight(
     },
     {
       label: "기존 건물 면적·층수",
-      status: hasRegistryResponse ? "available" : "missing",
-      source: actualGeometry ? "MOLIT 건축물대장 + V월드 GIS건물통합정보" : "MOLIT 건축물대장",
+      status: hasBuilding
+        ? parcel.currentBuilding?.registry?.title.status === "complete" && !main?.missingFields?.length ? "available" : "derived"
+        : "missing",
+      source: parcel.currentBuilding?.source === "vworld-gis" ? "V월드 GIS건물통합정보 · 대장 별도 확인" : actualGeometry ? "MOLIT 건축물대장 + V월드 GIS건물통합정보" : "MOLIT 건축물대장",
       note: hasBuilding
-        ? undefined
+        ? parcel.currentBuilding?.registry?.title.status === "complete" ? undefined : "일부 자료 또는 이전 저장값 · 원문 범위 확인 필요"
         : hasRegistryResponse
-          ? "공공 데이터상 등록 건물 없음"
+          ? "요청 지번 표제부 0건 · 현장 건물 유무 미확인"
           : "조회 실패 가능성 확인 필요",
     },
     {
@@ -305,13 +308,13 @@ export function buildDataReadinessInsight(
       },
       {
         label: "기존 주차대수",
-        status: "missing",
-        source: "건축물대장 추가 API 필요",
+        status: main?.parkingCount != null ? "available" : "missing",
+        source: "건축HUB 표제부 · 주차 4항목",
       },
       {
         label: "승강기 유무",
-        status: "missing",
-        source: "건축물대장 추가 API 필요",
+        status: main?.passengerElevators != null && main?.emergencyElevators != null ? "available" : "missing",
+        source: "건축HUB 표제부 · 승용/비상 별도",
       },
       {
         label: "위반건축물 여부",
@@ -325,9 +328,9 @@ export function buildDataReadinessInsight(
             : "코드값 미제공 또는 해석 불가",
       },
       {
-        label: "지붕·층별 용도",
-        status: "missing",
-        source: "층별개요 추가 API 필요",
+        label: "층별 용도·면적",
+        status: parcel.currentBuilding?.registry?.floors.status === "complete" && parcel.currentBuilding.registry.floors.rows.length > 0 ? "available" : "missing",
+        source: "건축HUB 층별개요 · 원본 PK 대조",
       },
       {
         label: "구조 안전 상태",
@@ -406,7 +409,7 @@ export function buildExistingReviewOptions(parcel: Parcel): ExistingReviewOption
         title: "기존 건물 유지",
         status: "해당 없음",
         tone: "neutral",
-        summary: "건축물대장에 등록된 현재 건물이 없어 유지안을 평가하지 않습니다.",
+        summary: "요청 지번의 표제부가 0건이라 기존 건물 유지안을 아직 평가하지 않습니다.",
         points: ["실제 빈 토지 여부와 멸실 신고 상태 확인 필요"],
         costImpact: "등록 건물이 확인되지 않아 유지비를 산정하지 않습니다.",
         requiredChecks: ["현장 건물 존재 여부", "멸실 신고 및 미등재 건물 여부"],
@@ -430,7 +433,7 @@ export function buildExistingReviewOptions(parcel: Parcel): ExistingReviewOption
         tone: "positive",
         summary: "Stage 2에서 법규·일조·도로·주차를 반영한 신축 가능 규모를 계산합니다.",
         points: ["등록 건물 없음", "건축선·접도·주차 확인 필요"],
-        costImpact: "철거비는 제외할 수 있지만 지반·인입·정지 비용은 별도 확인이 필요합니다.",
+        costImpact: "조회 0건만으로 철거비를 제외하지 않습니다. 현장·미등재 건물과 지반·인입 비용 확인이 필요합니다.",
         requiredChecks: ["실제 빈 토지 여부", "접도·건축선", "지반·상하수도 인입 상태"],
         nextStep: "Stage 2에서 법규·일조·도로·주차를 반영한 배치안을 비교합니다.",
       },

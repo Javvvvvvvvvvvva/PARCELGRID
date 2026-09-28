@@ -1,6 +1,8 @@
 "use client";
 
 
+import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
+import { buildingRegistryLabel } from "@/lib/building-registry/evidence";
 import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
 import ManualParcelIntake from "@/components/project/ManualParcelIntake";
 import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
@@ -505,8 +507,8 @@ export default function NewParcelPage() {
                         gap: "var(--s2)",
                       }}
                     >
-                      <Dot kind="pos" />
-                      건축물대장상 등록 건물 없음 · 현장 확인 필요
+                      <Dot kind="warn" />
+                      {buildingRegistryLabel(parcel.currentBuilding)}
                     </div>
                   ) : (
                     <div
@@ -525,6 +527,7 @@ export default function NewParcelPage() {
                       건축물대장 조회 미확인 · 건물 유무 확인 필요
                     </div>
                   )}
+                  <BuildingRegistryEvidencePanel info={parcel.currentBuilding} />
                 </Panel>
               </div>
 
@@ -802,15 +805,15 @@ function CurrentBuildingBox({
   const signalKind: "pos" | "warn" | "neg" =
     info.redevelopmentSignal === "rebuild"
       ? "neg"
-      : info.redevelopmentSignal === "renovate"
+      : (info.redevelopmentSignal === "renovate" || info.redevelopmentSignal === "unknown")
         ? "warn"
         : "pos";
 
   return (
     <div>
       <div style={{ fontSize: 13, fontWeight: 500, color: "var(--fg)", marginBottom: 4 }}>
-        {main.approvalDate.slice(0, 4)}년 {main.approvalDate.slice(5, 7)}월 준공
-        {main.ageYears != null && (
+        {main.approvalDate ? `${main.approvalDate.slice(0, 4)}년 ${main.approvalDate.slice(5, 7)}월 사용승인` : "사용승인일 미제공"}
+        {main.approvalDate && main.ageYears != null && (
           <span style={{ color: "var(--fg-muted)", marginLeft: 8 }}>
             ({main.ageYears}년 노후)
           </span>
@@ -820,7 +823,7 @@ function CurrentBuildingBox({
         {main.mainPurpose} · 지상 {main.groundFloors}층
         {main.undergroundFloors > 0 && ` / 지하 ${main.undergroundFloors}층`}
         {" · "}
-        연면적 {num(main.totalArea, 2)} m²
+        연면적 {main.missingFields?.includes("totArea") ? "미제공" : `${num(main.totalArea, 2)} m²`}
         {main.structure && ` · ${main.structure}`}
       </div>
 

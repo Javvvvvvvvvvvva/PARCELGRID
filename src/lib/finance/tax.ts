@@ -11,6 +11,7 @@ import { D, toManWon } from "./math";
 import type { Parcel, ScenarioResult, TaxBreakdown, TaxLine } from "./types";
 
 export const TAX_MODEL_AS_OF = "2026-01-01";
+export const TAX_MODEL_VERSION = "tax-evidence-2026.2";
 
 /**
  * General-case reference rates. Acquisition taxes still depend on the asset,
@@ -58,34 +59,15 @@ export function calculateTaxes(input: TaxInput): TaxBreakdown {
 
   const currentBuildingStatus = parcel.currentBuilding?.hasBuilding;
 
-  if (currentBuildingStatus === false) {
-    const acquisitionLand = D(parcel.acquiredPrice).times(
-      TAX_RATES.acquisitionLandGeneral
-    );
-    lines.push({
-      tax: "취득세",
-      base: "토지",
-      rate: "일반 4.6% 가정",
-      amount: toManWon(acquisitionLand),
-      note:
-        "건축물대장상 빈 토지로 확인된 부동산 총 취득대금 기준 · 법인 비농지 일반 유상취득 예비값",
-      status: "estimated",
-      source: "지방세법 일반세율 참고",
-    });
-  } else {
-    lines.push({
-      tax: "취득세",
-      base: "부동산 총 취득대금",
-      rate: "미산정",
-      amount: 0,
-      note:
-        currentBuildingStatus === true
-          ? "기존 건축물이 있어 계약대금의 토지·건물 안분과 매수인·물건 사실관계가 필요합니다."
-          : "건축물 존재 여부와 계약대금의 토지·건물 안분이 확인되지 않았습니다.",
-      status: "not-calculated",
-      source: "계약서·건축물대장·토지/건물 안분 자료 필요",
-    });
-  }
+  // Registry zero results do not establish a vacant physical property or a
+  // land-only tax base. No verified allocation/field evidence exists here.
+  lines.push({
+    tax: "취득세", base: "부동산 총 취득대금", rate: "미산정", amount: 0,
+    note: currentBuildingStatus === true
+      ? "기존 건축물이 있어 계약대금의 토지·건물 안분과 매수인·물건 사실관계가 필요합니다."
+      : "건축물 존재 여부와 계약대금의 토지·건물 안분이 확인되지 않았습니다. 대장 조회 0건만으로 토지 단독 취득세를 산정하지 않습니다.",
+    status: "not-calculated", source: "계약서·건축물대장·현장 확인·토지/건물 안분 자료 필요",
+  });
 
   const buildingBase = D(result.hardCost).plus(D(result.softCost));
   const acquisitionBuilding = buildingBase.times(
@@ -138,17 +120,14 @@ export function calculateTaxes(input: TaxInput): TaxBreakdown {
     .reduce((sum, line) => sum + line.amount, 0);
 
   return {
+    modelVersion: TAX_MODEL_VERSION,
     lines,
     total,
     asOf: TAX_MODEL_AS_OF,
     complete: false,
     warnings: [
       "표시 합계는 계산 가능한 항목의 부분 추정액이며 총 세부담이 아닙니다.",
-      ...(currentBuildingStatus === false
-        ? []
-        : [
-            "기존 건축물 상태 또는 토지·건물 안분이 미확정되어 취득세를 계산하지 않았습니다.",
-          ]),
+      "기존 건축물 상태와 토지·건물 안분 근거가 미확정되어 부동산 취득세를 계산하지 않았습니다.",
       "재산세와 부가세는 필수 과세자료가 없어 금액을 계산하지 않았습니다.",
       "법인세는 세무조정 전 모델 손익에 기본세율만 적용했습니다.",
     ],

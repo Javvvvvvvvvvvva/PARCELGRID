@@ -41,6 +41,7 @@ import type {
 import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 async function lookupCurrentBuilding(
   geo: GeocodeResult,

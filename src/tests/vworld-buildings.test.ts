@@ -1,3 +1,4 @@
+import { fixtureBuildingLookup } from "./helpers/building-registry-fixture";
 import { describe, expect, it } from "vitest";
 import type { BuildingPolygon, LngLat } from "@/lib/geo/existing-building-geometry";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
@@ -203,6 +204,20 @@ describe("VWorld dt_d010 building geometry", () => {
     const merged = attachExistingBuildingGeometry(current, geometry, 122.1);
     expect(merged?.buildings[0].detailPurpose).toBe("다가구주택");
     expect(merged?.geometry.footprints[0].id).toBe("main");
+  });
+
+  it("retains zero-row registry evidence when GIS separately indicates a building", () => {
+    const geometry = parseBuildingFeatureCollection(
+      { type: "FeatureCollection", features: [feature(PNU, "main")] }, { pnu: PNU, boundary, center },
+    );
+    const current = fixtureBuildingLookup();
+    current.hasBuilding = false; current.buildings = [];
+    current.registry!.title = { ...current.registry!.title, rows: [], totalCount: 0, fetchedCount: 0 };
+    const merged = attachExistingBuildingGeometry(current, geometry, 122.1);
+    expect(merged?.hasBuilding).toBe(true);
+    expect(merged?.source).toBe("vworld-gis");
+    expect(merged?.registry?.title.totalCount).toBe(0);
+    expect(merged?.buildings[0].source).toBe("vworld-gis");
   });
 
   it("does not over-interpret unknown violation codes", () => {

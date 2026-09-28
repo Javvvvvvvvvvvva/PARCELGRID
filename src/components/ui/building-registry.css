@@ -1,0 +1,20 @@
+.pg-registry { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-sunken); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.pg-registry p { margin: 8px 0; }
+.pg-registry-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pg-registry button { border: 1px solid var(--border); padding: 5px 9px; border-radius: 5px; background: var(--bg); color: var(--fg); cursor: pointer; font-size: 11px; margin-left: 4px; }
+.pg-registry-meta { color: var(--fg-muted); font-size: 11px; }
+.pg-registry-warning { color: var(--warn-fg); }
+.pg-registry details { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+.pg-registry summary { cursor: pointer; font-weight: 600; }
+.pg-registry-table-wrap { overflow-x: auto; max-width: 100%; }
+.pg-registry-table { width: 100%; border-collapse: collapse; min-width: 440px; font-size: 11px; }
+.pg-registry-table th, .pg-registry-table td { border-bottom: 1px solid var(--border); text-align: left; padding: 7px 5px; vertical-align: top; }
+.pg-registry-id { max-width: 140px; font-size: 10px; }
+@media print {
+  .pg-registry { font-size: 9px; padding: 8px; }
+  .pg-registry button { display: none; }
+  .pg-registry-table { min-width: 0; font-size: 8px; }
+  .pg-registry-meta { font-size: 8px; }
+  .pg-registry-table tr { break-inside: avoid; }
+  .pg-registry-table-wrap { overflow: visible; }
+}

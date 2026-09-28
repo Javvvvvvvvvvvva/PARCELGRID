@@ -20,7 +20,8 @@ export interface ExistingBuildingRatios {
 export function computeExistingRatios(
   main: BuildingInfo,
   lotArea: number
-): ExistingBuildingRatios {
+): ExistingBuildingRatios | null {
+  if (main.missingFields?.some((field) => field === "totArea" || field === "archArea")) return null;
   const bcrFromArea = lotArea > 0 ? (main.buildingArea / lotArea) * 100 : 0;
   const farFromArea = lotArea > 0 ? (main.totalArea / lotArea) * 100 : 0;
 

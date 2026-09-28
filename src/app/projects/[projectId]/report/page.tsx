@@ -7,12 +7,15 @@
  * 세무조정과 외부 가격검증 전에는 투자 타당성 확정 보고서로 사용하지 않는다.
  */
 
+import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
+import { buildingRegistryLabel } from "@/lib/building-registry/evidence";
 import { use, useMemo } from "react";
 import Link from "next/link";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { won, num, scenarioViable } from "@/lib/utils/format";
 import { PROJECT_LEDGER_MODEL_VERSION } from "@/lib/finance/project-ledger";
+import { TAX_MODEL_VERSION } from "@/lib/finance/tax";
 import { buildEvidenceGate } from "@/lib/handoff/evidence-gate";
 import {
   buildExpertReviewSummary,
@@ -163,6 +166,7 @@ export default function ReportPage({
   const financeTaxReview = expertReviews["finance-tax"];
   const taxComplete = Boolean(
     reviewSnapshotKey &&
+      scenarios.every((scenario) => scenario.taxModelVersion === TAX_MODEL_VERSION) &&
       financeTaxReview?.status === "approved" &&
       validateExpertReview(financeTaxReview, reviewSnapshotKey).valid
   );
@@ -365,15 +369,15 @@ export default function ReportPage({
           {currentBuilding ? (
             <>
               <div className="rpt-ov">
-                <OvItem l="존재 여부" v={currentBuilding.hasBuilding ? "기존 건축물 있음" : "건축물대장상 빈 토지"} />
-                <OvItem l="총 연면적" v={`${num(Math.round(currentBuilding.totalBuildingArea * 10) / 10)}㎡`} />
+                <OvItem l="존재 여부" v={buildingRegistryLabel(currentBuilding)} />
+                <OvItem l="수신 건물 연면적 합" v={currentBuilding.buildings.length ? `${num(Math.round(currentBuilding.totalBuildingArea * 10) / 10)}㎡ · 누락 여부 확인` : "미확인"} />
                 <OvItem l="가장 오래된 사용승인" v={currentBuilding.oldestApprovalDate || "미확인"} />
                 <OvItem l="최대 노후도" v={currentBuilding.maxAgeYears > 0 ? `${currentBuilding.maxAgeYears}년` : "미확인"} />
-                <OvItem l="검토 시그널" v={currentBuilding.signalLabel} />
+                <OvItem l="검토 시그널" v={currentBuilding.hasBuilding ? currentBuilding.signalLabel : buildingRegistryLabel(currentBuilding)} />
                 <OvItem l="건물 동수" v={`${currentBuilding.buildings.length}동`} />
               </div>
               <p style={{ margin: "10px 0 0", color: "var(--fg-muted)", fontSize: 10.5, lineHeight: 1.55 }}>
-                {currentBuilding.signalReasoning} 건축물대장 관측값이며 철거 가능성·위반건축물·임차권·현황 일치는 별도 원문과 현장조사가 필요합니다.
+                {currentBuilding.hasBuilding ? currentBuilding.signalReasoning : "표제부 조회 0건이나 조회 실패만으로 실제 빈 토지를 확정하지 않습니다."} 건축물대장 관측값이며 철거 가능성·위반건축물·임차권·현황 일치는 별도 원문과 현장조사가 필요합니다.
               </p>
               {currentBuilding.buildings.length > 0 && (
                 <table className="rpt-table" style={{ marginTop: 10 }}>
@@ -384,7 +388,7 @@ export default function ReportPage({
                         <td>{building.name || `${index + 1}동`} · {building.detailPurpose || building.mainPurpose || "용도 미확인"}</td>
                         <td>{building.structure || "미확인"}</td>
                         <td className="num">지상 {building.groundFloors} / 지하 {building.undergroundFloors}</td>
-                        <td className="num">{num(Math.round(building.totalArea * 10) / 10)}㎡</td>
+                        <td className="num">{building.missingFields?.includes("totArea") ? "미제공" : `${num(Math.round(building.totalArea * 10) / 10)}㎡`}</td>
                         <td className="num">{building.buildingCoverage.toFixed(1)}% / {building.floorAreaRatio.toFixed(1)}%</td>
                         <td>{building.approvalDate || "미확인"}</td>
                       </tr>
@@ -398,6 +402,7 @@ export default function ReportPage({
               건축HUB 건축물대장 조회 결과가 저장되지 않았습니다. 주소 분석을 다시 실행하거나 MOLIT_SERVICE_KEY와 해당 API 활용 승인을 확인하세요.
             </p>
           )}
+          <BuildingRegistryEvidencePanel info={currentBuilding} printMode />
         </div>
 
         <div className="rpt-sec">
@@ -473,7 +478,7 @@ export default function ReportPage({
             <OvItem l="DSCR" v={recommended.dscr > 0 ? recommended.dscr.toFixed(2) : "N/A"} />
             <OvItem l="최대 자금노출" v={won(Math.abs(recommended.maxExposure))} />
             <OvItem l="회수기간" v={recommended.paybackMonths != null ? `${recommended.paybackMonths}개월` : "사업기간 내 미회수"} />
-            <OvItem l="부분 세금 추정" v={won(recommended.taxBurden)} />
+            <OvItem l="부분 세금 추정" v={recommended.taxModelVersion === TAX_MODEL_VERSION ? won(recommended.taxBurden) : "세금 근거 기준 변경 · Stage 3 재저장 필요"} />
           </div>
           <p style={{ margin: "10px 0 0", color: "var(--neg-fg)", fontSize: 10, lineHeight: 1.5 }}>
             세금 값은 계산 가능한 일부 항목의 예비 합계입니다. 재산세·부가세·토지/건물 안분·법인 세무조정과 추가과세가 완결되지 않았으므로 세후 수익으로 해석하지 않습니다.
@@ -693,7 +698,7 @@ export default function ReportPage({
             <tbody>
               <tr><td>V월드</td><td>필지 경계·공시지가·용도지역·도로 참고선</td><td>{parcel.boundary?.length ? "조회됨" : "미조회"}</td><td>도로 중심선은 도로 폭·현황측량이 아님</td></tr>
               <tr><td>국토교통부 실거래가</td><td>비교거래·가격 참고</td><td>{comps.length > 0 ? `${comps.length}건` : "미조회"}</td><td>지번 비식별·상품 차이·신고 지연 가능</td></tr>
-              <tr><td>건축HUB 건축물대장</td><td>기존 건물·층수·면적·사용승인</td><td>{currentBuilding ? "조회됨" : "미조회"}</td><td>현장 상태·위반건축물·권리관계 별도 확인</td></tr>
+              <tr><td>건축HUB 건축물대장</td><td>기존 건물·층수·면적·사용승인</td><td>{buildingRegistryLabel(currentBuilding)}</td><td>현장 상태·위반건축물·권리관계 별도 확인</td></tr>
               <tr><td>Kakao Local</td><td>주소 정규화·좌표·주변 거리</td><td>{parcel.lat && parcel.lng ? "조회됨" : "미조회"}</td><td>법적 경계나 측량성과가 아님</td></tr>
               <tr><td>ParcelGrid 금융 원장</td><td>손익·PF·IRR·분기 현금흐름</td><td>{PROJECT_LEDGER_MODEL_VERSION}</td><td>금융기관 약정과 세무조정 전 예비 모델</td></tr>
               <tr><td>OpenAI Image API</td><td>기준 이미지 기반 외장 콘셉트</td><td>선택 기능</td><td>형상 보존은 생성 후 원본과 육안 대조 필요</td></tr>

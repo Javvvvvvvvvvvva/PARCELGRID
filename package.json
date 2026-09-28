@@ -24,7 +24,8 @@
     "verify": "pnpm check:runtime && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "test:browser:registry": "node scripts/smoke-building-registry.mjs"
   },
   "dependencies": {
     "@react-three/drei": "10.7.7",

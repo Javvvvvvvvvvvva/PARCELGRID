@@ -1,4 +1,5 @@
 import { won } from "@/lib/utils/format";
+import { TAX_MODEL_VERSION } from "@/lib/finance/tax";
 import { FINANCIAL_SOURCE_FIELD_META, validateFinancialSourceEvidence } from "@/lib/finance/source-data-gate";
 import type { ProjectOverviewModel } from "./useProjectOverview";
 import type { EvidenceItem } from "./EvidenceSheet";
@@ -49,7 +50,7 @@ export function makeEvidence(model: ProjectOverviewModel, key: EvidenceKey): Evi
       { label: "저장된 계산 버전", value: model.snapshot?.data.meta.version ?? "미기록" },
       { label: "원본 필드·단위", value: key === "afterTax" ? "세후 금액 필드 없음 · taxBurden은 부분 추정액" : `ScenarioVM.${field} · 만원` },
       { label: "현재 입력과의 일치", value: model.readiness.inputsChanged ? "변경됨 · 사업성 재저장 필요" : "변경 감지 없음 (근거 원문 이력 보증 아님)" });
-    if (key === "afterTax") rows.push({ label: "저장된 세금 부분 추정액", value: moneyText(model.finance?.taxBurden) });
+    if (key === "afterTax") rows.push({ label: "저장된 세금 부분 추정액", value: model.finance?.taxModelVersion === TAX_MODEL_VERSION ? moneyText(model.finance?.taxBurden) : "세금 근거 기준 변경 · Stage 3 재저장 필요" });
     const note = key === "afterTax" ? "기존 세금 모델은 부분 추정액만 제공합니다. 재산세·부가세 등 미산정 항목이 있어 세전 손익에서 부분 세금을 빼 세후 수익으로 표시하지 않습니다. 세무 검토 승인만으로 계산 범위가 완성되는 것도 아닙니다." : key === "equity" ? "기존 엔진의 필요 자기자본을 그대로 표시합니다. 총사업비 − PF 최고잔액으로 재계산하지 않습니다. 세금 등 모델 제외 항목과 실제 조달조건은 별도로 확인해야 합니다." : "대표안과 일치하는 저장 결과를 그대로 표시합니다. 세전·예비 모델이며 최신 입력과 다르면 수치를 숨기고 재저장을 안내합니다.";
     return { ...base, title: { profit: "세전 예상손익", equity: "필요 자기자본", cost: "세전 총사업비", afterTax: "세후 예상수익" }[key as "profit" | "equity" | "cost" | "afterTax"], value: key === "afterTax" ? "산정 불가" : moneyText(model.finance?.[field]), status: key === "afterTax" ? "모델 범위 미완료" : model.finance ? "대표안과 일치하는 저장 결과" : "결과 저장·정합성 확인 필요", note, href: projectHref(model.projectId, ""), action: "사업성 원본 확인" };
   }

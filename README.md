@@ -4,7 +4,7 @@
 
 PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 초기 공간 구획 생성·편집·검증도 지원합니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
 
-> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [한국판 내부 구획·일영 업그레이드](docs/KR-INTERIOR-UPGRADE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
+> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [내부 구획·일영](docs/KR-INTERIOR-UPGRADE.md)과 [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
 
 ## 제품 원칙
 
@@ -19,7 +19,7 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 | 영역 | 현재 기능 |
 |---|---|
 | 부지 입력 | 주소 자동완성, PNU, 지적 경계, 용도지역, 도로·주변 건물, 건축물대장, 실거래 조회 |
-| 현황 분석 | 출처·신뢰도 표시, 기존 건축물과 접도 조건, 주변 거래·역세권·리스크 요약 |
+| 현황 분석 | 대장 0건/실패/부분 조회 구분, 층별·전유공용 원문과 PK·면적 대조, 접도·주변 거래·리스크 요약 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
 | 내부 구획 | 독립 템플릿 후보, 2D 편집·수동 문 연결, 공간 관계, 3D 구획, 경계·겹침·코어 연결 검사, 명시적 사업성 반영 |
@@ -152,6 +152,8 @@ V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은
 
 ## 검증
 
+건축물대장 근거의 별도 브라우저 검사는 프로덕션 빌드 후 `pnpm test:browser:registry`로 실행합니다. 실제 API 승인 계정 검증은 합성 응답 검사와 별개이며 [가이드](docs/KR-BUILDING-EVIDENCE.md)에 남은 조건을 기록합니다.
+
 ```bash
 pnpm lint
 pnpm typecheck
@@ -181,6 +183,7 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 |---|---|
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
 | [내부 구획·일영 가이드](docs/KR-INTERIOR-UPGRADE.md) | 사용법, 면적·문·좌표·사업성 동기화 계약과 현재 한계 |
+| [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md) | 페이지·오류·PK·면적제외 대조, 근거 JSON, 0건과 실제 현황 구분 |
 | [한국판 업그레이드 리소스](docs/KR-UPGRADE-RESOURCES-2026-09-28.md) | 오픈소스 49개와 한국 데이터 10개 축의 채택 상태·후속 순서 |
 | [파트너 로컬 실행 안내](docs/PARTNER-LOCAL-SETUP-KO.md) | 다른 PC에서 설치·업데이트·문제 해결 |
 | [VWorld 비활성 운영](docs/VWORLD-FREE-WORKFLOW.md) | VPN 차단 시 수동 부지·GeoJSON·AI 키 설정 |
