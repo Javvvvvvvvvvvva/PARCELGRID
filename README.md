@@ -187,8 +187,11 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 
 ## 문서 안내
 
+향후 한국판 업데이트는 [기능·편의성·정확성 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md)을 따른다. 부지 환경 → 저장·복구 → 외벽 수량·재료 → 내부 평면 → CAD/GIS 교환 → 환경·상세 3D·인계 순서이며, 단계마다 라이브러리 비교 시험과 완료 기준을 기록한다. 신규 후보는 현재 설치된 패키지와 구분한다.
+
 | 문서 | 용도 |
 |---|---|
+| [한국판 업데이트 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md) | 현재 작업 순서·라이브러리 채택 기준·단계별 완료 조건·첫 구현 범위 |
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
 | [내부 구획·일영 가이드](docs/KR-INTERIOR-UPGRADE.md) | 사용법, 면적·문·좌표·사업성 동기화 계약과 현재 한계 |
 | [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md) | 페이지·오류·PK·면적제외 대조, 근거 JSON, 0건과 실제 현황 구분 |
@@ -199,7 +202,7 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 | [릴리스 스모크 테스트](docs/release-smoke-test.md) | 주소 입력부터 보고서·DAE·DXF까지 실제 확인 절차 |
 | [계산식 문서](docs/CALCULATION-FORMULAS-2026-07-08.md) | 면적·사업성 계산 정의와 데이터 출처 |
 | [재무 무결성 지침](docs/FINANCIAL_INTEGRITY_GUIDELINE.md) | 회계 대사와 오류 차단 규칙 |
-| [제품 로드맵](docs/PRODUCT-ROADMAP-MATERIAL-COST-AND-AI-VISUAL.md) | 외장재·공사비·AI 시각화 현황과 다음 범위 |
+| [재료·시각화 원칙](docs/PRODUCT-ROADMAP-MATERIAL-COST-AND-AI-VISUAL.md) | 외장재·공사비·AI 시각화 현황과 상세 설계 원칙 |
 | [2026-08-26 릴리스 노트](docs/RELEASE-NOTES-2026-08-26.md) | 최신 추천 로직·성능·레거시 정리 내역 |
 
 ## 협업 규칙
