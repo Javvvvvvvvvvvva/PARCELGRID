@@ -1,5 +1,6 @@
 "use client";
 
+import { FacadeQuantityEditor } from "./FacadeQuantityEditor";
 import type { ReactNode } from "react";
 import {
   buildPlanningDesignIntent,
@@ -41,7 +42,7 @@ export function PlanningMaterialEditor({
   onChange: (materials: PlanningMaterialSelection) => void;
 }) {
   const materials = resolvePlanningMaterials(scenario.materials);
-  const adjustment = calculatePlanningMaterialAdjustment(scenario);
+  const adjustment = calculation.economicsPreview.facadeCost ?? calculatePlanningMaterialAdjustment(scenario);
 
   const patch = (next: Partial<PlanningMaterialSelection>) =>
     onChange({ ...materials, ...next });
@@ -77,6 +78,7 @@ export function PlanningMaterialEditor({
       <div className="material-grid">
         <Field label="주 외장재">
           <select
+            aria-label="주 외장재"
             value={materials.primaryFacadeMaterial}
             onChange={(event) =>
               patch({
@@ -96,6 +98,7 @@ export function PlanningMaterialEditor({
 
         <Field label="보조 외장재">
           <select
+            aria-label="보조 외장재"
             value={materials.secondaryFacadeMaterial}
             onChange={(event) =>
               patch({
@@ -140,30 +143,32 @@ export function PlanningMaterialEditor({
         />
         <Summary
           label="재료비 증감"
-          value={adjustment.priced ? won(adjustment.adjustmentManwon, { sign: true }) : "미산정"}
+          value={adjustment.hasPricedArea ? won(adjustment.adjustmentManwon, { sign: true }) : "미산정"}
           sub={
-            adjustment.priced
-              ? "기준 공사비에 증감 반영"
-              : "두 단가를 입력해야 총사업비에 반영"
+            adjustment.hasPricedArea
+              ? adjustment.priced ? "기준 공사비에 증감 반영" : "일부만 산정 · 미확정 수량/단가 별도"
+              : "수량·기준·선택 단가 확인 후 반영"
           }
         />
         <Summary
           label="단가 근거"
           value={adjustment.sourceLabel}
           sub={
-            materials.rateEvidence?.status === "source-backed" &&
+            adjustment.evidenceStatus === "source-backed" &&
             adjustment.areaBasis === "user-input"
-              ? "단가·수량 근거 연결"
+              ? "단가 근거 연결 · 입력 수량 별도 검토"
               : adjustment.areaBasis !== "user-input"
-                ? "외벽면적 직접 입력 전 개략 추정"
+                ? "계획 형상·개구부 가정 검토 필요"
                 : "확정 견적 전 사용자 검토 필요"
           }
         />
       </div>
 
+      <FacadeQuantityEditor materials={materials} cost={adjustment} onChange={onChange} />
+
       <details>
         <summary style={{ cursor: "pointer", fontSize: 11.5, fontWeight: 750 }}>
-          재료 단가·수량 근거 입력
+          전체 조합 단가·수동 수량 입력
         </summary>
         <div className="evidence-grid">
           <NumberField
@@ -173,7 +178,7 @@ export function PlanningMaterialEditor({
             onChange={(value) => patch({ facadeAreaOverrideSqm: value })}
           />
           <NumberField
-            label="기준 외벽 단가"
+            label="전체 조합 기준 외벽 단가"
             value={
               materials.baselineFacadeUnitCostPerSqmWon == null
                 ? undefined
@@ -188,7 +193,7 @@ export function PlanningMaterialEditor({
             }
           />
           <NumberField
-            label="선택 외벽 단가"
+            label="전체 조합 선택 외벽 단가"
             value={
               materials.selectedFacadeUnitCostPerSqmWon == null
                 ? undefined
@@ -238,6 +243,7 @@ export function PlanningMaterialEditor({
               style={controlStyle}
             />
           </Field>
+          <Field label="포함·제외 범위"><input value={materials.rateEvidence?.note ?? ""} placeholder="자재·시공·비계·부가세 범위" onChange={e => patchEvidence({ note: e.target.value })} style={controlStyle} /></Field>
           <Field label="근거 URL">
             <input
               value={materials.rateEvidence?.sourceUrl ?? ""}
@@ -261,9 +267,8 @@ export function PlanningMaterialEditor({
         }}
       >
         <p style={{ margin: 0, fontSize: 10, color: "var(--fg-faint)" }}>
-          외벽 직접 입력이 없으면 층 면적 환산 개략치를 사용하며
-          &apos;근거 확인&apos;으로 판정하지 않습니다. 확정 견적에는
-          실측·도면 외벽면적과 단가 출처가 모두 필요합니다.
+          외벽 수량은 계획 형상 기준입니다. GIS 형상이 없으면 구형 면적 환산값을 표시합니다.
+          실측·시공 도면의 수량, 공종 범위와 견적 근거를 검토해야 합니다.
         </p>
         <button type="button" style={buttonStyle} onClick={downloadPlanDna}>
           Plan DNA JSON 다운로드
@@ -333,6 +338,7 @@ function NumberField({
       <div style={{ position: "relative" }}>
         <input
           type="number"
+          aria-label={label}
           min={min}
           max={max}
           step="0.1"

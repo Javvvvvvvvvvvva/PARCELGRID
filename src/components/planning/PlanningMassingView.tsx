@@ -1,5 +1,7 @@
 "use client";
 
+import { usesFacadeSkin } from "@/lib/planning/facade-render";
+import { FacadeSurfaceLayer } from "./FacadeSurfaceLayer";
 import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Html, OrbitControls } from "@react-three/drei";
@@ -29,6 +31,7 @@ import {
 } from "@/lib/planning/materials";
 import type {
   FloorUseType,
+  PlanningMaterialSelection,
   PlanningScenario,
 } from "@/lib/planning/types";
 import type { RoadLine, SetbackSpec } from "@/components/ui/MassingView";
@@ -141,6 +144,7 @@ function FloorMassMesh({
   hovered,
   extent,
   appearance,
+  materialSelection,
   onSelect,
   onHover,
 }: {
@@ -149,14 +153,22 @@ function FloorMassMesh({
   hovered: boolean;
   extent: number;
   appearance: PlanningMaterialAppearance | null;
+  materialSelection?: PlanningMaterialSelection;
   onSelect: (id: string) => void;
   onHover: (id: string | null) => void;
 }) {
   const renderable = hasRenderableShape(mass.shape);
-  const geometry = useMemo(
-    () => shapeGeometry(mass.shape, mass.baseHeightM, mass.topHeightM),
-    [mass.shape, mass.baseHeightM, mass.topHeightM]
-  );
+  const facadeSkin = usesFacadeSkin(mass, materialSelection);
+  const geometry = useMemo(() => {
+    const result = shapeGeometry(mass.shape, mass.baseHeightM, mass.topHeightM);
+    if (facadeSkin) {
+      // ExtrudeGeometry group 0 is the caps. Vertical walls are rendered once by
+      // FacadeSurfaceLayer; overlapping translucent walls would obscure textures.
+      const caps = result.groups.find(group => group.materialIndex === 0);
+      if (caps) result.setDrawRange(caps.start, caps.count);
+    }
+    return result;
+  }, [mass.shape, mass.baseHeightM, mass.topHeightM, facadeSkin]);
   const labelPoint = useMemo(() => {
     if (mass.shape.length === 0) return { x: 0, z: 0 };
     return mass.shape.reduce(
@@ -242,6 +254,7 @@ function FloorMassMesh({
           depthWrite={!unsupported}
         />
       </mesh>
+      <FacadeSurfaceLayer mass={mass} selection={materialSelection} active={active} />
       <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
         <lineBasicMaterial
           color={invalid ? "#991b1b" : "#334155"}
@@ -427,6 +440,7 @@ function PlanningScene({
   selectedFloorId,
   hoveredFloorId,
   appearance,
+  materialSelection,
   parkingGeometry,
   showParking,
   onSelect,
@@ -439,6 +453,7 @@ function PlanningScene({
   selectedFloorId: string | null;
   hoveredFloorId: string | null;
   appearance: PlanningMaterialAppearance | null;
+  materialSelection?: PlanningMaterialSelection;
   parkingGeometry: PlanningParkingGeometrySnapshot | null;
   showParking: boolean;
   onSelect: (id: string) => void;
@@ -471,6 +486,7 @@ function PlanningScene({
           hovered={hoveredFloorId === mass.id}
           extent={extent}
           appearance={appearance}
+          materialSelection={materialSelection}
           onSelect={onSelect}
           onHover={onHover}
         />
@@ -759,7 +775,7 @@ export function PlanningMassingView({
         }}
       >
         <div style={{ fontSize: 10.5, color: "var(--fg-faint)" }}>
-          프로그램 면적 자동 맞춤 · 층고 · 평면 축척 · 북측 후퇴 · 계획 위치 반영
+          프로그램 면적 자동 맞춤 · 층고 · 평면 축척 · 북측 후퇴 · 계획 위치 반영 · 외장 무늬는 개념 표현 (창호 위치·시공 상세 별도)
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {parkingGeometry && parkingGeometry.layout.stalls.length > 0 && (
@@ -834,6 +850,7 @@ export function PlanningMassingView({
                 selectedFloorId={selectedFloorId}
                 hoveredFloorId={hoveredFloorId}
                 appearance={appearance}
+                materialSelection={scenario.materials}
                 parkingGeometry={parkingGeometry}
                 showParking={showParking}
                 onSelect={(id) =>

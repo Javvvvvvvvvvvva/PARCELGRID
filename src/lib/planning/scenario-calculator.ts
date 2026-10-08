@@ -1,3 +1,4 @@
+import { buildPlanningGeometry } from "./planning-geometry";
 import { calcParking } from "@/lib/finance/parking";
 import type { AssumptionSet, BuildingType } from "@/lib/finance/types";
 import {
@@ -154,7 +155,8 @@ function calculateEconomics(
   assumptions: PlanningEconomicsAssumptions,
   aboveGroundAreaSqm: number,
   basementAreaSqm: number,
-  calculatedAt?: string
+  calculatedAt?: string,
+  materialAdjustment = calculatePlanningMaterialAdjustment(scenario)
 ): PlanningEconomicsPreview {
   const weightedConstructionAreaSqm =
     aboveGroundAreaSqm +
@@ -162,7 +164,6 @@ function calculateEconomics(
   const baseConstructionCostManwon =
     (weightedConstructionAreaSqm * nonNegative(assumptions.constructionCostPerSqmWon)) /
     WON_PER_MANWON;
-  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
   const constructionCostManwon = Math.max(
     0,
     baseConstructionCostManwon + materialAdjustment.adjustmentManwon
@@ -222,11 +223,10 @@ function calculateEconomics(
     demolitionCostManwon: round(demolitionCostManwon),
     constructionCostManwon: round(constructionCostManwon),
     baseConstructionCostManwon: round(baseConstructionCostManwon),
-    materialAdjustmentCostManwon: round(
-      materialAdjustment.adjustmentManwon
-    ),
+    materialAdjustmentCostManwon: materialAdjustment.adjustmentManwon,
     facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
-    materialCostStatus: materialAdjustment.priced
+    facadeCost: materialAdjustment,
+    materialCostStatus: materialAdjustment.hasPricedArea
       ? materialAdjustment.evidenceStatus === "source-backed" &&
         materialAdjustment.areaBasis === "user-input"
         ? "source-backed"
@@ -473,8 +473,8 @@ function buildChecks(
   }
 
   const materials = resolvePlanningMaterials(scenario.materials);
-  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
-  if (materials.primaryFacadeMaterial !== "unselected") {
+  const materialAdjustment = economics.facadeCost ?? calculatePlanningMaterialAdjustment(scenario);
+  if (materials.primaryFacadeMaterial !== "unselected" || Object.keys(materials.faceAssignments ?? {}).length > 0) {
     const sourceBacked =
       materialAdjustment.priced &&
       materialAdjustment.areaBasis === "user-input" &&
@@ -483,10 +483,10 @@ function buildChecks(
       code: "material-cost",
       label: "외장재·공사비",
       status: sourceBacked ? "pass" : "review",
-      message: materialAdjustment.priced
-        ? `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} · 외벽 ${materialAdjustment.facadeAreaSqm.toFixed(1)}㎡ · 기준 대비 ${materialAdjustment.adjustmentManwon >= 0 ? "+" : ""}${materialAdjustment.adjustmentManwon.toFixed(0)}만원`
+      message: materialAdjustment.hasPricedArea
+        ? `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} · 외벽 ${materialAdjustment.facadeAreaSqm.toFixed(1)}㎡ · 기준 대비 ${materialAdjustment.adjustmentManwon >= 0 ? "+" : ""}${materialAdjustment.adjustmentManwon.toFixed(0)}만원${materialAdjustment.priced ? "" : " (일부만 산정 · 미확정 수량/단가 확인 필요)"}`
         : `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} 3D 표현만 적용 · 기준·선택 단가 입력 전 공사비 미반영`,
-      source: materialAdjustment.priced
+      source: materialAdjustment.hasPricedArea
         ? `${materialAdjustment.sourceLabel} · ${materialAdjustment.areaNote}`
         : "사용자 단가·견적 근거 필요",
     });
@@ -594,13 +594,20 @@ export function calculatePlanningScenario(
     parkingShortfallCars: parking.shortfallCars,
   };
 
+  const geometry = parcel.boundary && parcel.boundary.length >= 3 ? buildPlanningGeometry({
+    projectId: scenario.projectId ?? "planning", scenario, boundary: parcel.boundary,
+    lotAreaSqm: parcel.lotAreaSqm, zoning: parcel.zoning ?? "", roads: parcel.roads,
+    generatedAt: context.calculatedAt,
+  }).snapshot : null;
+  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario, geometry);
   const economicsPreview = calculateEconomics(
     scenario,
     parcel,
     assumptions,
     aboveGroundProgramAreaSqm,
     basementProgramAreaSqm,
-    context.calculatedAt
+    context.calculatedAt,
+    materialAdjustment
   );
   const checks = buildChecks(
     scenario,

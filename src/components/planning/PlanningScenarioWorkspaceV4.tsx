@@ -473,6 +473,9 @@ export function PlanningScenarioWorkspaceV4({
     return {
       parcel: {
         lotAreaSqm: parcel.lotArea,
+        boundary: parcel.boundary,
+        zoning: parcel.zoning ?? "",
+        roads: parcel.roads,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
         heightLimitM: parcel.heightLimit ?? 0,

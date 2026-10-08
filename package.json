@@ -27,7 +27,8 @@
     "db:studio": "drizzle-kit studio",
     "test:browser:registry": "node scripts/smoke-building-registry.mjs",
     "test:browser:intake": "node scripts/smoke-site-intake.mjs",
-    "test:browser:storage": "node scripts/smoke-workspace-storage.mjs"
+    "test:browser:storage": "node scripts/smoke-workspace-storage.mjs",
+    "test:browser:facade": "node scripts/smoke-facade.mjs"
   },
   "dependencies": {
     "@react-three/drei": "10.7.7",

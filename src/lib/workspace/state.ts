@@ -1,3 +1,4 @@
+import { FACADE_COST_VERSION } from "@/lib/planning/facade-quantities";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import type { StoredParcel } from "@/lib/hooks/use-dynamic-project";
@@ -24,6 +25,15 @@ export function applyWorkspace(document: WorkspaceDocument, resetData = true) {
   let p = document.payload;
   const representative = p.planningScenarios.find(s => s.id === p.representativeScenarioId);
   const geometry = p.representativeGeometry;
+  const hasFacadeSelection = representative?.materials && (
+    representative.materials.primaryFacadeMaterial !== "unselected" ||
+    (representative.materials.secondaryFacadeMaterial !== "unselected" && representative.materials.primaryFacadeSharePct < 100) ||
+    Object.keys(representative.materials.faceAssignments ?? {}).length > 0
+  );
+  const storedCost = p.stage3Snapshot?.data?.scenarios.find(s => s.id === p.representativeScenarioId)?._raw.program.areaContract?.facadeCost;
+  if (hasFacadeSelection && p.stage3Snapshot && storedCost?.version !== FACADE_COST_VERSION) {
+    p = invalidateWorkspaceResults(document).payload;
+  }
   if ((geometry && !p.representativeScenarioId) || (p.representativeScenarioId && (!representative || geometry?.projectId !== projectId || geometry.scenarioId !== representative.id || geometry.scenarioVersion !== representative.version))) {
     p = invalidateWorkspaceResults(document).payload;
   }

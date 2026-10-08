@@ -150,7 +150,23 @@ export interface PlanningMaterialRateEvidence {
  * 외장 선택과 비용 근거를 함께 보존한다.
  * 단가가 없는 재료 선택은 3D 표현에만 사용하고 사업비에는 반영하지 않는다.
  */
+export interface PlanningFacadeFaceSelection {
+  material?: PlanningFacadeMaterial;
+  exposure?: "exposed" | "shared" | "unknown";
+  /** Net opening deduction in m²; replaces the percentage, never added to it. */
+  openingAreaSqm?: number;
+}
+
+export interface PlanningFacadeRate {
+  baselineWonPerSqm?: number;
+  selectedWonPerSqm?: number;
+  evidence?: PlanningMaterialRateEvidence;
+}
+
 export interface PlanningMaterialSelection {
+  pricingMode?: "assembly" | "by-material";
+  faceAssignments?: Record<string, PlanningFacadeFaceSelection>;
+  materialRates?: Partial<Record<PlanningFacadeMaterial, PlanningFacadeRate>>;
   primaryFacadeMaterial: PlanningFacadeMaterial;
   secondaryFacadeMaterial: PlanningFacadeMaterial;
   primaryFacadeSharePct: number;
@@ -256,6 +272,7 @@ export interface PlanningEconomicsPreview {
   /** 외벽 면적·단가의 근거 상태. */
   materialCostStatus?: PlanningMaterialEvidenceStatus | "estimated";
   materialCostSource?: string;
+  facadeCost?: import("./materials").PlanningMaterialCostAdjustment;
   softCostManwon: number;
   contingencyCostManwon: number;
   financingCostManwon: number;
@@ -320,6 +337,9 @@ export interface PlanningScenarioSummary {
 }
 
 export interface PlanningCalculationParcel {
+  boundary?: [number, number][];
+  zoning?: string;
+  roads?: import("./planning-geometry").PlanningGeometryRoadInput[];
   lotAreaSqm: number;
   maxFARPct: number;
   maxBCRPct: number;
