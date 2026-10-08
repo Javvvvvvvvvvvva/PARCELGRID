@@ -4,7 +4,7 @@
 
 PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 초기 공간 구획 생성·편집·검증도 지원합니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
 
-> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [지도·주소 부지 선택](docs/KR-MAP-INTAKE.md), [내부 구획·일영](docs/KR-INTERIOR-UPGRADE.md)과 [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
+> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 기능은 [프로젝트 저장·복구](docs/KR-WORKSPACE-STORAGE.md), [지도·주소 부지 선택](docs/KR-MAP-INTAKE.md), [내부 구획·일영](docs/KR-INTERIOR-UPGRADE.md)과 [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
 
 ## 제품 원칙
 
@@ -20,6 +20,7 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 |---|---|
 | 부지 입력 | 주소 자동완성·지역 검색, 지도 이동·확대·위성·클릭 선택, PNU·경계 대조, 주변 필지·건물 외곽·도로 필지 레이어와 조회 상태, 명시적 부지 확인 |
 | 현황 분석 | 가격 없이 토지·기존 건물·규제 확인 상태 요약, 펼쳐보는 대장·3D·접도 근거, 대장 0건/실패/부분 조회 구분 |
+| 저장·복구 | 부지별 자동 저장·목록·재접속, 최근 20개 저장 기록, 계획 변경 취소·다시 적용, 충돌 안내·JSON 백업 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
 | 내부 구획 | 독립 템플릿 후보, 2D 편집·수동 문 연결, 공간 관계, 3D 구획, 경계·겹침·코어 연결 검사, 명시적 사업성 반영 |
@@ -124,10 +125,10 @@ AI 렌더 모델·저장 경로·호출 제한과 원문 저장 경로는 `OPENA
 - **웹:** Next.js 15 App Router, React 19, TypeScript 5.9, Tailwind CSS
 - **상태·검증:** Zustand, TanStack Query, Zod
 - **3D·공간:** Three.js, React Three Fiber, Drei, Turf
-- **계산·저장:** Decimal.js, Drizzle ORM, 선택형 PostgreSQL
+- **계산·저장:** Decimal.js, Dexie 4.4.6 / IndexedDB, Drizzle ORM, 선택형 PostgreSQL
 - **품질:** ESLint, TypeScript, Vitest, Next.js production build
 
-지도 선택은 기존 Kakao Maps SDK·Local REST API와 Turf를 재사용합니다. 이번 흐름 변경으로 추가한 npm 의존성은 없습니다. 지도 키가 없거나 SDK 연결이 실패하면 주소 검색을 계속 사용할 수 있습니다.
+지도 선택은 기존 Kakao Maps SDK·Local REST API와 Turf를 재사용합니다. 지도 레이어에는 신규 npm 의존성을 추가하지 않았고, KR-U2 저장·복구에 Dexie(Apache-2.0)를 도입했습니다. 지도 키가 없거나 SDK 연결이 실패하면 주소 검색을 계속 사용할 수 있습니다.
 
 ### 주요 코드 경로
 
@@ -145,6 +146,7 @@ AI 렌더 모델·저장 경로·호출 제한과 원문 저장 경로는 `OPENA
 | 외부 공공데이터 | `src/lib/integrations` |
 | 전문가 인계 | `src/lib/handoff`, `src/components/handoff` |
 | 프로젝트 상태 | `src/lib/stores` |
+| 프로젝트 저장·이전·복구 | `src/lib/workspace`, `WorkspacePersistence.tsx`, `SavedProjects.tsx` |
 | 회귀 테스트 | `src/tests` |
 
 V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은 위 현재 경로를 확장하며, 과거 버전 파일을 다시 만들지 않습니다.
@@ -153,13 +155,17 @@ V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은
 
 - 원문 PDF·Excel·CSV는 기본적으로 `.parcelgrid-data/source-documents`에, AI 결과는 `.parcelgrid-data/concept-renders`에 저장되며 Git에서 제외됩니다.
 - 로컬 개발에서는 접근 비밀번호와 업로드 키를 비워둘 수 있지만, 공유 서버에서는 `.env.example`의 최소 길이 조건을 지켜야 합니다.
-- PostgreSQL이 없으면 브라우저와 로컬 시드 중심으로 동작하므로 다른 PC와 프로젝트가 자동 동기화되지 않습니다.
+- 프로젝트 입력·계획·검토는 같은 사이트/브라우저의 IndexedDB에 부지별로 자동 저장합니다. 화면 상태는 Zustand로 관리하며, 저장 완료 표시는 트랜잭션 완료 뒤에만 나타납니다.
+- 브라우저 저장소 삭제·비공개 모드 종료·용량 회수에 대비해 **현재 탭 백업**을 파일로 보관하세요. 다른 PC에서는 첫 화면의 **백업 파일 가져오기**로 부지까지 복구합니다. PostgreSQL 설정만으로 이 로컬 자료가 자동 동기화되지는 않습니다.
+- 옛 localStorage/sessionStorage 원본은 변경하지 않고 이전합니다. 최근 20개 기록과 계획 편집 30묶음 취소/다시 적용을 지원하며, 충돌 시 최신 저장본을 자동 덮어쓰지 않습니다. 복구 후 대표안·가격 검토·전문가 승인을 재확인합니다.
 - 인계 패키지는 계획·Geometry·사업성·검토 기록을 옮기지만 원문 PDF·Excel과 AI 이미지는 포함하지 않습니다. 대상 PC에서 원문을 다시 연결하고 승인을 갱신해야 합니다.
 - 현재 접근 제한과 호출 제한은 단일 Node 프로세스 기준입니다. 다중 인스턴스 운영에는 외부 인증과 공유 rate limiter가 필요합니다.
 
 ## 검증
 
 지도·주소 진입 흐름은 프로덕션 빌드 후 `pnpm test:browser:intake`로 확인합니다. 좌표를 투영하는 합성 지도 SDK·API 응답으로 도형의 구멍·복수 영역, 레이어 전환, 이전 선택 응답 폐기, 부분 실패를 검사합니다. 실제 지도 타일과 승인된 공공 API의 정확성 검증은 별도로 필요합니다. [지도 선택 가이드](docs/KR-MAP-INTAKE.md)에 범위와 실제 확인 절차를 기록했습니다.
+
+저장·복구는 `pnpm test:browser:storage`로 실제 Chromium IndexedDB의 재접속·저장 실패·두 탭 충돌·복구·모바일 UI를 검사합니다. 마이그레이션 중단·프로젝트 격리·동시 저장은 fake-indexeddb 단위 테스트로 검증합니다. [저장 계약과 사용법](docs/KR-WORKSPACE-STORAGE.md)을 참고하세요.
 
 건축물대장 근거의 별도 브라우저 검사는 프로덕션 빌드 후 `pnpm test:browser:registry`로 실행합니다. 실제 API 승인 계정 검증은 합성 응답 검사와 별개이며 [가이드](docs/KR-BUILDING-EVIDENCE.md)에 남은 조건을 기록합니다.
 
@@ -193,6 +199,7 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 | 문서 | 용도 |
 |---|---|
 | [한국판 업데이트 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md) | 현재 작업 순서·라이브러리 채택 기준·단계별 완료 조건·첫 구현 범위 |
+| [프로젝트 저장·복구](docs/KR-WORKSPACE-STORAGE.md) | 저장 대안 비교·이전·충돌·백업·복구·검증 범위 |
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
 | [내부 구획·일영 가이드](docs/KR-INTERIOR-UPGRADE.md) | 사용법, 면적·문·좌표·사업성 동기화 계약과 현재 한계 |
 | [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md) | 페이지·오류·PK·면적제외 대조, 근거 JSON, 0건과 실제 현황 구분 |

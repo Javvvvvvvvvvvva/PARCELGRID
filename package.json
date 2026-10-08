@@ -26,7 +26,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "test:browser:registry": "node scripts/smoke-building-registry.mjs",
-    "test:browser:intake": "node scripts/smoke-site-intake.mjs"
+    "test:browser:intake": "node scripts/smoke-site-intake.mjs",
+    "test:browser:storage": "node scripts/smoke-workspace-storage.mjs"
   },
   "dependencies": {
     "@react-three/drei": "10.7.7",
@@ -37,6 +38,7 @@
     "clsx": "^2.1.1",
     "comlink": "4.4.2",
     "decimal.js": "^10.6.0",
+    "dexie": "4.4.6",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^0.451.0",
     "next": "^15.5.21",
@@ -62,6 +64,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.0.0",
     "eslint-config-next": "^15.5.21",
+    "fake-indexeddb": "6.2.5",
     "playwright": "1.62.1",
     "tailwindcss": "^4.0.0-alpha.30",
     "typescript": "^5.9.3",

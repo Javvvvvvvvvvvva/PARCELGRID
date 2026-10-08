@@ -15,6 +15,7 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { writeStoredParcel } from "@/lib/hooks/use-dynamic-project";
 import { boundaryContainsLocation } from "@/lib/parcels/selection";
 import { useSelectionContext } from "@/lib/hooks/use-selection-context";
+import SavedProjects from "@/components/project/SavedProjects";
 import type { ParcelLookupComplete, ParcelLookupManualRequired, ParcelLookupResponse } from "@/lib/parcels/lookup-contract";
 import { num, pyeong } from "@/lib/utils/format";
 import "@/components/project/site-picker.css";
@@ -96,7 +97,8 @@ export default function NewParcelPage() {
         setParcel(null); setManual(result); setError("토지 정보를 다시 확인하지 못했습니다. 확인된 자료로 직접 입력하거나 다시 조회해주세요."); return;
       } else complete = result;
       const stored = createSiteIntake(complete, crypto.randomUUID(), new Date().toISOString());
-      try { writeStoredParcel(stored); } catch { throw new Error("부지를 브라우저에 저장하지 못했습니다. 사이트 저장 권한과 남은 공간을 확인해주세요."); }
+      try { await writeStoredParcel(stored); } catch (error) { throw new Error(`부지를 브라우저에 저장하지 못했습니다. ${error instanceof Error ? error.message : "사이트 저장 권한과 남은 공간을 확인해주세요."}`); }
+      if (id !== requestId.current) return;
       // Keep saved plans/history, but revalidate the representative against this new intake.
       const workspace = useProjectStore.getState();
       workspace.setRepresentativePlanningScenarioId(null);
@@ -149,6 +151,7 @@ export default function NewParcelPage() {
             {manualOpen && manual && <ManualParcelIntake key={manual.pnu} lookup={manual} onApply={applyManual} />}
           </>}
         </article> : phase !== "searching" && <div className="picker-empty-card"><span className="picker-empty-icon"><SquareDashed size={28} strokeWidth={1.3} /></span><h2>부지 한 곳에서 시작하세요</h2><p>선택한 주소와 경계를 확인한 다음,<br />현재 토지와 건물 상태를 살펴볼 수 있어요.</p></div>}
+        <SavedProjects disabled={phase === "confirming"} />
         <div className="picker-footer"><span>처음 사용하시나요?</span><Link href={`/projects/${DEMO_PROJECT_ID}/status`}>예시 부지 살펴보기 <ArrowRight size={14} /></Link></div>
       </section>
     </main>

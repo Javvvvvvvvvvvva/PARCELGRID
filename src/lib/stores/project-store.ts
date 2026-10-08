@@ -9,7 +9,7 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools, persist } from "zustand/middleware";
+import { devtools } from "zustand/middleware";
 import type { AssumptionSet } from "@/lib/finance/types";
 import type {
   FinancialSourceMap,
@@ -152,7 +152,6 @@ function representativeInvalidation(message: string) {
 
 export const useProjectStore = create<ProjectStore>()(
   devtools(
-    persist(
       (set, get) => ({
         data: null,
         setData: (data) =>
@@ -562,24 +561,6 @@ export const useProjectStore = create<ProjectStore>()(
         setActiveScenarioId: (activeScenarioId) =>
           set({ activeScenarioId }),
       }),
-      {
-        name: "parcelgrid-envelope",
-        partialize: (state) => ({
-          envelopePlan: state.envelopePlan,
-          planningScenarios: state.planningScenarios,
-          selectedPlanningScenarioId: state.selectedPlanningScenarioId,
-          representativePlanningScenarioId:
-            state.representativePlanningScenarioId,
-          representativeGeometrySnapshot:
-            state.representativeGeometrySnapshot,
-          activeScenarioId: state.activeScenarioId,
-          draftAssumptions: state.draftAssumptions,
-          draftAcquisitionPrices: state.draftAcquisitionPrices,
-          financialSources: state.financialSources,
-          stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
-        }),
-      }
-    )
   )
 );
 

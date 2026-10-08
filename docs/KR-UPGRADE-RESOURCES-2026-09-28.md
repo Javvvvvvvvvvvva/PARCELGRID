@@ -83,7 +83,7 @@ Rhino 배포 JS/WASM은 설치 패키지에서 그대로 복사한다. `predev/p
 | 보고서·재무 | [ExcelJS](https://github.com/exceljs/exceljs) | MIT | 후속 검토 · 현재 미도입 | Excel 수식 자체를 계산하는 엔진은 아님. Decimal 결과와 저장값을 대사. |
 | 보고서·재무 | [pdf-lib](https://github.com/Hopding/pdf-lib) | MIT | 후속 검토 · 현재 미도입 | HTML 페이지 조판 도구가 아님. 한글 폰트 임베딩과 폰트 사용권 확인. |
 | 성능·운영 | [Comlink](https://github.com/GoogleChromeLabs/comlink) | Apache-2.0 | 적용 · comlink 4.4.2 | 알고리즘 복잡도를 줄이지는 않는다. 취소·진행률·오래된 결과 폐기 구현. |
-| 성능·운영 | [Dexie](https://github.com/dexie/Dexie.js) | Apache-2.0 | 후속 검토 · 현재 미도입 | 브라우저 저장은 별도 PC 동기화·백업과 다름. 서버 동기화 및 복구 경로 별도. |
+| 성능·운영 | [Dexie](https://github.com/dexie/Dexie.js) | Apache-2.0 | 2026-10-08 도입 · 4.4.6 · [저장 계약](KR-WORKSPACE-STORAGE.md) | 브라우저 저장은 별도 PC 동기화·백업과 다름. 서버 동기화 및 복구 경로 별도. |
 | 성능·운영 | [Yjs](https://github.com/yjs/yjs) | MIT | 후속 검토 · 현재 미도입 | 동시 수정의 데이터 병합이 유효한 형상·승인을 보장하지 않음. |
 | 성능·운영 | [BullMQ](https://github.com/taskforcesh/bullmq) | MIT | 후속 검토 · 현재 미도입 | 현재 배포 구조와 영속 작업 실행 환경을 먼저 정한다. Pro 기능과 별개. |
 | 성능·운영 | [Playwright](https://github.com/microsoft/playwright) | Apache-2.0 | 브라우저 검증 도구 · 런타임 미포함 | 스크린샷만으로 면적·재무 정합성을 증명할 수 없음. 단위/통합 테스트와 함께. |

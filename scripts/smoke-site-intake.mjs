@@ -114,7 +114,7 @@ try {
   await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).click();
   await page.getByRole('region',{name:'부지 현황 요약'}).waitFor();
   assert.equal(details,1);assert.equal(financial,0);assert.equal(market,0);assert.equal(wrongDemo,0,'an entered site sharing the demo PNU must retain its own input');
-  let stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('parcelgrid:draft-parcel')));
+  let stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('parcelgrid:active-parcel-v1')));
   assert.equal(stored.acquiredPrice,null);assert.equal(stored.id,projectId);
   assert.equal(await page.getByRole('region',{name:'건축물대장 조회 근거'}).count(),0,'details are progressively disclosed');
   await page.screenshot({path:path.join(output,'status-summary.png'),fullPage:true});
@@ -138,7 +138,7 @@ try {
   await search.fill('서울 도봉구 쌍문동 281-23');await search.press('Enter');
   await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).click();
   await page.getByRole('region',{name:'부지 현황 요약'}).waitFor();
-  stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('parcelgrid:draft-parcel')));
+  stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('parcelgrid:active-parcel-v1')));
   assert.equal(stored.acquiredPrice,null);assert.equal(financial,1);
   await page.getByRole('link',{name:'계획 검토하기 →',exact:true}).click();
   await page.getByLabel('토지와 기존 건물을 포함한 총 취득대금',{exact:true}).fill('13');
@@ -187,9 +187,10 @@ try {
   lookupMode='normal';await search.fill('느린 이전 주소');await search.press('Enter');await page.getByRole('button',{name:'취소',exact:true}).click();await page.waitForTimeout(850);
   assert.equal(await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).count(),0);
   await page.goto('http://127.0.0.1:3100/projects/new',{waitUntil:'domcontentloaded'});
-  await page.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k==='parcelgrid:draft-parcel')throw new DOMException('Synthetic quota failure','QuotaExceededError');return original.call(this,k,v);};});
-  await search.fill('저장 오류 검사');await search.press('Enter');await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).click();await page.getByRole('alert').filter({hasText:'저장하지 못했습니다'}).waitFor();
-  assert.match(page.url(),/\/projects\/new$/);
+  await page.evaluate(()=>{const original=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k==='parcelgrid:active-parcel-v1')throw new DOMException('Synthetic quota failure','QuotaExceededError');return original.call(this,k,v);};});
+  await search.fill('선택 캐시 오류 검사');await search.press('Enter');await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).click();
+  await page.getByRole('region',{name:'부지 현황 요약'}).waitFor();
+  assert.match(page.url(),/\/status$/,'an optional session cache failure must not lose the committed IndexedDB project');
   const fallback=await browser.newContext({viewport:{width:1440,height:1000},storageState:await context.storageState()});
   const fallbackPage=await fallback.newPage();await fallbackPage.route('https://dapi.kakao.com/**',route=>route.abort());
   await fallbackPage.goto('http://127.0.0.1:3100/projects/new');await fallbackPage.getByText('주소 검색으로 시작할 수 있어요',{exact:true}).waitFor({timeout:16000});
