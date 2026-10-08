@@ -27,6 +27,7 @@ try {
   const login=await context.request.post('http://127.0.0.1:3100/api/access/login',{data:{password}});
   if(login.status()!==200)throw new Error('Login failed '+login.status());
   const page=await context.newPage();const errors=[];const failed=[];
+  page.on('console',m=>{if(m.type()==='error'&&/THREE|WebGL|shader/i.test(m.text()))errors.push({message:m.text()});});
   page.on('pageerror',e=>errors.push({message:e.message,stack:e.stack}));
   page.on('requestfailed',r=>{if(r.url().startsWith('http://127.0.0.1'))failed.push(r.url()+': '+r.failure()?.errorText);});
   await page.goto('http://127.0.0.1:3100/projects/1132010500102810023/envelope',{waitUntil:'domcontentloaded',timeout:60000});
@@ -63,7 +64,7 @@ try {
   while (await editor.locator('details[open]').count()) await editor.locator('details[open] > summary').first().click();
   await editor.scrollIntoViewIfNeeded(); await page.waitForTimeout(500);
   await editor.screenshot({path:path.join(output,'facade-editor.png')});
-  const canvas=page.locator('canvas').first(); if(await canvas.count()) { await canvas.scrollIntoViewIfNeeded(); await canvas.hover(); await page.mouse.wheel(0,-500); await page.waitForTimeout(1000); await canvas.screenshot({path:path.join(output,'facade-3d.png')}); }
+  const canvas=page.locator('.planning-massing-layout canvas').first(); if(await canvas.count()) { await canvas.scrollIntoViewIfNeeded(); await canvas.hover(); for(let i=0;i<16;i++){ await page.mouse.wheel(0,-100); await page.waitForTimeout(30); } await page.mouse.move(10,10); await page.waitForTimeout(2000); await canvas.screenshot({path:path.join(output,'facade-3d.png')}); const box=await canvas.boundingBox(); assert.ok(box); await page.mouse.move(box.x+box.width/2,box.y+box.height/2); await page.mouse.down(); await page.mouse.move(box.x+box.width/2+180,box.y+box.height/2,{steps:12}); await page.mouse.up(); await page.mouse.move(10,10); await page.waitForTimeout(700); await canvas.screenshot({path:path.join(output,'facade-3d-opposite.png')}); }
   await page.reload({waitUntil:'domcontentloaded'});
   const restored=page.getByRole('region',{name:'면별 외장재 설정',exact:true});
   await restored.getByText('면별 재료·개구부·공유벽 설정',{exact:true}).click();

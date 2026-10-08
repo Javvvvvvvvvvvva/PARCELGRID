@@ -1,5 +1,6 @@
 "use client";
 
+import { usesFacadeSkin } from "@/lib/planning/facade-render";
 import { FacadeSurfaceLayer } from "./FacadeSurfaceLayer";
 import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
@@ -157,10 +158,17 @@ function FloorMassMesh({
   onHover: (id: string | null) => void;
 }) {
   const renderable = hasRenderableShape(mass.shape);
-  const geometry = useMemo(
-    () => shapeGeometry(mass.shape, mass.baseHeightM, mass.topHeightM),
-    [mass.shape, mass.baseHeightM, mass.topHeightM]
-  );
+  const facadeSkin = usesFacadeSkin(mass, materialSelection);
+  const geometry = useMemo(() => {
+    const result = shapeGeometry(mass.shape, mass.baseHeightM, mass.topHeightM);
+    if (facadeSkin) {
+      // ExtrudeGeometry group 0 is the caps. Vertical walls are rendered once by
+      // FacadeSurfaceLayer; overlapping translucent walls would obscure textures.
+      const caps = result.groups.find(group => group.materialIndex === 0);
+      if (caps) result.setDrawRange(caps.start, caps.count);
+    }
+    return result;
+  }, [mass.shape, mass.baseHeightM, mass.topHeightM, facadeSkin]);
   const labelPoint = useMemo(() => {
     if (mass.shape.length === 0) return { x: 0, z: 0 };
     return mass.shape.reduce(
