@@ -87,6 +87,7 @@ try {
   await page.waitForLoadState('networkidle',{timeout:15000}).catch(()=>{});
   await page.waitForTimeout(2000);
   console.log('BEFORE_RELOAD_ERRORS',JSON.stringify(errors));
+  await page.getByText('이 브라우저에 저장됨',{exact:true}).waitFor();
   await page.reload({waitUntil:'domcontentloaded'});
   await page.getByRole('button',{name:'내부 구획 열기'}).click();
   await page.getByRole('button',{name:'사업성 면적 반영됨',exact:true}).waitFor();

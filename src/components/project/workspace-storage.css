@@ -1,0 +1,22 @@
+.workspace-persistence{position:relative;padding:9px 20px;background:#f4f7f2;border-bottom:1px solid #d9e2d7;color:#284e44;font-family:inherit;font-size:11px;z-index:10}
+.workspace-storage-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.workspace-persistence button,.saved-projects button{border:1px solid #cedacd;background:white;border-radius:6px;padding:6px 9px;font:inherit;color:#284e44;cursor:pointer}
+.workspace-persistence button:disabled,.saved-projects button:disabled{opacity:.45;cursor:default}
+.workspace-persistence a,.saved-projects a{color:#205b50;text-decoration:underline;text-underline-offset:3px}
+.workspace-persistence p{line-height:1.7;margin:8px 0 2px}
+.workspace-storage-error{color:#9b492d!important}
+.workspace-history{max-height:250px;overflow:auto;margin-top:10px}
+.workspace-history>div{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:8px 0;border-top:1px solid #dde6da}
+.workspace-opening{padding:60px 24px;max-width:650px;margin:auto;font-size:14px;line-height:1.8}
+.workspace-opening a,.workspace-opening button{margin-right:16px}
+.saved-projects{border-top:1px solid #dde6da;margin-top:20px;padding-top:17px;font-size:11px;color:#42584a}
+.saved-projects summary{font-size:12px;font-weight:650;cursor:pointer}
+.saved-projects summary span{font-weight:400;margin-left:5px}
+.saved-projects p{line-height:1.7;margin:9px 0}
+.saved-projects ul{padding:0;list-style:none;max-height:240px;overflow:auto}
+.saved-projects li{border-bottom:1px solid #e2e9df;padding:10px 0}
+.saved-projects li>div{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+.saved-projects li strong{font-size:11px;overflow-wrap:anywhere}
+.saved-projects li small{white-space:nowrap;color:#6a7d6d}
+.saved-projects>button{margin:5px 6px 0 0}
+@media(max-width:720px){.workspace-persistence{padding:9px 14px}.workspace-storage-row{gap:8px}.workspace-history>div{gap:7px}}

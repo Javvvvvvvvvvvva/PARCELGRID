@@ -28,7 +28,7 @@ export function SiteProjectShell({ projectId, children }: { projectId: string; c
     queryFn: async () => {
       if (owned) return buildSiteProject(owned);
       if (projectId === DEMO_PROJECT_ID) { const res = await fetch(`/api/projects/${projectId}`); if (!res.ok) throw new Error("데모를 불러오지 못했습니다."); return res.json(); }
-      throw new Error("이 탭에 저장된 부지가 없습니다. 주소나 지도에서 다시 선택하세요.");
+      throw new Error("저장한 계획에 부지 입력이 없습니다. 주소나 지도에서 같은 부지를 다시 확인하세요.");
     },
   });
   const setData = useProjectStore(s => s.setData), active = useProjectStore(s => s.data);
@@ -46,19 +46,22 @@ export function AcquisitionAccess({ projectId, children }: { projectId: string; 
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [error, setError] = useState("");
   const [showReferences, setShowReferences] = useState(false);
+  const [saving, setSaving] = useState(false);
   useEffect(() => { setStored(readStoredParcel()); }, [projectId]);
   if (stored === undefined) return <p className="site-message">부지 입력을 확인하고 있어요…</p>;
   if (!stored || stored.id !== projectId || hasAcquisitionPrice(stored)) return <>{children}</>;
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault(); setError("");
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); if (saving) return; setError("");
     const value = Number(price), manwon = Math.round(value * 10_000);
     const instant = new Date(`${date}T00:00:00Z`);
     if (!price.trim() || !Number.isFinite(value) || manwon <= 0 || manwon > 1_000_000_000_000) { setError("총 취득대금을 억원 단위의 양수로 입력하세요."); return; }
     if (!Number.isFinite(instant.getTime()) || instant.toISOString().slice(0, 10) !== date) { setError("취득 예정일을 확인하세요."); return; }
     try {
+      setSaving(true);
       const next = { ...stored, acquiredPrice: manwon, acquired: date, intakeRevision: crypto.randomUUID() };
-      writeStoredParcel(next); setStored(next);
-    } catch { setError("브라우저에 입력을 저장하지 못했습니다. 저장 공간과 사이트 저장 권한을 확인하세요."); }
+      await writeStoredParcel(next); setStored(next);
+    } catch (error) { setError(`브라우저에 입력을 저장하지 못했습니다. ${error instanceof Error ? error.message : "저장 공간과 사이트 저장 권한을 확인하세요."}`); }
+    finally { setSaving(false); }
   };
   return <div className="site-flow"><SiteHeader step={3} /><main className="site-price-gate">
     <Link href={`/projects/${projectId}/status`} className="site-back"><ArrowLeft size={15} /> 현황으로 돌아가기</Link>
@@ -72,7 +75,7 @@ export function AcquisitionAccess({ projectId, children }: { projectId: string; 
       <label htmlFor="site-acquisition-date">취득 예정일 · 사업 일정 기준</label><input id="site-acquisition-date" type="date" value={date} onChange={e => setDate(e.target.value)} required />
       <p className="site-muted">가격을 아직 모르면 현황 화면으로 돌아가서 계속 살펴볼 수 있어요.</p>
       {error && <p role="alert" className="site-error">{error}</p>}
-      <button className="site-primary" type="submit">입력한 가격으로 계속 <ArrowRight size={17} /></button>
+      <button className="site-primary" type="submit" disabled={saving}>{saving ? "입력 저장 중…" : "입력한 가격으로 계속"} <ArrowRight size={17} /></button>
     </form>
   </main></div>;
 }

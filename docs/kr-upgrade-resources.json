@@ -425,7 +425,7 @@
     "name": "Dexie",
     "licenseObserved": "Apache-2.0",
     "purpose": "IndexedDB 자동 저장·버전·대용량 로컬 데이터",
-    "status": "후속 검토 · 현재 미도입",
+    "status": "2026-10-08 도입 · 4.4.6 · 프로젝트별 저장·복구",
     "condition": "브라우저 저장은 별도 PC 동기화·백업과 다름. 서버 동기화 및 복구 경로 별도.",
     "reviewedAt": "2026-09-28"
   },

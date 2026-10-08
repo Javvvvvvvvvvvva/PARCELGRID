@@ -2,7 +2,7 @@
  * Hooks for the dynamic project flow (본인 부지로 분석).
  *
  * Separate from `useProject(id)` which targets the seed/DB-backed projects.
- * This one reads the user's draft parcel from sessionStorage and calls
+ * This one reads the activated IndexedDB-backed parcel and calls
  * /api/projects/dynamic to compute scenarios.
  */
 
@@ -16,7 +16,7 @@ import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
 import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
 
 /**
- * Stored parcel shape — matches what /projects/new writes to sessionStorage.
+ * Durable site input; IndexedDB is authoritative, the session cache is optional.
  */
 export interface StoredParcel {
   id: string;
@@ -105,9 +105,20 @@ export function buildDynamicProjectRequest(
   };
 }
 
-/** Read the stored parcel. Returns null if nothing stored. */
+let activeStoredParcel: StoredParcel | null | undefined;
+/** Activate only after a durable transaction or validated restore succeeds. */
+export function setActiveStoredParcel(stored: StoredParcel | null): void {
+  activeStoredParcel = stored;
+  if (stored) {
+    // Compatibility cache only. IndexedDB remains authoritative if this cache is unavailable.
+    try { sessionStorage.setItem("parcelgrid:active-parcel-v1", JSON.stringify(stored)); } catch { /* optional cache */ }
+  }
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("parcelgrid:parcel-changed"));
+}
+/** Read the active parcel. The legacy cache is used only before workspace activation. */
 export function readStoredParcel(): StoredParcel | null {
   if (typeof window === "undefined") return null;
+  if (activeStoredParcel !== undefined) return activeStoredParcel;
   try {
     const raw = sessionStorage.getItem("parcelgrid:draft-parcel");
     if (!raw) return null;
@@ -122,9 +133,9 @@ export function hasAcquisitionPrice(stored: StoredParcel): boolean {
   return typeof stored.acquiredPrice === "number" && Number.isFinite(stored.acquiredPrice) && stored.acquiredPrice > 0;
 }
 
-export function writeStoredParcel(stored: StoredParcel): void {
-  sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(stored));
-  window.dispatchEvent(new Event("parcelgrid:parcel-changed"));
+export async function writeStoredParcel(stored: StoredParcel): Promise<void> {
+  const { workspaceManager } = await import("@/lib/workspace/manager");
+  await workspaceManager.saveIntake(stored);
 }
 
 /** No scenario, taxes, profitability, or market requests are run for site inspection. */

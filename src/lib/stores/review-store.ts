@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools, persist } from "zustand/middleware";
+import { devtools } from "zustand/middleware";
 import type {
   PriceVerificationRecord,
   PriceVerificationTarget,
@@ -35,7 +35,6 @@ interface ReviewStore {
 
 export const useReviewStore = create<ReviewStore>()(
   devtools(
-    persist(
       (set) => ({
         priceVerifications: {},
         setPriceVerification: (projectId, record) =>
@@ -87,7 +86,5 @@ export const useReviewStore = create<ReviewStore>()(
             };
           }),
       }),
-      { name: "parcelgrid-review-workflow" }
-    )
   )
 );

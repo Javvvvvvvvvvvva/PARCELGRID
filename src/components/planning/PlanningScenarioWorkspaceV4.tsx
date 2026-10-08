@@ -252,7 +252,7 @@ function PlanCard({
             <strong style={{ fontSize: 13.5 }}>{scenario.name}</strong>
             <span className="ui-tag">{ORIGIN_LABEL[scenario.origin]}</span>
             {representative && <span className="ui-tag">대표안</span>}
-            {scenario.status === "draft" && <span className="ui-tag">미저장</span>}
+            {scenario.status === "draft" && <span className="ui-tag">편집 초안</span>}
           </div>
           <div
             style={{ marginTop: 5, fontSize: 10.5, color: "var(--fg-muted)" }}
@@ -879,7 +879,7 @@ export function PlanningScenarioWorkspaceV4({
                       <span className="ui-tag">v{selectedScenario.version}</span>
                       {isRepresentative && <span className="ui-tag">대표안</span>}
                       {selectedScenario.status === "draft" && (
-                        <span className="ui-tag">미저장 변경</span>
+                        <span className="ui-tag">편집 초안</span>
                       )}
                     </div>
                     <p

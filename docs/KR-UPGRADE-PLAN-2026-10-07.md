@@ -42,7 +42,7 @@
 |---|---|---|---|
 | KR-U0 · 기준선 | 업데이트 전후를 같은 사례로 비교 | 기존 Vitest·Playwright·Zod | 현재 코드·실행 환경·성능·검증 범위 기록, 기준 사례 확정 |
 | KR-U1 · 부지 환경 | 선택 필지와 주변 필지·건물·도로를 구분해 이해 | 기존 Turf·Kakao/VWorld, 필요 시 Proj4js | 경계·선택 ID 일치, 레이어·상태 안내, 실제 지도 확인 상태 기록 |
-| KR-U2 · 저장·편집 복구 | 프로젝트별 자동 저장, 재접속 복구, 변경 취소 | Dexie 시험 도입 + 기존 Zustand | 기존 자료 보존, 실패·재시도·복구·버전 전환 검증 |
+| KR-U2 · 저장·편집 복구 | 프로젝트별 자동 저장, 재접속 복구, 변경 취소 | Dexie 4.4.6 + 기존 Zustand · 구현 완료 | 기존 자료 보존, 실패·재시도·복구·버전 전환 검증 |
 | KR-U3 · 외장재·수량 | 면별 재료와 실제 계획 형상 기반 외벽 수량·비용 비교 | 기존 Three·Decimal, 허용된 PBR 텍스처 | 수량 대조, 재료별 비용 합계, 보고서·사업성 일치 |
 | KR-U4 · 내부 평면 | 불규칙한 공간 편집과 조건을 반영한 후보 생성 | Flatten.js, HiGHS 시험 도입, 기존 React Flow·Comlink | 경계·겹침·면적·연결 검증, 수동 잠금, 실패 이유 표시 |
 | KR-U5 · CAD/GIS 교환 | 기존 도면·GIS 자료를 가져와 같은 위치에서 검토 | shapefile-js·Proj4js·dxf-parser, 기존 rhino3dm | 원점·축·단위·레이어 보존, 지원하지 않는 요소 표시 |
@@ -70,7 +70,7 @@ KR-U0의 기준선 작업은 첫 구현 PR에 포함한다. KR-U2를 큰 평면�
 
 ### KR-U2 — 저장·복구와 편집 편의성
 
-- Dexie 기반 IndexedDB 저장 어댑터를 작은 프로젝트로 시험한다. Zustand는 화면 상태를 담당하고 저장 성공은 실제 transaction 완료 후 표시한다.
+- Dexie 4.4.6 기반 프로젝트별 IndexedDB 저장을 구현했다. 대안 비교와 검증은 [저장·복구 계약](KR-WORKSPACE-STORAGE.md)에 기록했다. Zustand는 화면 상태를 담당하고 저장 성공은 실제 transaction 완료 후 표시한다.
 - 프로젝트 ID·부지 revision·스키마 버전·계획 버전을 함께 저장한다. 기존 sessionStorage/localStorage는 읽기·대조·백업 후 이전하며 실패 시 원본을 보존한다.
 - 초안 자동 저장, 저장 중/완료/실패 표시, 가져오기·내보내기·복구를 연결한다. undo/redo 범위는 편집 명령별로 정의한다.
 - 이전 형상의 사업성·검토 승인이 최신 계획으로 복구되지 않도록 기존 해시와 revision 계약을 유지한다.
@@ -130,7 +130,7 @@ KR-U0의 기준선 작업은 첫 구현 PR에 포함한다. KR-U2를 큰 평면�
 | [Turf](https://github.com/Turfjs/turf), [Three](https://github.com/mrdoob/three.js), [Decimal](https://github.com/MikeMcl/decimal.js) | 기존 재사용 | MIT. 지리 검증·3D·금액 계산의 현재 경계를 유지 |
 | [React Flow](https://github.com/xyflow/xyflow), [Comlink](https://github.com/GoogleChromeLabs/comlink) | 기존 재사용 | MIT / Apache-2.0. 관계 편집과 Worker 연결 |
 | [SunCalc](https://github.com/mourner/suncalc), [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh), [rhino3dm](https://github.com/mcneel/rhino3dm) | 기존 재사용 | 현재 SunCalc 2.0.2 배포 LICENSE는 BSD-2-Clause, 나머지는 MIT. 일영·교차 검사·Rhino 교환 |
-| [Dexie](https://github.com/dexie/Dexie.js) | KR-U2 시험 우선 | Apache-2.0. IndexedDB 저장; 별도 서비스 없는 PC 간 동기화는 제공하지 않음 |
+| [Dexie](https://github.com/dexie/Dexie.js) | KR-U2 도입 · 4.4.6 | Apache-2.0. IndexedDB 저장; 별도 서비스 없는 PC 간 동기화는 제공하지 않음 |
 | [Flatten.js](https://github.com/alexbol99/flatten-js) | KR-U4A 시험 우선 | MIT. 2D 기하; npm `@flatten-js/core`. 기존 기하 기능과 차이를 비교 |
 | [HiGHS JS](https://github.com/lovasoa/highs-js) | KR-U4B 시험 우선 | MIT. npm `highs`; WASM LP/MIP/볼록 QP. 일반 비선형·혼합정수 QP는 범위 밖 |
 | [shapefile-js](https://github.com/calvinmetcalf/shapefile-js), [Proj4js](https://github.com/proj4js/proj4js) | KR-U5 시험 우선; 다른 CRS 연결 시 KR-U1에서 선행 가능 | MIT / MIT 계열 본문. npm `shpjs`, `proj4`. 변환 정의·원문 CRS·인코딩 필요 |
@@ -189,6 +189,7 @@ KR-U0의 기준선 작업은 첫 구현 PR에 포함한다. KR-U2를 큰 평면�
 |---|---|---|---|
 | 2026-10-07 | 계획 | 최신 master·기존 조사·외장재 코드를 대조하고 실행 순서와 도입 기준 작성. 앱 코드/패키지 변경 없음 | KR-U0 기준선 기록을 포함한 KR-U1 구현 |
 | 2026-10-08 | KR-U0/U1 | 기존 Turf·Zod·Query·Kakao로 경량 주변 조회·지도 레이어·출처/상태 구현. 434개 테스트·프로덕션 빌드·좌표 기반 합성 브라우저 검사 통과 | 승인 API 실지도 확인은 미완료. 독립적으로 진행 가능한 다음 구현은 KR-U2 저장·복구 |
+| 2026-10-08 | KR-U2 | 프로젝트별 IndexedDB, 원본 보존 이전, 자동 저장·실패 재시도, 20개 기록 복구, 계획 취소/다시 적용, 충돌 안내·미저장 초안 백업. Dexie 4.4.6/Apache-2.0 | 다음 구현은 KR-U3 외벽 수량·재료·공사비. 별도 PC 자동 동기화는 미구현 |
 
 계획 문서 검증: UTF-8·Markdown 코드 펜스·상대 링크 39개와 `git diff --check` 확인. Node 24.19.0에서 `pnpm verify` 통과(97개 테스트 파일·422개 테스트·15개 페이지 빌드). 기존 Webpack 캐시 복원 경고가 있었으며 재컴파일과 빌드는 성공했다. 이번 문서 변경에서 브라우저/실제 외부 API 검사를 새로 실행한 것은 아니다.
 
