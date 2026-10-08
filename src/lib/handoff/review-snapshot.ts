@@ -1,3 +1,4 @@
+import { FACADE_COST_VERSION, FACADE_QUANTITY_VERSION } from "@/lib/planning/facade-quantities";
 import type { FinancialSourceMap } from "@/lib/finance/source-data-gate";
 import type {
   PriceVerificationRecord,
@@ -144,6 +145,14 @@ export function validateReviewSnapshotAlignment(
   ) {
     errors.push("사업성 스냅샷과 대표 Geometry의 계획안 버전이 다릅니다.");
   }
+  const contract = snapshot.data.scenarios.find(s => s.id === snapshot.representativeScenarioId)?._raw.program.areaContract;
+  const facade = contract?.facadeCost;
+  if (facade && (facade.version !== FACADE_COST_VERSION || facade.quantities.version !== FACADE_QUANTITY_VERSION ||
+    (facade.quantities.geometryHash && facade.quantities.geometryHash !== geometry.geometryHash) ||
+    Math.abs(facade.adjustmentManwon - (contract?.materialAdjustmentCostManwon ?? 0)) > 0.000001)) {
+    errors.push("외벽 수량·재료비 계약이 현재 형상 또는 재무 금액과 다릅니다. 다시 저장해야 합니다.");
+  }
+  if (!facade && (contract?.materialAdjustmentCostManwon ?? 0) !== 0) errors.push("기존 외장재 비용의 수량 계약이 없습니다. 사업성을 다시 계산하고 저장하세요.");
   if (snapshot.geometryHash !== geometry.geometryHash) {
     errors.push("사업성 스냅샷과 대표 Geometry의 형상 해시가 다릅니다.");
   }

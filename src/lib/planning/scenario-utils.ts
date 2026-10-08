@@ -161,12 +161,7 @@ export function clonePlanningScenario(
         : source.geometrySource?.note,
     },
     materials: source.materials
-      ? {
-          ...source.materials,
-          rateEvidence: source.materials.rateEvidence
-            ? { ...source.materials.rateEvidence }
-            : undefined,
-        }
+      ? structuredClone(source.materials)
       : createDefaultPlanningMaterials(),
     checks: source.checks.map((check) => ({ ...check })),
     economicsPreview: {

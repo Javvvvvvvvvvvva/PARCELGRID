@@ -37,6 +37,8 @@ const expertReview = z.object({ discipline: z.enum(["architect", "developer", "f
   reviewer: text, organization: text, evidenceRef: text, notes: text, reviewedAt: text, updatedAt: text, snapshotKey: text.optional(),
 });
 const facade = z.enum(["unselected", "standard-render", "brick-veneer", "exposed-concrete", "metal-panel"]);
+const materialEvidence = z.object({ status: z.enum(["unpriced", "user-input", "source-backed"]), sourceName: text.optional(), sourceUrl: text.optional(), observedAt: text.optional(), note: text.optional() });
+const materialRate = z.object({ baselineWonPerSqm: number.nonnegative().optional(), selectedWonPerSqm: number.nonnegative().optional(), evidence: materialEvidence.optional() });
 const building = z.object({ name: text, mainPurpose: text, detailPurpose: text, groundFloors: number, undergroundFloors: number, totalArea: number,
   buildingArea: number, buildingCoverage: number, floorAreaRatio: number, structure: text, height: number, approvalDate: text, ageYears: number,
   isMainBuilding: z.boolean(), householdCount: number, familyCount: number, unitCount: number,
@@ -66,7 +68,11 @@ const scenarioSchema = z.object({
   parking: z.object({ strategy: z.enum(["none", "surface", "piloti", "basement", "mechanical", "mixed"]), providedCars: number, notes: text.optional(), orientation: z.enum(["auto", "parallel-front", "perpendicular-front"]).optional(), stallWidthM: number.optional(), stallDepthM: number.optional(), aisleWidthM: number.optional(), entryWidthM: number.optional(), coreAreaSqm: number.optional(), columnLossPct: number.optional() }),
   economicsPreview: z.object({ status: z.enum(["not-calculated", "estimated", "stale"]), acquisitionCostManwon: number, demolitionCostManwon: number, constructionCostManwon: number, softCostManwon: number, contingencyCostManwon: number, financingCostManwon: number, totalCostManwon: number, saleRevenueManwon: number, capitalizedLeaseValueManwon: number, expectedRevenueManwon: number, expectedAnnualNoiManwon: number, profitManwon: number, profitMarginPct: number }).passthrough(),
   geometrySource: z.object({ mode: z.enum(["engine-generated", "external-model", "reference-image"]), exactGeometryAvailable: z.boolean(), locked: z.boolean(), sourceName: text.optional(), sourceFormat: z.enum(["dae", "glb", "dxf"]).optional(), sourceGeometryHash: text.optional(), lockedGeometryHash: text.optional() }).passthrough().optional(),
-  materials: z.object({ primaryFacadeMaterial: facade, secondaryFacadeMaterial: facade, primaryFacadeSharePct: number, windowRatioPct: number, facadeAreaOverrideSqm: number.optional(), baselineFacadeUnitCostPerSqmWon: number.optional(), selectedFacadeUnitCostPerSqmWon: number.optional(), rateEvidence: z.object({ status: z.enum(["unpriced", "user-input", "source-backed"]), sourceName: text.optional(), sourceUrl: text.optional(), observedAt: text.optional(), note: text.optional() }).optional() }).optional(),
+  materials: z.object({
+    pricingMode: z.enum(["assembly", "by-material"]).optional(),
+    faceAssignments: z.record(z.string().regex(/^face-[0-9a-f]{8}$/), z.object({ material: facade.optional(), exposure: z.enum(["exposed", "shared", "unknown"]).optional(), openingAreaSqm: number.nonnegative().optional() })).optional(),
+    materialRates: z.record(facade, materialRate).optional(),
+    primaryFacadeMaterial: facade, secondaryFacadeMaterial: facade, primaryFacadeSharePct: number, windowRatioPct: number, facadeAreaOverrideSqm: number.optional(), baselineFacadeUnitCostPerSqmWon: number.optional(), selectedFacadeUnitCostPerSqmWon: number.optional(), rateEvidence: z.object({ status: z.enum(["unpriced", "user-input", "source-backed"]), sourceName: text.optional(), sourceUrl: text.optional(), observedAt: text.optional(), note: text.optional() }).optional() }).optional(),
   checks: z.array(z.object({ code: z.string(), label: z.string(), status: z.enum(["pass", "review", "fail", "unknown"]), message: z.string() }).passthrough()).max(2000),
 }).passthrough();
 const documentSchema = z.object({ schemaVersion: z.literal(WORKSPACE_SCHEMA), projectId: id, intake: intakeSchema.nullable(), payload: z.object({

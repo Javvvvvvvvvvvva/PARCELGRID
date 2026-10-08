@@ -60,6 +60,18 @@ function validateFinancialGeometryContract(
     );
   }
 
+  const facade = contract.facadeCost;
+  if (facade) {
+    const rowArea = facade.rows.reduce((sum, row) => sum + row.areaSqm, 0);
+    const rowWon = facade.rows.reduce((sum, row) => sum + (row.adjustmentWon ?? 0), 0);
+    if (!Number.isFinite(facade.adjustmentManwon) ||
+        Math.abs(facade.adjustmentManwon - contract.materialAdjustmentCostManwon) > 0.000001 ||
+        Math.abs(rowArea - facade.facadeAreaSqm) > 0.000001 ||
+        Math.abs(rowWon / 10000 - facade.adjustmentManwon) > 0.000001) {
+      throw new Error("Stage 2/3 외벽 수량·재료비 합계가 일치하지 않습니다.");
+    }
+  }
+
   const numericAreas = [
     contract.constructionAreaSqm,
     contract.aboveGroundAreaSqm,

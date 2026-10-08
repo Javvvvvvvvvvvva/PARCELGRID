@@ -168,6 +168,7 @@ export interface FinancialGeometryAreaContract {
   providedParkingSpaces: number;
   requiredParkingSpaces: number;
   materialAdjustmentCostManwon: ManWon;
+  facadeCost?: import("@/lib/planning/materials").PlanningMaterialCostAdjustment;
   planningAssumptionsVersion?: string;
   geometrySource?: {
     mode: "engine-generated" | "external-model" | "reference-image";

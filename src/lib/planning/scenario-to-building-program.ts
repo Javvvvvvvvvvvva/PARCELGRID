@@ -152,6 +152,7 @@ export function planningScenarioToBuildingProgram(
       revenueAreas,
       providedParkingSpaces: calculation.parking.providedCars,
       requiredParkingSpaces: calculation.parking.requiredCars,
+      facadeCost: calculation.economicsPreview.facadeCost,
       materialAdjustmentCostManwon:
         calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
       planningAssumptionsVersion:

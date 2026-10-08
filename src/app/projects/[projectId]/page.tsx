@@ -1,4 +1,5 @@
 "use client";
+import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
 
 import { use, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -553,6 +554,7 @@ export default function DashboardPage({
 
       <div className="workspace-grid">
         <main className="stage3-main">
+          <section className="dashboard-section"><h2>외벽 수량·재료비</h2><FacadeCostSummary cost={scenario.program.areaContract?.facadeCost} /></section>
           <section className="dashboard-section">
             <SectionHeader eyebrow="PRELIMINARY PRO FORMA" title="예비 사업수지" description="공사비·금융·매출 가정을 한 원장에서 계산한 세전 결과입니다. 세금은 계산 가능한 항목만 별도 표시하며 미산정 항목이 있습니다." />
             <FinancialReconciliationPanel audit={reconciliation} />

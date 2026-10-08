@@ -1,4 +1,5 @@
 "use client";
+import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
 
 import { matchesProjectIntake } from "@/lib/services/project-intake";
 
@@ -427,6 +428,8 @@ export default function ReportPage({
             </p>
           )}
         </div>
+
+        <div className="rpt-sec"><div className="rpt-sec-h">외벽 수량·재료비</div><FacadeCostSummary cost={areaContract?.facadeCost} /></div>
 
         <ConceptRenderStudio
           projectId={projectId}
