@@ -18,7 +18,7 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 
 | 영역 | 현재 기능 |
 |---|---|
-| 부지 입력 | 주소 자동완성·지역 검색, 지도 이동·확대·위성 보기·클릭 선택, PNU·경계 대조, 명시적 부지 확인 |
+| 부지 입력 | 주소 자동완성·지역 검색, 지도 이동·확대·위성·클릭 선택, PNU·경계 대조, 주변 필지·건물 외곽·도로 필지 레이어와 조회 상태, 명시적 부지 확인 |
 | 현황 분석 | 가격 없이 토지·기존 건물·규제 확인 상태 요약, 펼쳐보는 대장·3D·접도 근거, 대장 0건/실패/부분 조회 구분 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
@@ -34,7 +34,7 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 
 | 단계 | 경로 | 주요 결과 |
 |---|---|---|
-| 0. 부지 선택 | `/`, `/projects/new` | 주소 또는 지도에서 선택 → 경계·면적 확인 → 이 부지 살펴보기 |
+| 0. 부지 선택 | `/`, `/projects/new` | 주소 또는 지도에서 선택 → 경계·면적·주변 도형 확인 → 이 부지 살펴보기 |
 | 1. 현황 확인 | `/projects/[projectId]/status` | 취득대금 없이 요약 확인, 상세 대장·3D·도로는 펼쳐보기 |
 | 2. 계획 스튜디오 | `/projects/[projectId]/envelope` | 취득대금 입력 후 추천 비교·층별 프로그램·배치·주차·3D·대표안 확정 |
 | 3. 사업성 | `/projects/[projectId]` | 인수가·공사비·금융비·매출·수익성 재계산 |
@@ -135,6 +135,7 @@ AI 렌더 모델·저장 경로·호출 제한과 원문 저장 경로는 `OPENA
 |---|---|
 | 페이지·서버 API | `src/app` |
 | 부지 선택·현황 접근 | `src/components/project/ParcelSelectionMap.tsx`, `SiteProjectAccess.tsx` |
+| 선택 주변 도형·출처 | `src/app/api/parcels/selection-context/route.ts`, `src/lib/integrations/vworld-selection-context.ts`, `SelectionContextLegend.tsx` |
 | 필지 선택 계약 | `src/lib/parcels/selection.ts`, `site-intake.ts` |
 | 현재 Plan Studio UI | `src/components/planning/PlanningScenarioWorkspaceV4.tsx` |
 | 추천 비교 UI | `src/components/planning/PlanningRecommendationPanelV2.tsx` |
@@ -158,7 +159,7 @@ V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은
 
 ## 검증
 
-지도·주소 진입 흐름은 프로덕션 빌드 후 `pnpm test:browser:intake`로 확인합니다. 합성 지도 SDK·API 응답을 사용하므로 실제 지도 타일과 승인된 공공 API의 정확성 검증은 별도로 필요합니다. [지도 선택 가이드](docs/KR-MAP-INTAKE.md)에 범위와 실제 확인 절차를 기록했습니다.
+지도·주소 진입 흐름은 프로덕션 빌드 후 `pnpm test:browser:intake`로 확인합니다. 좌표를 투영하는 합성 지도 SDK·API 응답으로 도형의 구멍·복수 영역, 레이어 전환, 이전 선택 응답 폐기, 부분 실패를 검사합니다. 실제 지도 타일과 승인된 공공 API의 정확성 검증은 별도로 필요합니다. [지도 선택 가이드](docs/KR-MAP-INTAKE.md)에 범위와 실제 확인 절차를 기록했습니다.
 
 건축물대장 근거의 별도 브라우저 검사는 프로덕션 빌드 후 `pnpm test:browser:registry`로 실행합니다. 실제 API 승인 계정 검증은 합성 응답 검사와 별개이며 [가이드](docs/KR-BUILDING-EVIDENCE.md)에 남은 조건을 기록합니다.
 

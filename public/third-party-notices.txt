@@ -333,7 +333,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ========================================================================
 
-@img/sharp-libvips-linux-x64 @ 1.3.3
+@img/sharp-libvips-linux-x64 @ 1.3.4
 Declared license: LGPL-3.0-or-later
 https://sharp.pixelplumbing.com
 Lovell Fuller
@@ -342,7 +342,7 @@ No license text shipped in package root; consult the component's distribution an
 
 ========================================================================
 
-@img/sharp-linux-x64 @ 0.35.4
+@img/sharp-linux-x64 @ 0.35.5
 Declared license: Apache-2.0
 https://sharp.pixelplumbing.com
 Lovell Fuller
@@ -7606,7 +7606,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ========================================================================
 
-sharp @ 0.35.4
+sharp @ 0.35.5
 Declared license: Apache-2.0
 https://sharp.pixelplumbing.com
 Lovell Fuller
@@ -7848,7 +7848,7 @@ No license text shipped in package root; consult the component's distribution an
 
 ========================================================================
 
-source-map-js @ 1.2.1
+source-map-js @ 1.2.2
 Declared license: BSD-3-Clause
 https://github.com/7rulnik/source-map-js
 Valentin 7rulnik Semirulnik

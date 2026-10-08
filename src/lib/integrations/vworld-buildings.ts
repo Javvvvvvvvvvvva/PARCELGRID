@@ -48,6 +48,8 @@ export interface ExistingBuildingGeometryQuery {
   pnu: string;
   boundary: LngLat[];
   center: { lat: number; lng: number };
+  /** Context-only map queries can request a bounded larger window. */
+  contextRadiusM?: number;
 }
 
 interface AssessedFootprint {

@@ -5,14 +5,13 @@ import {
   type ExistingBuildingGeometryQuery,
 } from "@/lib/integrations/vworld-buildings";
 
-const KEY = process.env.VWORLD_API_KEY;
-const DOMAIN = process.env.VWORLD_API_DOMAIN ?? "http://localhost:3000";
 const WFS_URL = "https://api.vworld.kr/ned/wfs/BldgisSpceService";
 const LAYER = "dt_d010";
 
 function bboxForBoundary(
   boundary: ExistingBuildingGeometryQuery["boundary"],
-  center: ExistingBuildingGeometryQuery["center"]
+  center: ExistingBuildingGeometryQuery["center"],
+  radiusM = BUILDING_CONTEXT_RADIUS_M
 ): string {
   const points =
     boundary.length >= 3
@@ -31,9 +30,9 @@ function bboxForBoundary(
     maxLat = Math.max(maxLat, lat);
   }
 
-  const padLat = BUILDING_CONTEXT_RADIUS_M / 111_000;
+  const padLat = radiusM / 111_000;
   const lngScale = 111_000 * Math.cos((center.lat * Math.PI) / 180);
-  const padLng = lngScale > 0 ? BUILDING_CONTEXT_RADIUS_M / lngScale : padLat;
+  const padLng = lngScale > 0 ? radiusM / lngScale : padLat;
 
   // BldgisSpceService accepts the successful terminal-test form:
   // minLng,minLat,maxLng,maxLat. Do not append a CRS token here.
@@ -43,7 +42,8 @@ function bboxForBoundary(
 export function buildExistingBuildingWfsUrl(
   query: ExistingBuildingGeometryQuery
 ): string {
-  if (!KEY) throw new Error("VWORLD_API_KEY not set");
+  const key = process.env.VWORLD_API_KEY;
+  if (!key) throw new Error("VWORLD_API_KEY not set");
 
   const url = new URL(WFS_URL);
 
@@ -54,11 +54,11 @@ export function buildExistingBuildingWfsUrl(
   url.searchParams.set("VERSION", "1.1.0");
   url.searchParams.set("TYPENAME", LAYER);
   url.searchParams.set("SRSNAME", "EPSG:4326");
-  url.searchParams.set("BBOX", bboxForBoundary(query.boundary, query.center));
+  url.searchParams.set("BBOX", bboxForBoundary(query.boundary, query.center, Math.min(100, Math.max(10, query.contextRadiusM ?? BUILDING_CONTEXT_RADIUS_M))));
   url.searchParams.set("MAXFEATURES", "100");
   url.searchParams.set("OUTPUT", "application/json");
-  url.searchParams.set("KEY", KEY);
-  url.searchParams.set("DOMAIN", DOMAIN);
+  url.searchParams.set("KEY", key);
+  url.searchParams.set("DOMAIN", process.env.VWORLD_API_DOMAIN ?? "http://localhost:3000");
 
   return url.toString();
 }
