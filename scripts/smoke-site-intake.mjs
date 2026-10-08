@@ -8,6 +8,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { installKakaoMapDouble } from './helpers/kakao-map-double.mjs';
+import { selectionContextFixture } from './helpers/selection-context-fixture.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const require=createRequire(path.join(root,'package.json'));
 const output=path.join(root,'test-results/site-intake');
@@ -28,32 +30,11 @@ try {
   const seedResponse=await seedPage.goto(`http://127.0.0.1:3100/api/projects/${projectId}`);
   const seed=await seedResponse.json();await seedPage.close();
   assert.ok(seed.parcel?.lotArea,'seed fixture unavailable: '+JSON.stringify(seed));
-  await context.addInitScript(() => {
-    const listeners=new WeakMap();
-    class LatLng {constructor(lat,lng){this.lat=lat;this.lng=lng;}getLat(){return this.lat;}getLng(){return this.lng;}}
-    class Bounds {constructor(){this.points=[];}extend(p){this.points.push(p);}}
-    class MapDouble {
-      constructor(el,options){this.el=el;this.center=options.center;this.level=options.level;window.__map=this;window.__mapCount=(window.__mapCount||0)+1;
-        el.innerHTML='<div data-map-double="true" style="position:absolute;inset:0;background-color:#e4ebdf;background-image:linear-gradient(32deg,transparent 46%,#fafaf4 46%,#fafaf4 50%,transparent 50%),linear-gradient(104deg,transparent 47%,#f8f9f2 47%,#f8f9f2 51%,transparent 51%),repeating-linear-gradient(90deg,#b7c9b033 0px,#b7c9b033 1px,transparent 1px,transparent 80px)"><span style="position:absolute;bottom:8px;left:10px;font:11px sans-serif;color:#506446">합성 지도 · 브라우저 동작 검증용</span></div>';
-        this.surface=el.firstElementChild;
-        el.addEventListener('pointerdown',e=>{this.start=[e.clientX,e.clientY];this.dragged=false;});
-        el.addEventListener('pointerup',e=>{if(this.start&&Math.hypot(e.clientX-this.start[0],e.clientY-this.start[1])>8){this.dragged=true;this.center=new LatLng(this.center.lat+.001,this.center.lng+.001);}});
-        el.addEventListener('wheel',e=>{e.preventDefault();this.level=Math.max(1,Math.min(14,this.level+(e.deltaY>0?1:-1)));},{passive:false});
-        el.addEventListener('click',()=>{if(this.dragged)return;for(const fn of listeners.get(this)?.click??[])fn({latLng:new LatLng(37.650511,127.025749)});});
-      }
-      getCenter(){return this.center;}setCenter(p){this.center=p;}getLevel(){return this.level;}setLevel(v){this.level=v;}setMapTypeId(v){this.type=v;}relayout(){}
-      setBounds(bounds){if(bounds.points.length)this.center=bounds.points[0];this.level=2;}
-    }
-    class Marker {setPosition(p){this.position=p;}setMap(m){this.map=m;}}
-    class Polygon {
-      constructor(options){this.options=options;this.setMap(options.map);}
-      setMap(map){this.el?.remove();if(!map)return;this.el=document.createElement('div');this.el.setAttribute('data-test-boundary','true');this.el.style.cssText='position:absolute;left:43%;top:37%;width:120px;height:145px;border:3px solid #205b50;background:#4f9c7f38;transform:rotate(12deg);pointer-events:none';map.el.appendChild(this.el);}
-    }
-    class Overlay {constructor(options){this.options=options;}setMap(){}open(){}close(){}}
-    window.kakao={maps:{Map:MapDouble,LatLng,LatLngBounds:Bounds,Marker,Polygon,Polyline:Overlay,CustomOverlay:Overlay,InfoWindow:Overlay,MapTypeId:{ROADMAP:1,HYBRID:3},load:fn=>fn(),event:{addListener:(obj,name,fn)=>{const all=listeners.get(obj)??{};(all[name]??=[]).push(fn);listeners.set(obj,all);},removeListener:(obj,name,fn)=>{const all=listeners.get(obj);if(all)all[name]=(all[name]??[]).filter(x=>x!==fn);}}}};
-  });
+  await context.addInitScript(installKakaoMapDouble);
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   let selections=0,details=0,financial=0,market=0,wrongDemo=0,lastLocation=null,lastFinancial=null,lookupMode='normal';
+  let contextQueries=0,contextMode='normal',releaseContext,delayedContextStarted,lastContext;
+  const contextRequests=[];
   const lookup={...seed.parcel,mode:'vworld',pnu:projectId,address:'서울 도봉구 쌍문동 281-23',addressRoad:null,bCode:'1132010500',lawdCd:'11320',sido:'서울',sigungu:'도봉구',dong:'쌍문동',jibun:'281-23',mainAddressNo:'281',subAddressNo:'23',mountainYn:'N',jimok:'대',jimokCode:'08',jimokCategory:'buildable',landPriceYear:'2026',existingUnitArea:null,
     lat:37.650511,lng:127.025749,inputProvenance:{mode:'vworld',parcelFacts:'vworld-cadastral',geometry:'vworld-cadastral',zoning:'vworld-land-use',recordedAt:'2026-09-28T00:00:00Z'},currentBuilding:null};
   lookup.boundary=lookup.boundary?.length?lookup.boundary:[[127.0256,37.6504],[127.0259,37.6504],[127.0259,37.6507],[127.0256,37.6507]];
@@ -67,6 +48,13 @@ try {
     if(lookupMode==='mismatch'){await route.fulfill({status:409,json:{code:'PARCEL_IDENTITY_MISMATCH',error:'클릭 위치와 필지 경계가 일치하지 않습니다.',nextAction:'필지 안쪽을 다시 선택하세요.'}});return;}
     if(lookupMode==='manual'){await route.fulfill({json:{...lookup,mode:'manual-required',reason:{code:'VWORLD_DISABLED',message:'토지 데이터 연결을 확인하지 못했습니다.'}}});return;}
     await route.fulfill({json:{...lookup,address:input.address||lookup.address,currentBuilding:input.phase==='details'?seed.parcel.currentBuilding:null}});
+  });
+  await page.route('**/api/parcels/selection-context',async route=>{
+    contextQueries++;const input=route.request().postDataJSON(),mode=contextMode;contextRequests.push(input);
+    const result=selectionContextFixture(input,mode);lastContext=result;
+    if(mode==='delay'){const pending=new Promise(resolve=>{releaseContext=resolve;});delayedContextStarted?.();await pending;}
+    if(mode==='fail'){await route.fulfill({status:503,json:{error:'Synthetic outage'}});return;}
+    await route.fulfill({json:result}).catch(()=>{});
   });
   await page.route('**/api/parcels/estimate-price',route=>{market++;return route.fulfill({json:{transactions:[{priceManwon:120000,areaSqm:120,date:'2026-08-01',address:'합성 거래 참고'}]}});});
   await page.route('**/api/projects/dynamic',async route=>{
@@ -90,9 +78,38 @@ try {
   await canvas.click({position:{x:160,y:230}}); // zoom to parcel scale first
   await canvas.click({position:{x:160,y:230}});
   await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).waitFor();
-  assert.deepEqual(lastLocation,{lat:37.650511,lng:127.025749});assert.equal(details,0);
+  assert.ok(lastLocation.lat > 33 && lastLocation.lat < 39.5 && lastLocation.lng > 124 && lastLocation.lng < 132);assert.equal(details,0);
   assert.equal(await page.evaluate(()=>window.__mapCount),1,'selecting a parcel must not reconstruct the map');
   await page.getByRole('button',{name:'위성 지도',exact:true}).click();assert.equal(await page.evaluate(()=>window.__map.type),3);
+  await page.locator('svg[data-stroke="#697c8d"]').first().waitFor();
+  assert.equal(contextQueries,1,'context only starts after a confirmed selection');
+  assert.equal(await page.locator('svg[data-stroke="#697c8d"]').count(),4,'all building polygon parts must be rendered');
+  const sdkPaths=await page.evaluate(()=>Array.from(window.__map.layers).filter(layer=>layer.options?.strokeColor==='#697c8d').map(layer=>layer.getPath().map(ring=>ring.map(p=>[p.getLng(),p.getLat()]))));
+  assert.deepEqual(sdkPaths,lastContext.layers.buildings.features.flatMap(feature=>feature.polygons),'adapter must preserve original rings and coordinate order');
+  const labelBoxes=await page.locator('.picker-parcel-label').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom};}));
+  assert.ok(labelBoxes.length>0,'nearby parcel labels should be visible at a close zoom');
+  for(let i=0;i<labelBoxes.length;i++)for(let j=i+1;j<labelBoxes.length;j++){const a=labelBoxes[i],b=labelBoxes[j];assert.ok(a.right<=b.left||b.right<=a.left||a.bottom<=b.top||b.bottom<=a.top,'parcel labels must not overlap');}
+  const beforeToggle=await page.evaluate(()=>({center:window.__map.getCenter(),level:window.__map.getLevel()}));
+  const selectedPath=await page.locator('[data-test-boundary="true"] path').getAttribute('d');
+  await page.getByRole('button',{name:'건물 외곽 표시',exact:true}).click();assert.equal(await page.locator('svg[data-stroke="#697c8d"]').count(),0);
+  assert.equal(await page.locator('[data-test-boundary="true"] path').getAttribute('d'),selectedPath,'layer toggles cannot move the selected boundary');
+  await page.getByRole('button',{name:'건물 외곽 표시',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>({center:window.__map.getCenter(),level:window.__map.getLevel()})),beforeToggle);
+  await page.getByRole('button',{name:'지도 축소',exact:true}).click();
+  assert.notEqual(await page.locator('[data-test-boundary="true"] path').getAttribute('d'),selectedPath,'zoom must reproject geometry');
+  await page.getByRole('button',{name:'지도 확대',exact:true}).click();
+  assert.equal(await page.locator('[data-test-boundary="true"] path').getAttribute('d'),selectedPath);
+  assert.equal(contextQueries,1,'toggles and zoom must not trigger additional context requests');
+  const beforeShapeClick=selections;
+  const shapeResponse=page.waitForResponse(response=>response.url().endsWith('/api/parcels/selection-context'));
+  await page.locator('[data-test-boundary="true"] path').click();await shapeResponse;
+  await page.locator('svg[data-stroke="#697c8d"]').first().waitFor();
+  assert.equal(selections,beforeShapeClick+1,'a polygon click must select once without swallowing or duplicating the map click');
+  const beforePan=contextQueries;
+  await page.mouse.move(box.x+100,box.y+250);await page.mouse.down();await page.mouse.move(box.x+180,box.y+270,{steps:8});await page.mouse.up();
+  assert.equal(contextQueries,beforePan,'panning after selection must not fetch surroundings');
+  await page.getByRole('button',{name:'선택한 부지로 이동',exact:true}).click();
+  await page.getByRole('button',{name:'지도 확대',exact:true}).click();
   await fs.mkdir(output,{recursive:true});await page.screenshot({path:path.join(output,'selection-desktop.png'),fullPage:true});
   await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).click();
   await page.getByRole('region',{name:'부지 현황 요약'}).waitFor();
@@ -133,6 +150,32 @@ try {
   await search.fill('서울 도봉구 쌍문동 281-24');await search.press('Enter');
   await page.getByRole('heading',{name:'서울 도봉구 쌍문동 281-24',exact:true}).waitFor();
   await page.waitForTimeout(850);assert.equal(await page.getByRole('heading',{name:'이전 응답',exact:true}).count(),0);
+  // A repeat selection with the same PNU/center must use a fresh revision and drop all old overlays immediately.
+  contextMode='delay';const started=new Promise(resolve=>{delayedContextStarted=resolve;});
+  await search.fill('지연 주변 조회');await search.press('Enter');await started;
+  assert.equal(await page.locator('svg[data-stroke="#697c8d"]').count(),0);
+  const delayedRevision=contextRequests.at(-1).revision;
+  contextMode='normal';await search.fill('최신 주변 조회');await search.press('Enter');
+  await page.locator('svg[data-stroke="#697c8d"]').first().waitFor();
+  assert.notEqual(contextRequests.at(-1).revision,delayedRevision);
+  const newestPaths=await page.locator('svg[data-stroke="#697c8d"] path').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('d')));
+  releaseContext();await page.waitForTimeout(150);
+  assert.deepEqual(await page.locator('svg[data-stroke="#697c8d"] path').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('d'))),newestPaths);
+  contextMode='identity';await search.fill('다른 선택 응답');await search.press('Enter');
+  await page.getByText('주변 도형을 불러오지 못했어요.',{exact:false}).waitFor();assert.equal(await page.locator('svg[data-stroke="#697c8d"]').count(),0);
+  contextMode='partial';await page.getByRole('button',{name:'주변 도형 다시 조회'}).click();
+  await page.getByRole('button',{name:'주변 필지 표시',exact:true}).filter({hasText:'일부'}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'주변 필지 표시',exact:true}).isEnabled());
+  assert.match(await page.getByRole('button',{name:'건물 외곽 표시',exact:true}).innerText(),/조회 실패/);
+  assert.equal(await page.locator('svg[data-stroke="#697c8d"]').count(),0);
+  contextMode='empty';await page.getByRole('button',{name:'주변 도형 다시 조회'}).click();
+  await page.getByRole('button',{name:'건물 외곽 표시',exact:true}).filter({hasText:'수신 없음'}).waitFor();
+  await page.getByText('건물 도형이 없어도 빈 땅으로 판단하지 않아요.',{exact:false}).waitFor();
+  contextMode='fail';await search.fill('주변 서버 오류');await search.press('Enter');
+  await page.getByText('주변 도형을 불러오지 못했어요.',{exact:false}).waitFor();
+  assert.ok(await page.getByRole('button',{name:'이 부지 살펴보기',exact:true}).isEnabled());
+  contextMode='normal';await page.getByRole('button',{name:'주변 도형 다시 조회'}).click();
+  await page.locator('svg[data-stroke="#697c8d"]').first().waitFor();
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'mobile viewport overflow');
   await page.screenshot({path:path.join(output,'selection-mobile.png'),fullPage:true});
@@ -152,6 +195,6 @@ try {
   await fallbackPage.goto('http://127.0.0.1:3100/projects/new');await fallbackPage.getByText('주소 검색으로 시작할 수 있어요',{exact:true}).waitFor({timeout:16000});
   assert.ok(await fallbackPage.getByRole('combobox',{name:'주소 검색'}).isEnabled());await fallbackPage.screenshot({path:path.join(output,'map-unavailable.png'),fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({ok:true,selections,details,financial,market,wrongDemo,pageErrors:errors,scope:'Synthetic provider/SDK tests; live Kakao/VWorld credentials still require validation'}));
+  console.log(JSON.stringify({ok:true,selections,details,contextQueries,financial,market,wrongDemo,pageErrors:errors,scope:'Synthetic provider/projected SDK tests; live Kakao/VWorld credentials and alignment still require validation'}));
 } catch(error){console.error(error);if(browser){for(const c of browser.contexts())for(const p of c.pages()){await fs.mkdir(output,{recursive:true});await p.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(()=>{});}}console.error(logs.slice(-1800));process.exitCode=1;}
 finally{await browser?.close();server.kill('SIGTERM');}

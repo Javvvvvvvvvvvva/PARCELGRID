@@ -14,6 +14,7 @@ import { createSiteIntake } from "@/lib/parcels/site-intake";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { writeStoredParcel } from "@/lib/hooks/use-dynamic-project";
 import { boundaryContainsLocation } from "@/lib/parcels/selection";
+import { useSelectionContext } from "@/lib/hooks/use-selection-context";
 import type { ParcelLookupComplete, ParcelLookupManualRequired, ParcelLookupResponse } from "@/lib/parcels/lookup-contract";
 import { num, pyeong } from "@/lib/utils/format";
 import "@/components/project/site-picker.css";
@@ -34,6 +35,10 @@ export default function NewParcelPage() {
   const [phase, setPhase] = useState<"idle" | "searching" | "confirming">("idle");
   const [error, setError] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
+  const [selectionRevision, setSelectionRevision] = useState("");
+  const contextTarget = parcel?.mode === "vworld" && selectedLocation && selectionRevision
+    ? { pnu: parcel.pnu, center: selectedLocation, revision: selectionRevision } : null;
+  const context = useSelectionContext(contextTarget);
   const requestId = useRef(0), controller = useRef<AbortController | null>(null);
   useEffect(() => () => { requestId.current++; controller.current?.abort(); }, []);
 
@@ -42,6 +47,7 @@ export default function NewParcelPage() {
     setParcel(null); setManual(null); setOrigin(null); setSelectedLocation(undefined); setPendingLocation(undefined);
     setError(""); setPhase("idle"); setManualOpen(false);
     setArea(undefined);
+    setSelectionRevision("");
   }
   function changeAddress(value: string) { resetSelection(); setAddress(value); }
   async function request(input: SelectionInput, nextPhase: "selection" | "details", signal: AbortSignal, expectedPnu?: string): Promise<ParcelLookupResponse> {
@@ -53,6 +59,7 @@ export default function NewParcelPage() {
   }
   async function select(input: SelectionInput) {
     resetSelection(); const id = ++requestId.current;
+    setSelectionRevision(crypto.randomUUID());
     const ac = new AbortController(); controller.current = ac;
     setPhase("searching"); setOrigin(input);
     if ("location" in input) setPendingLocation(input.location);
@@ -119,7 +126,10 @@ export default function NewParcelPage() {
         </form>
         <p className="picker-search-note">2글자 이상 입력하면 주소 후보가 나와요.</p>
       </section>
-      <ParcelSelectionMap selected={selectedLocation} pending={pendingLocation} area={area} boundary={parcel?.boundary} onSelect={location => void select({ location })} disabled={phase === "confirming"} />
+      <ParcelSelectionMap selected={selectedLocation} pending={pendingLocation} area={area} boundary={parcel?.boundary} onSelect={location => void select({ location })} disabled={phase === "confirming"}
+        context={context.isError ? undefined : context.data} contextRequested={contextTarget !== null}
+        contextLoading={contextTarget !== null && context.isFetching} contextError={context.isError}
+        onRetryContext={() => void context.refetch()} />
       <section className="picker-selection" aria-label="선택한 부지" aria-busy={phase !== "idle"}>
         {phase === "searching" && <div className="picker-progress" role="status"><span className="picker-spinner" />주소와 필지 경계를 확인하고 있어요…<button type="button" onClick={resetSelection}>취소</button></div>}
         {error && <div className="site-error" role="alert">{error}</div>}

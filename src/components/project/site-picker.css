@@ -52,7 +52,29 @@
 .picker-progress{display:flex;align-items:center;gap:8px;font-size:12px;padding:20px 0;color:var(--site-green);flex-wrap:wrap}
 .picker-progress button{border:0;background:none;text-decoration:underline;color:inherit;font-size:11px}
 .picker-spinner{width:14px;height:14px;border:2px solid #c5d8cd;border-top-color:#205b50;border-radius:50%;animation:picker-spin 1s linear infinite}@keyframes picker-spin{to{transform:rotate(360deg)}}
-.picker-map{grid-column:2;grid-row:1 / span 2;position:relative;min-height:650px;background:#e9eee5;overflow:hidden;border-left:1px solid var(--site-border)}
+.picker-map{grid-column:2;grid-row:1 / span 2;position:relative;min-height:650px;background:#e9eee5;overflow:hidden;border-left:1px solid var(--site-border);display:flex;flex-direction:column}
+.picker-map-surface{position:relative;min-height:450px;flex:1}
+.picker-context{position:relative;padding:16px 22px;background:#fbfcf9;border-top:1px solid var(--site-border);color:var(--site-ink)}
+.picker-context-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;font-size:12px}
+.picker-context-selected{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--site-green)}
+.picker-context-selected i{width:14px;height:11px;border:2px solid #205b50;background:#4f9c7f22}
+.picker-context-layers{display:flex;flex-wrap:wrap;gap:7px}
+.picker-context-toggle{display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #ccd6c9;border-radius:7px;background:#fff;color:var(--site-ink);font-size:11px!important}
+.picker-context-toggle[aria-pressed=false]{background:#f1f3ed;color:#737d72}
+.picker-context-toggle[aria-pressed=false] i{opacity:.3}
+.picker-context-toggle:disabled{opacity:.65}
+.picker-context-toggle i{width:12px;height:10px;border:1px solid #76876b;background:#c5d7b844}
+.picker-context-buildings i{border-color:#697c8d;background:#8ca1b588}
+.picker-context-roads i{border-color:#9b967e;background:#d5cda899}
+.picker-context-toggle small{font-size:10px;color:#667260;margin-left:2px}
+.picker-context-note{font-size:10.5px;line-height:1.65;color:#667260;margin:9px 0 0}
+.picker-context-sources{font-size:10.5px;line-height:1.65;color:#667260;margin-top:9px}
+.picker-context-sources summary{cursor:pointer;color:var(--site-green);width:fit-content}
+.picker-context-sources>div{margin-top:10px;border-top:1px solid #e1e7dd;padding-top:9px}
+.picker-context-sources p{margin:4px 0}
+.picker-context-sources a{text-decoration:underline;color:var(--site-green)}
+.picker-context-retry{display:flex;align-items:center;gap:5px;font-size:11px!important;background:none;border:0;color:var(--site-green);padding:8px 0 0}
+.picker-parcel-label{pointer-events:none;display:block;font-size:10px;font-weight:600;color:#3f5743;text-shadow:0 0 3px white,0 0 3px white;background:#ffffffe0;border-radius:3px;padding:1px 3px}
 .picker-map-canvas{position:absolute;inset:0}
 .picker-map-hint{position:absolute;top:24px;left:24px;z-index:2;background:rgba(255,255,255,.96);border:1px solid #dce4da;border-radius:8px;padding:11px 14px;font-size:11px;color:#506b5b;box-shadow:0 3px 14px #182b1810;pointer-events:none;max-width:calc(100% - 100px)}
 .picker-map-controls{position:absolute;right:22px;top:23px;z-index:2;display:flex;flex-direction:column;gap:1px;background:#dce3db;border:1px solid #d8dfd5;border-radius:9px;overflow:hidden;box-shadow:0 3px 14px #182b1810}
@@ -99,7 +121,7 @@
 .site-brand{font-size:14px}
 .site-header nav{font-size:10px;gap:7px}
 .site-header nav i,.site-header nav span:last-child,.site-header-help{display:none}
-.picker-grid{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto 340px auto;min-height:0}
+.picker-grid{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;min-height:0}
 .picker-search{grid-column:1;grid-row:1;padding:25px 22px 21px}
 .picker-search h1{font-size:29px}
 .picker-search h1 br{display:none}
@@ -108,6 +130,8 @@
 .picker-desktop-break{display:none}
 .picker-search-note{margin-bottom:0}
 .picker-map{grid-column:1;grid-row:2;min-height:0;border-left:0;border-block:1px solid var(--site-border)}
+.picker-map-surface{min-height:340px;flex:none}
+.picker-context{padding:14px 18px}
 .picker-map-hint{top:13px;left:13px;font-size:10px;padding:9px;max-width:calc(100% - 80px)}
 .picker-map-controls{right:13px;top:13px}
 .picker-map-controls button{width:34px;height:34px}
