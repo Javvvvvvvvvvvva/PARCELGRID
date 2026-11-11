@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { ConstructionQuoteCostComparison } from "@/components/planning/ConstructionQuoteCostComparison";
 import { PlanningConstructionQuotePanel } from "@/components/planning/PlanningConstructionQuotePanel";
+import { ConstructionQuoteAdoptionReview } from "@/components/planning/ConstructionQuoteAdoptionReview";
 import { constructionQuoteBasis } from "@/lib/planning/construction-quote";
 import * as comparisonModule from "@/lib/planning/construction-quote-cost-comparison";
 import { DEFAULT_DWELLING_PROGRAM } from "@/lib/planning/dwelling-program";
@@ -179,6 +180,18 @@ describe("explicit current review comparison", () => {
     return found!;
   }
   function source(value: string) { field("견적 문서 참조").props.onChange!({ target: { value } }); return draw(); }
+  function adoption() {
+    const node = elements(tree).find(element => element.type === ConstructionQuoteAdoptionReview);
+    expect(node).toBeDefined();
+    return node!.props as React.ComponentProps<typeof ConstructionQuoteAdoptionReview>;
+  }
+  function reordered<T>(value: T): T {
+    if (Array.isArray(value)) return value.map(reordered) as T;
+    if (value && typeof value === "object") return Object.fromEntries(
+      Object.entries(value).reverse().map(([key, item]) => [key, reordered(item)]),
+    ) as T;
+    return value;
+  }
   function changeCost(kind: "materials" | "dwelling" | "quantity") {
     if (kind === "materials") current = { ...current, materials: { ...createDefaultPlanningMaterials(),
       primaryFacadeMaterial: "brick-veneer", baselineFacadeUnitCostPerSqmWon: 100_000, selectedFacadeUnitCostPerSqmWon: 90_000 } };
@@ -214,6 +227,36 @@ describe("explicit current review comparison", () => {
     expect(evaluate).toHaveBeenCalledOnce();
     expect(props.onChange).not.toHaveBeenCalled();
     expect(current).toEqual(before);
+  });
+
+  it("accepts a JSONB-reordered saved quote after schema parsing without another save", () => {
+    current = { ...current, constructionQuote: reordered(current.constructionQuote) };
+    props.scenario = current; editor.slots = [];
+    draw(); click("대사 실행");
+    expect(adoption().readWritableCurrent).toBeDefined();
+    expect(adoption().readWritableCurrent!()).toBe(current);
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reviewed quote writable when only persisted object key order changes", () => {
+    click("대사 실행");
+    const read = adoption().readWritableCurrent!;
+    current = { ...current, constructionQuote: reordered(current.constructionQuote) };
+    expect(read()).toBe(current);
+    props.scenario = current;
+    expect(draw()).toContain(band);
+    expect(button("견적 증빙 저장").props.disabled).toBe(true);
+  });
+
+  it.each(["amount", "source", "row-order"])("still rejects a concurrent quote %s change before adoption", change => {
+    click("대사 실행");
+    const read = adoption().readWritableCurrent!;
+    current = structuredClone(current);
+    if (change === "amount") current.constructionQuote!.statedTotalWon! += 1;
+    if (change === "source") current.constructionQuote!.lines[0].sourceLocator += " changed";
+    if (change === "row-order") current.constructionQuote!.lines.reverse();
+    expect(read).toThrow(/저장한 뒤 다시 대사/);
+    expect(props.onChange).not.toHaveBeenCalled();
   });
 
   it.each(["materials", "dwelling", "quantity"] as const)("invalidates a comparison after %s costs change", kind => {

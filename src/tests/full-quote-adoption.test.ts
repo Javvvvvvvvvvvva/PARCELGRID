@@ -65,6 +65,21 @@ describe("explicit full quote adoption", () => {
     expect(validateFullQuoteCostContract(f.adopted.fullQuoteAdoption).totalWon).toBe(f.quote.statedTotalWon);
     expect(() => assessFullQuoteAdoption(f.adopted, f.inputs, f.geometry, "2026-12-01")).toThrow();
   });
+  it("replays the original unrounded road snapshot but rejects a changed road with the same geometry hash", () => {
+    const f = fullQuoteAdoptionFixture();
+    const historical = structuredClone(f.geometry);
+    historical.roads = [{ name: "Synthetic legacy road", source: "VWorld road centerline",
+      points: [{ x: -24.00000000052653, z: 14.99999999962398 }, { x: 24.00000000052653, z: 14.99999999962398 }] }];
+    const draft = { ...createQuoteAdoptionReviewDraft(f.scenario, f.inputs, historical),
+      checkedOn: f.draft.checkedOn, scopes: f.draft.scopes };
+    const adopted = { ...f.scenario, ...applyFullQuoteAdoption(f.scenario, f.inputs, historical, draft, draft.checkedOn) };
+    const stored = JSON.parse(JSON.stringify({ adopted, historical }));
+    expect(assessFullQuoteAdoption(stored.adopted, f.inputs, stored.historical, draft.checkedOn)?.totalWon)
+      .toBe(adopted.fullQuoteAdoption!.totalWon);
+    stored.historical.roads[0].points[0].x += 0.01;
+    expect(stored.historical.geometryHash).toBe(historical.geometryHash);
+    expect(() => assessFullQuoteAdoption(stored.adopted, f.inputs, stored.historical, draft.checkedOn)).toThrow(/기준/);
+  });
   it("blocks locked edits at both action and store patch layers", () => {
     const f = fullQuoteAdoptionFixture();
     f.adopted.geometrySource = { mode: "engine-generated", exactGeometryAvailable: true, locked: true };

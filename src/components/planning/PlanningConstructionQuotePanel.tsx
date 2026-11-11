@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Download, ListChecks, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { clientSession } from "@/lib/auth/client-session";
+import { canonicalProjectWorkspaceJson } from "@/lib/workspace/project-workspace";
 import {
   assessConstructionQuote, constructionQuoteBasis, constructionQuoteSchema, createConstructionQuoteDraft,
   MAX_QUOTE_ALLOCATIONS, QUOTE_SCOPE_IDS, QUOTE_SCOPE_LABELS, saveConstructionQuote,
@@ -48,7 +49,8 @@ const formatNumber = (value: number | null, signed = false) => value === null ||
 const formatMoney = (value: number | null, signed = false) => value === null ? "미확정" : `${formatNumber(value, signed)} 원`;
 const errorText = (error: unknown) => error instanceof Error ? error.message : "견적 증빙을 처리하지 못했습니다.";
 function serialized(value: unknown): string | null {
-  try { return JSON.stringify(value ?? null); } catch { return null; }
+  // PostgreSQL JSONB may reorder object keys; array order and source values still matter.
+  try { return canonicalProjectWorkspaceJson(value ?? null); } catch { return null; }
 }
 function comparisonCostKey(scenario: Pick<PlanningScenario, "materials" | "dwellingProgram" | "quantityCost">): string | null {
   return serialized({ materials: scenario.materials, dwellingProgram: scenario.dwellingProgram, quantityCost: scenario.quantityCost });

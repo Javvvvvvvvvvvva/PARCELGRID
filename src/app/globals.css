@@ -794,7 +794,7 @@ html, body {
   }
   .rpt-page tr { break-inside: avoid; }
   .rpt-sec-h { break-after: avoid; }
-  .rpt-ov, .rpt-ov-item, .rpt-two-col, .rpt-reconciliation, .rpt-stage-grid { break-inside: avoid; }
+  .rpt-reco, .rpt-ov, .rpt-ov-item, .rpt-two-col, .rpt-reconciliation, .rpt-stage-grid { break-inside: avoid; }
   .rpt-actions { display: none; }
   .ui-topbar, .ui-workrail, nav, aside { display: none !important; }
 }

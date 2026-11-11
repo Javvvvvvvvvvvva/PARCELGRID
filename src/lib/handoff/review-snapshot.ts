@@ -7,6 +7,7 @@ import type {
 } from "@/lib/finance/price-verification";
 import { planningGeometryInputBasis, type PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import type { PlanningScenario } from "@/lib/planning/types";
+import { fullQuoteCostContractsMatch } from "@/lib/planning/full-quote-cost-contract";
 import { PROJECT_CALCULATION_VERSION, type ProjectComputed } from "@/lib/services/compute-project";
 import { buildIntegratedVerification, type IntegratedVerificationReport } from "@/lib/handoff/integrated-verification";
 
@@ -345,6 +346,9 @@ export function validateReviewSnapshotAlignment(
     errors.push("사업성 스냅샷과 대표 Geometry의 계획안 버전이 다릅니다.");
   }
   const contract = snapshot.data.scenarios.find(s => s.id === snapshot.representativeScenarioId)?._raw.program.areaContract;
+  if (!fullQuoteCostContractsMatch(currentScenario?.fullQuoteAdoption, contract?.fullQuoteCost)) {
+    errors.push("전체 견적 채택·해제 또는 포함 범위가 저장된 사업비와 다릅니다. 사업성을 다시 계산하고 저장하세요.");
+  }
   const facade = contract?.facadeCost;
   if (facade && (facade.version !== FACADE_COST_VERSION || facade.quantities.version !== FACADE_QUANTITY_VERSION ||
     (facade.quantities.geometryHash && facade.quantities.geometryHash !== geometry.geometryHash) ||

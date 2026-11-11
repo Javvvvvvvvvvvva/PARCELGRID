@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { validateJsonStructure } from "@/lib/http/bounded-json";
-import { constructionQuoteSchema } from "./construction-quote";
+import { constructionQuoteSchema, quoteTotalsMatchWithinRoundoff, MAX_CONSTRUCTION_QUOTE_AMOUNT_WON } from "./construction-quote";
 import { evaluateConstructionQuoteCostComparison } from "./construction-quote-cost-comparison";
 import { PLANNING_GEOMETRY_VERSION, planningGeometryInputBasis, type PlanningGeometrySnapshot } from "./planning-geometry";
 import { quantityCostInputsSchema, type QuantityCostInputs } from "./quantity-cost-contract";
@@ -117,6 +117,13 @@ export function evaluateQuoteAdoptionReview(scenario: PlanningScenario, inputs: 
     if (comparison.status !== "ready") {
       for (const message of comparison.issues) issue(comparison.status === "absent" ? "missing" : comparison.status, message);
       if (!comparison.issues.length) issue("missing", "전체 견적과 현재 원가의 대사가 필요합니다.");
+    }
+    if (comparison.status === "ready" && !quoteTotalsMatchWithinRoundoff(quote.statedTotalWon, comparison.quoteConstructionCostWon)) {
+      issue("conflict", "사업비 채택에는 문서 합계와 공종 원장의 정확한 합계가 필요합니다. 반올림·조정 금액은 원문에서 확인해야 합니다.");
+    }
+    if ((comparison.quoteConstructionCostWon ?? 0) > MAX_CONSTRUCTION_QUOTE_AMOUNT_WON ||
+        (comparison.currentConstructionCostWon ?? 0) > MAX_CONSTRUCTION_QUOTE_AMOUNT_WON) {
+      issue("conflict", "견적 또는 교체 대상 공사비가 사업비 채택 금액 한도를 초과했습니다.");
     }
     if (result.status === "ready") {
       if (comparison.quoteConstructionCostWon === null || comparison.quoteConstructionCostWon <= 0 ||

@@ -177,8 +177,9 @@ function lineToLocalMeters(
     const [originLng, originLat] = origin;
     const longitudeScale = Math.cos((originLat * Math.PI) / 180);
     return {
-      x: (lng - originLng) * 111_000 * longitudeScale,
-      z: -(lat - originLat) * 111_000,
+      // Match geometry identity precision across browser/server trig implementations.
+      x: round((lng - originLng) * 111_000 * longitudeScale),
+      z: round(-(lat - originLat) * 111_000),
     };
   });
 }

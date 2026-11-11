@@ -12,6 +12,7 @@ import { assessRepresentativeCheckReadiness } from "@/lib/planning/representativ
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { Parcel } from "@/lib/finance/types";
 import { analysisReferenceIsCurrent } from "@/lib/planning/analysis-reference-contract";
+import { fullQuoteCostContractsMatch } from "@/lib/planning/full-quote-cost-contract";
 
 export type Stage3BlockCode =
   | "missing-representative"
@@ -170,6 +171,7 @@ export function resolveStage3DashboardContext(
   const geometryProgramArea = geometry.building?.totalProgramAreaSqm;
   const geometryHash = areaContract.geometrySource?.geometryHash;
   const staleContract =
+    !fullQuoteCostContractsMatch(planningScenario.fullQuoteAdoption, areaContract.fullQuoteCost) ||
     areaContract.schemaVersion !== FINANCIAL_GEOMETRY_CONTRACT_VERSION ||
     areaContract.revenueProjection == null ||
     areaContract.revenueProjection?.modelVersion !==
@@ -190,7 +192,7 @@ export function resolveStage3DashboardContext(
     return blocked(
       "stale-finance-contract",
       "대표안과 금융 면적 계약이 일치하지 않습니다",
-      "계획안 버전·Geometry Hash·공사면적·수익 풀 중 하나가 현재 대표안과 다릅니다. 숫자를 표시하지 않고 재확정을 요청합니다."
+      "계획안 버전·Geometry Hash·공사면적·수익 풀·전체 견적 채택 중 하나가 현재 대표안과 다릅니다. 숫자를 표시하지 않고 재확정을 요청합니다."
     );
   }
 

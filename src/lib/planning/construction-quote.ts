@@ -10,6 +10,7 @@ import type { PlanningScenario } from "./types";
 export const CONSTRUCTION_QUOTE_VERSION = "construction-quote-2026.1" as const;
 export const CONSTRUCTION_SCOPE_LEDGER_VERSION = "construction-scope-ledger-2026.1" as const;
 export const MAX_QUOTE_ALLOCATIONS = 256;
+export const MAX_CONSTRUCTION_QUOTE_AMOUNT_WON = 1e13;
 export const QUOTE_SCOPE_IDS = ["groundworks", "structure", "envelope", "roof", "common", "mechanical", "electrical",
   "fire", "elevator", "siteworks", ...QUANTITY_ITEM_IDS] as const;
 export const QUOTE_SCOPE_LABELS: Record<typeof QUOTE_SCOPE_IDS[number], string> = {
@@ -19,7 +20,7 @@ export const QUOTE_SCOPE_LABELS: Record<typeof QUOTE_SCOPE_IDS[number], string> 
   entryDoorCount: "세대 현관문", dryFloorAreaSqm: "세대 건식 바닥", wetFloorAreaSqm: "욕실 바닥 방수·마감",
   kitchenCount: "주방기구·연결설비", bathroomCount: "욕실기구·연결설비",
 };
-const money = z.number().finite().min(0).max(1e13);
+const money = z.number().finite().min(0).max(MAX_CONSTRUCTION_QUOTE_AMOUNT_WON);
 const text = z.string().max(2000);
 const id = z.string().trim().min(1).max(100);
 const vat = z.enum(["unknown", "included", "excluded", "exempt"]);
@@ -46,6 +47,14 @@ export const constructionQuoteSchema = z.object({
 }).strict();
 export type ConstructionQuote = z.infer<typeof constructionQuoteSchema>;
 export type ConstructionQuoteLine = ConstructionQuote["lines"][number];
+
+/** Binary number serialization noise only, not the quote review's one-won allowance. */
+export function quoteTotalsMatchWithinRoundoff(left: number | null, right: number | null): boolean {
+  if (left === null || right === null || !Number.isFinite(left) || !Number.isFinite(right)) return false;
+  const tolerance = new Decimal(Math.max(Math.abs(left), Math.abs(right))).times(Number.EPSILON).times(4);
+  return new Decimal(left).minus(right).abs().lte(tolerance);
+}
+
 export interface ConstructionScopeLedger {
   version: typeof CONSTRUCTION_SCOPE_LEDGER_VERSION;
   status: "reconciled" | "incomplete" | "conflict";

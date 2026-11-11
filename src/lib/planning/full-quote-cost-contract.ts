@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { buildConstructionScopeLedger, constructionQuoteSchema } from "./construction-quote";
+import { buildConstructionScopeLedger, constructionQuoteSchema, quoteTotalsMatchWithinRoundoff, MAX_CONSTRUCTION_QUOTE_AMOUNT_WON } from "./construction-quote";
 import { quoteAdoptionReviewSchema } from "./construction-quote-adoption-review";
 import { quantityCostInputsSchema } from "./quantity-cost-contract";
 
@@ -9,8 +9,8 @@ export const fullQuoteCostContractSchema = z.object({
   sourceKey: z.string().regex(/^PG-QUOTE-REVIEW-[a-f0-9]{64}$/),
   scenarioId: z.string().min(1).max(200), scenarioVersion: z.number().int().min(1),
   inputs: quantityCostInputsSchema, adoptedOn: z.iso.date(),
-  totalWon: z.number().finite().positive().max(1e13),
-  replacedConstructionCostWon: z.number().finite().min(0).max(1e13),
+  totalWon: z.number().finite().positive().max(MAX_CONSTRUCTION_QUOTE_AMOUNT_WON),
+  replacedConstructionCostWon: z.number().finite().min(0).max(MAX_CONSTRUCTION_QUOTE_AMOUNT_WON),
   quote: constructionQuoteSchema, review: quoteAdoptionReviewSchema,
 }).strict();
 export type FullQuoteCostContract = z.infer<typeof fullQuoteCostContractSchema>;
@@ -30,8 +30,17 @@ export function validateFullQuoteCostContract(raw: unknown): FullQuoteCostContra
       inputs.constructionCostPerSqmWon !== quote.inputs.constructionCostPerSqmWon ||
       inputs.basementCostMultiplier !== quote.inputs.basementCostMultiplier ||
       ledger.status !== "reconciled" || ledger.totalAmountWon !== contract.totalWon ||
-      quote.statedTotalWon !== contract.totalWon) {
+      !quoteTotalsMatchWithinRoundoff(quote.statedTotalWon, contract.totalWon)) {
     throw new Error("전체 견적 채택의 금액·포함 범위·유효일·원가 기준이 일치하지 않습니다.");
   }
   return contract;
+}
+
+/** Compare every validated field in schema order, independent of JSONB object key order. */
+export function fullQuoteCostContractsMatch(current: unknown, saved: unknown): boolean {
+  if (current === undefined && saved === undefined) return true;
+  if (current === undefined || saved === undefined) return false;
+  try {
+    return JSON.stringify(validateFullQuoteCostContract(current)) === JSON.stringify(validateFullQuoteCostContract(saved));
+  } catch { return false; }
 }

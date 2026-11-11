@@ -1,5 +1,19 @@
 # Full Quote Adoption Preflight
 
+## Actual Runtime Follow-up (2026-11-11)
+
+The subsequent real PostgreSQL and production-browser checks found and fixed
+JSONB object-key comparison, binary-roundoff total comparison, cross-runtime
+road serialization and stale pre-adoption business snapshot reuse. Full
+verification passed 3,364 tests; the two ordinary-suite opt-in DB skips passed
+separately in initial/restart/restore phases, six executions total. Actual
+production PC/mobile import, adoption, save, legacy blocking, sealing, report,
+removal and logout-race flows passed. The final print-only build retains the
+summary together on page 12 of both 22-page PDFs. Preserved harness failures,
+corrected PDF extraction evidence and the exact verification boundaries are
+documented in `FULL-QUOTE-POSTGRES-2026.1.md`. No live deployment, original quote,
+professional approval or external acceptance is certified by these tests.
+
 ## Financial Adoption Follow-up (2026-11-11)
 
 The read-only preflight remains distinct from the newly implemented explicit adoption action. The historical sections below describe v228. The current calculation is v229 and integrated verification is 2026.18.

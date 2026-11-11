@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlanningGeometry,
+  planningGeometryContentHash,
   planningGeometryInputBasis,
   planningRingCentroid,
   planningRingToLocalMeters,
@@ -91,6 +92,34 @@ function build(
 }
 
 describe("Planning Geometry Contract", () => {
+  it("serializes road coordinates at the existing geometry identity precision", () => {
+    const boundary = squareBoundary(24);
+    const origin = planningRingCentroid(boundary);
+    const longitudeScale = 111_000 * Math.cos(origin[1] * Math.PI / 180);
+    const points: [number, number][] = [
+      [origin[0] - 24 / longitudeScale, origin[1] - 15 / 111_000],
+      [origin[0] + 24 / longitudeScale, origin[1] - 15 / 111_000],
+    ];
+    const input = { projectId: "parcel-1", scenario: scenarioWithArea(100), boundary,
+      lotAreaSqm: 576, zoning: "일반상업지역", roads: [{ name: "Synthetic road", points }],
+      setback: { road: 0, side: 0, rear: 0 } };
+    const snapshot = buildPlanningGeometry(input).snapshot;
+    expect(snapshot.roads[0].points).toEqual([{ x: -24, z: 15 }, { x: 24, z: 15 }]);
+    const unrounded = points.map(([lng, lat]) => ({ x: (lng - origin[0]) * longitudeScale,
+      z: -(lat - origin[1]) * 111_000 }));
+    expect(snapshot.geometryHash).toBe(planningGeometryContentHash({
+      projectId: snapshot.projectId, scenarioId: snapshot.scenarioId, origin,
+      polygons: snapshot.parcel.polygons!, parcelAvailable: true, officialAreaSqm: 576,
+      zoning: input.zoning, floors: snapshot.building.floors,
+      roads: [{ name: "Synthetic road", points: unrounded }],
+    }));
+    const moved = structuredClone(input);
+    moved.roads[0].points[0][0] += 0.01 / longitudeScale;
+    const changed = buildPlanningGeometry(moved).snapshot;
+    expect(changed.roads[0].points[0].x).toBe(-23.99);
+    expect(changed.geometryHash).not.toBe(snapshot.geometryHash);
+  });
+
   it("preserves the original input basis across canonical workspace/JSONB key ordering", () => {
     const scenario = scenarioWithArea(100);
     Object.assign(scenario.placement, { rotationDeg: 7, offsetXM: 1, offsetZM: -2, roadSetbackM: 3, northSetbackM: 4 });
