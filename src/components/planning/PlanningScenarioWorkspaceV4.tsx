@@ -26,6 +26,7 @@ import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-ge
 import { PlanningLayoutVerification } from "./PlanningLayoutVerification";
 import { InteriorDrawingExport } from "./InteriorDrawingExport";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
+import { findProjectPlanningScenario } from "@/lib/planning/project-scope";
 import {
   calculatePlanningScenario,
   planningEconomicsAssumptionsFromLegacy,
@@ -590,7 +591,7 @@ export function PlanningScenarioWorkspaceV4({
   const [newPlanName, setNewPlanName] = useState("새 계획안");
   const [newPlanMode, setNewPlanMode] = useState<NewPlanMode>("blank");
   const [editorMode, setEditorMode] = useState<PlanningEditorMode>("guided");
-  const initializedRef = useRef(false);
+  const initializedRef = useRef<string | null>(null);
 
   const parcel = data?.parcel;
   const projectScenarios = useMemo(
@@ -600,8 +601,7 @@ export function PlanningScenarioWorkspaceV4({
   );
 
   useEffect(() => {
-    if (!parcel || initializedRef.current || projectScenarios.length > 0) return;
-    initializedRef.current = true;
+    if (!parcel || parcel.id !== projectId || initializedRef.current === projectId || projectScenarios.length > 0) return;
     addPlanningScenario(
       createStarterPlanningScenario(
         scenarioSeed(parcel),
@@ -609,6 +609,7 @@ export function PlanningScenarioWorkspaceV4({
         projectId
       )
     );
+    initializedRef.current = projectId;
   }, [
     parcel,
     projectScenarios.length,
@@ -780,9 +781,7 @@ export function PlanningScenarioWorkspaceV4({
     }`;
     const copyId = duplicatePlanningScenario(selectedScenario.id, copyName);
     if (!copyId) return;
-    const copy = useProjectStore
-      .getState()
-      .planningScenarios.find((scenario) => scenario.id === copyId);
+    const copy = findProjectPlanningScenario(useProjectStore.getState().planningScenarios, copyId, projectId);
     if (!copy) return;
     const alternative = buildParkingAlternativePatch(
       copy,
@@ -1288,7 +1287,7 @@ export function PlanningScenarioWorkspaceV4({
                   geometry={selectedGeometry}
                   parking={selectedParkingGeometry}
                   calculationContext={calculationContext}
-                  getCurrentScenario={() => useProjectStore.getState().planningScenarios.find(s => s.id === selectedScenario.id)}
+                  getCurrentScenario={() => findProjectPlanningScenario(useProjectStore.getState().planningScenarios, selectedScenario.id, projectId)}
                   onChange={patch => editPlanningScenarioDraft(selectedScenario.id, patch)}
                 />
                 <InteriorDrawingExport projectId={projectId} scenarioId={selectedScenario.id} />

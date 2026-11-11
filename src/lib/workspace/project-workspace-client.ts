@@ -4,6 +4,7 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { buildExpertTaxContractKey } from "@/lib/finance/after-tax-ledger";
 import { buildRevenuePricingDraftKey } from "@/lib/finance/revenue-contract";
+import { buildLeaseRollDraftKey } from "@/lib/finance/lease-roll-contract";
 import {
   PROJECT_WORKSPACE_VERSION,
   type ProjectWorkspacePayload,
@@ -59,6 +60,9 @@ export function captureProjectWorkspace(
     draftAcquisitionPrice: project.draftAcquisitionPrices[projectId] ?? null,
     financialSources: project.financialSources[projectId] ?? {},
     revenuePricingDrafts: Object.values(project.revenuePricingDrafts).filter(
+      (draft) => draft.projectId === projectId,
+    ),
+    leaseRollDrafts: Object.values(project.leaseRollDrafts).filter(
       (draft) => draft.projectId === projectId,
     ),
     expertTaxContracts: Object.values(project.expertTaxContracts).filter(
@@ -120,6 +124,16 @@ export function applyProjectWorkspace(payload: ProjectWorkspacePayload): void {
       buildRevenuePricingDraftKey(draft.projectId, draft.scenarioId)
     ] = draft;
   }
+  const leaseRollDrafts = Object.fromEntries(
+    Object.entries(project.leaseRollDrafts).filter(
+      ([, draft]) => draft.projectId !== projectId,
+    ),
+  );
+  for (const draft of payload.leaseRollDrafts ?? []) {
+    leaseRollDrafts[
+      buildLeaseRollDraftKey(draft.projectId, draft.scenarioId)
+    ] = draft;
+  }
   const stage3FeasibilitySnapshots = {
     ...project.stage3FeasibilitySnapshots,
   };
@@ -156,6 +170,7 @@ export function applyProjectWorkspace(payload: ProjectWorkspacePayload): void {
       [projectId]: payload.financialSources,
     },
     revenuePricingDrafts,
+    leaseRollDrafts,
     expertTaxContracts,
     stage3FeasibilitySnapshots,
     activeScenarioId: null,

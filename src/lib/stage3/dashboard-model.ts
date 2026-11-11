@@ -13,6 +13,7 @@ import type { PlanningScenario } from "@/lib/planning/types";
 import type { Parcel } from "@/lib/finance/types";
 import { analysisReferenceIsCurrent } from "@/lib/planning/analysis-reference-contract";
 import { fullQuoteCostContractsMatch } from "@/lib/planning/full-quote-cost-contract";
+import { findProjectPlanningScenario } from "@/lib/planning/project-scope";
 
 export type Stage3BlockCode =
   | "missing-representative"
@@ -74,25 +75,17 @@ export function resolveStage3DashboardContext(
     );
   }
 
-  const planningScenario = input.planningScenarios.find(
-    (scenario) => scenario.id === representativeId
-  );
+  const planningScenario = findProjectPlanningScenario(input.planningScenarios, representativeId, input.projectId);
   if (!planningScenario) {
+    if (input.planningScenarios.some(scenario => scenario.id === representativeId && scenario.projectId && scenario.projectId !== input.projectId) &&
+        !input.planningScenarios.some(scenario => scenario.id === representativeId && (!scenario.projectId || scenario.projectId === input.projectId))) {
+      return blocked("project-mismatch", "다른 프로젝트의 계획안입니다",
+        "대표 계획안의 프로젝트 ID가 현재 프로젝트와 다릅니다. 숫자를 표시하지 않고 분석을 차단했습니다.");
+    }
     return blocked(
       "missing-planning-scenario",
       "대표 계획안을 찾을 수 없습니다",
       "저장된 대표 계획안과 프로젝트 상태가 일치하지 않습니다. 계획 스튜디오에서 대표안을 다시 확정하세요."
-    );
-  }
-
-  if (
-    planningScenario.projectId &&
-    planningScenario.projectId !== input.projectId
-  ) {
-    return blocked(
-      "project-mismatch",
-      "다른 프로젝트의 계획안입니다",
-      "대표 계획안의 프로젝트 ID가 현재 프로젝트와 다릅니다. 숫자를 표시하지 않고 분석을 차단했습니다."
     );
   }
 

@@ -1,5 +1,6 @@
 "use client";
 import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
+import { LeaseRollPanel } from "@/components/finance/LeaseRollPanel";
 
 import { sessionFetch as fetch } from "@/lib/auth/client-session";
 
@@ -320,9 +321,9 @@ export default function DashboardPage({
 
   const projectPlanningScenarios = useMemo(
     () => planningScenarios.filter(
-      (scenario) => scenario.projectId === projectId || scenario.id === representativeScenarioId
+      (scenario) => !scenario.projectId || scenario.projectId === projectId
     ),
-    [planningScenarios, projectId, representativeScenarioId]
+    [planningScenarios, projectId]
   );
 
   const context = useMemo(
@@ -1084,6 +1085,10 @@ export default function DashboardPage({
         </section>
       )}
 
+      {hasLeaseRevenue && scenario.program.areaContract && (
+        <LeaseRollPanel projectId={projectId} scenario={scenario} baseline={result.hold} />
+      )}
+
       <ExpertTaxWorkspace
         key={`${scenario.id}:${activeTaxStrategy}`}
         projectId={projectId}
@@ -1545,6 +1550,7 @@ export default function DashboardPage({
         :global(.revenue-pricing-group){border-bottom:1px solid var(--border-faint)}:global(.revenue-pricing-group>summary){padding:11px 0 7px;font-size:10px;font-weight:800;color:var(--fg-muted);cursor:pointer}:global(.revenue-pricing-list){display:grid;gap:6px;padding:2px 0 10px}:global(.revenue-price-row){border:1px solid var(--border-faint);border-radius:6px;background:var(--bg)}:global(.revenue-price-row>summary){display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;cursor:pointer;list-style:none}:global(.revenue-price-row>summary::-webkit-details-marker){display:none}:global(.revenue-price-row>summary>span),:global(.revenue-price-row>summary>strong){display:grid;gap:2px}:global(.revenue-price-row>summary b){font-size:10px}:global(.revenue-price-row>summary small){color:var(--fg-subtle);font-size:8px;font-weight:500}:global(.revenue-price-row>summary>strong){text-align:right;font-family:var(--font-mono);font-size:10.5px}:global(.revenue-base-input){display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 8px;padding:8px 0;border-top:1px solid var(--border-faint);color:var(--fg-muted);font-size:9px}:global(.revenue-base-input>span:last-child){display:flex;align-items:center;gap:4px}:global(.revenue-base-input input){width:84px;height:26px;padding:0 5px;border:1px solid var(--border);border-radius:5px;background:var(--bg-elev);color:var(--fg);text-align:right;font:inherit;font-weight:700}:global(.revenue-base-input input:disabled){cursor:not-allowed;opacity:.58}:global(.revenue-base-input small),:global(.revenue-adjustment-grid small){color:var(--fg-faint);font-size:8px}:global(.revenue-adjustment-grid){display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;padding:0 8px 8px}:global(.revenue-adjustment-grid label){display:grid;gap:3px;min-width:0;color:var(--fg-subtle);font-size:8px}:global(.revenue-adjustment-grid label>span:last-child){display:flex;align-items:center;gap:2px}:global(.revenue-adjustment-grid input){width:100%;min-width:0;height:24px;padding:0 3px;border:1px solid var(--border);border-radius:4px;background:var(--bg-elev);color:var(--fg);text-align:right;font:inherit;font-size:8.5px}:global(.revenue-price-source){display:block;overflow:hidden;margin:0 8px;padding:0 0 8px;color:var(--fg-faint);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
         @media(max-width:1180px){.workspace-grid{grid-template-columns:1fr}.stage3-sidebar{position:static;grid-template-columns:1fr 1fr}.next-actions{grid-column:1/-1}.decision-grid{grid-template-columns:repeat(2,1fr)}.hold-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.hold-metrics>:global(.hold-metric:nth-child(4)){border-left:0}.hold-metrics>:global(.hold-metric:nth-child(n+4)){border-top:1px solid var(--border-faint)}}
         @media(max-width:1180px){.workspace-grid{grid-template-columns:minmax(0,1fr)}.stage3-sidebar{min-width:0}}
+        .stage3-sidebar>section{min-width:0}
         @media(max-width:760px){.stage3-page{padding:18px 14px}.stage3-header{display:block}.header-actions{margin-top:14px}.source-lock,.price-ladder,.metric-grid,.split-section,.evidence-summary,.stage3-sidebar,.funding-banner,.takeout-banner,.hold-heading{grid-template-columns:1fr}.source-main{border-right:0}.decision-grid{grid-template-columns:1fr}.return-strip,.hold-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.hold-metrics>:global(.hold-metric:nth-child(odd)){border-left:0}.hold-metrics>:global(.hold-metric:nth-child(n+3)){border-top:1px solid var(--border-faint)}.case-row{grid-template-columns:1fr}.case-row strong,.case-row em{text-align:left}.method-strip button{margin-left:0}}
       `}</style>
     </div>

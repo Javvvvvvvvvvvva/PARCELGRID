@@ -139,6 +139,23 @@ const finance = {
 } as ScenarioVM;
 
 describe("Stage 3 dashboard source contract", () => {
+  it("resolves the active project even when a foreign plan has the same ID first", () => {
+    const result = resolveStage3DashboardContext({ projectId: "PROJECT-1", representativeScenarioId: "PLAN-1",
+      representativeGeometrySnapshot: geometry, planningScenarios: [{ ...planning, projectId: "FOREIGN", version: 99 }, planning],
+      financeScenarios: [finance] });
+    expect(result.ready).toBe(true);
+    if (result.ready) expect(result.planningScenario).toBe(planning);
+  });
+  it("blocks a foreign-only match without consuming its geometry or finance", () => {
+    expect(resolveStage3DashboardContext({ projectId: "PROJECT-1", representativeScenarioId: "PLAN-1",
+      representativeGeometrySnapshot: geometry, planningScenarios: [{ ...planning, projectId: "FOREIGN" }],
+      financeScenarios: [finance] })).toMatchObject({ ready: false, code: "project-mismatch" });
+  });
+  it("blocks ambiguous active and legacy IDs", () => {
+    expect(resolveStage3DashboardContext({ projectId: "PROJECT-1", representativeScenarioId: "PLAN-1",
+      representativeGeometrySnapshot: geometry, planningScenarios: [planning, { ...planning, projectId: undefined }],
+      financeScenarios: [finance] })).toMatchObject({ ready: false, code: "missing-planning-scenario" });
+  });
   it("blocks a stale geometry engine even if identifiers and previous pass flags match", () => {
     const stale = { ...geometry, version: "planning-geometry-v3" } as unknown as PlanningGeometrySnapshot;
     expect(resolveStage3DashboardContext({ projectId: "PROJECT-1", representativeScenarioId: "PLAN-1",

@@ -7,6 +7,7 @@ import { useProjectStore } from "@/lib/stores/project-store";
 import { interiorAutomationInputKey, type InteriorAutomationInput, type InteriorAutomationProgress, type InteriorAutomationResult } from "@/lib/planning/interior-automation";
 import { runInteriorAutomationApplyWorker, runInteriorAutomationWorker } from "@/lib/planning/interior-automation-worker";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
+import { findProjectPlanningScenario } from "@/lib/planning/project-scope";
 import type { PlanningScenario } from "@/lib/planning/types";
 import { interiorDoorSegment } from "@/lib/planning/interior-layout";
 import { pathDoorSegment, pathSpaceShape } from "@/lib/planning/interior-paths";
@@ -29,7 +30,7 @@ export function PlanningInteriorAutomation({ scenario, geometry, parking, onChan
   const existing = scenario.floorPrograms.filter(floor => floor.interiorLayout).length;
   function liveKey() {
     clientSession.assertActive();
-    const state = useProjectStore.getState(), live = state.planningScenarios.find(item => item.id === scenario.id);
+    const state = useProjectStore.getState(), live = findProjectPlanningScenario(state.planningScenarios, scenario.id, scenario.projectId);
     if (!state.data || state.data.parcel.id !== scenario.projectId || state.selectedPlanningScenarioId !== scenario.id || !live ||
         JSON.stringify(live) !== JSON.stringify(scenario)) throw new Error("선택한 계획이 변경됐습니다. 현재 입력으로 다시 생성하세요.");
     return JSON.stringify({ parcel: state.data.parcel, scenario: live, representative: state.representativePlanningScenarioId,

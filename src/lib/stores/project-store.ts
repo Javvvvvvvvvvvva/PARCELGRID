@@ -14,6 +14,11 @@ import { sessionLocalStorage } from "@/lib/auth/client-session";
 import type { AssumptionSet } from "@/lib/finance/types";
 import type { FinancialRevenuePoolKey } from "@/lib/finance/types";
 import {
+  buildLeaseRollDraftKey,
+  leaseRollDraftSchema,
+  type LeaseRollDraft,
+} from "@/lib/finance/lease-roll-contract";
+import {
   buildRevenuePricingDraftKey,
   REVENUE_PRICING_INPUT_VERSION,
   type RevenuePoolPricingDraft,
@@ -29,6 +34,7 @@ import type {
 } from "@/lib/finance/source-data-gate";
 import type { ProjectComputed } from "@/lib/services/compute-project";
 import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
+import { findProjectPlanningScenario, planningScenarioBelongsToProject } from "@/lib/planning/project-scope";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
@@ -129,6 +135,12 @@ interface ProjectStore {
     patch: RevenuePoolPricingDraft,
   ) => void;
   resetRevenuePricingDraft: (projectId: string, scenarioId: string) => void;
+
+  /** Draft-only lease inputs; saving never updates calculated project data. */
+  leaseRollDrafts: Record<string, LeaseRollDraft>;
+  /** Requires revision 1 on first save, then current + 1; rejects by throwing. */
+  saveLeaseRollDraft: (draft: LeaseRollDraft) => void;
+  removeLeaseRollDraft: (projectId: string, scenarioId: string) => void;
 
   /** 계획안·처분전략별 세무 전문가 입력과 납부·환급 일정. */
   expertTaxContracts: Record<string, ExpertTaxInputContract>;
@@ -338,6 +350,33 @@ export const useProjectStore = create<ProjectStore>()(
             return { revenuePricingDrafts: next };
           }),
 
+        leaseRollDrafts: {},
+        saveLeaseRollDraft: (draft) => {
+          const parsed = leaseRollDraftSchema.parse(draft);
+          set((state) => {
+            if (
+              state.data?.parcel.id !== parsed.projectId ||
+              !state.data.scenarios.some((scenario) => scenario.id === parsed.scenarioId)
+            ) {
+              throw new Error("임대차 초안은 현재 프로젝트의 계산 계획안에 속해야 합니다.");
+            }
+            const key = buildLeaseRollDraftKey(parsed.projectId, parsed.scenarioId);
+            const expectedRevision = (state.leaseRollDrafts[key]?.revision ?? 0) + 1;
+            if (parsed.revision !== expectedRevision) {
+              throw new Error(`임대차 초안 revision 충돌: 다음 저장 버전은 ${expectedRevision}입니다.`);
+            }
+            return {
+              leaseRollDrafts: { ...state.leaseRollDrafts, [key]: parsed },
+            };
+          });
+        },
+        removeLeaseRollDraft: (projectId, scenarioId) =>
+          set((state) => {
+            const next = { ...state.leaseRollDrafts };
+            delete next[buildLeaseRollDraftKey(projectId, scenarioId)];
+            return { leaseRollDrafts: next };
+          }),
+
         expertTaxContracts: {},
         setExpertTaxContract: (contract) =>
           set((state) => ({
@@ -387,17 +426,27 @@ export const useProjectStore = create<ProjectStore>()(
         geometryValidationError: null,
         setPlanningScenarios: (planningScenarios) =>
           set((state) => {
-            const representativeStillExists = planningScenarios.some(
+            const projectId = state.data?.parcel.id;
+            if (!projectId) return state;
+            const current = planningScenarios.filter(scenario => planningScenarioBelongsToProject(scenario, projectId))
+              .map(scenario => scenario.projectId ? scenario : { ...scenario, projectId });
+            const retained = new Set(current.map(scenario => scenario.id));
+            if (retained.size !== current.length) throw new Error("현재 프로젝트의 계획안 ID가 중복됩니다.");
+            const removed = new Set(state.planningScenarios.filter(scenario =>
+              planningScenarioBelongsToProject(scenario, projectId) && !retained.has(scenario.id)).map(scenario => scenario.id));
+            const representativeStillExists = current.some(
               (scenario) =>
                 scenario.id === state.representativePlanningScenarioId
             );
             return {
-              planningScenarios,
-              selectedPlanningScenarioId: planningScenarios.some(
+              planningScenarios: [...state.planningScenarios.filter(scenario => !planningScenarioBelongsToProject(scenario, projectId)), ...current],
+              leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
+                draft.projectId !== projectId || !removed.has(draft.scenarioId))),
+              selectedPlanningScenarioId: current.some(
                 (scenario) => scenario.id === state.selectedPlanningScenarioId
               )
                 ? state.selectedPlanningScenarioId
-                : planningScenarios[0]?.id ?? null,
+                : current[0]?.id ?? null,
               representativePlanningScenarioId: representativeStillExists
                 ? state.representativePlanningScenarioId
                 : null,
@@ -413,19 +462,27 @@ export const useProjectStore = create<ProjectStore>()(
             };
           }),
         addPlanningScenario: (scenario) => {
-          set((state) => ({
-            planningScenarios: [...state.planningScenarios, scenario],
-            selectedPlanningScenarioId: scenario.id,
-          }));
+          set((state) => {
+            const projectId = state.data?.parcel.id;
+            if (!projectId || !planningScenarioBelongsToProject(scenario, projectId)) throw new Error("현재 프로젝트에 속한 계획안만 추가할 수 있습니다.");
+            if (state.planningScenarios.some(value => value.id === scenario.id && planningScenarioBelongsToProject(value, projectId))) {
+              throw new Error("현재 프로젝트에 같은 ID의 계획안이 있습니다.");
+            }
+            return { planningScenarios: [...state.planningScenarios, { ...scenario, projectId }], selectedPlanningScenarioId: scenario.id };
+          });
           return scenario.id;
         },
         editPlanningScenarioDraft: (id, patch) =>
           set((state) => {
+            const projectId = state.data?.parcel.id;
+            const target = findProjectPlanningScenario(state.planningScenarios, id, projectId);
+            if (!target) return state;
+            if (patch.projectId !== undefined && patch.projectId !== projectId) throw new Error("계획안의 프로젝트를 편집으로 변경할 수 없습니다.");
             const invalidatesRepresentative =
               state.representativePlanningScenarioId === id;
             return {
               planningScenarios: state.planningScenarios.map((scenario) => {
-                if (scenario.id !== id) return scenario;
+                if (scenario !== target) return scenario;
                 const protectedPatch = protectLockedPlanningGeometryPatch(
                   scenario,
                   patch
@@ -442,6 +499,7 @@ export const useProjectStore = create<ProjectStore>()(
                   ...scenario,
                   ...protectedPatch,
                   id: scenario.id,
+                  projectId,
                   createdAt: scenario.createdAt,
                   version: scenario.version,
                   status: "draft",
@@ -460,14 +518,18 @@ export const useProjectStore = create<ProjectStore>()(
           }),
         updatePlanningScenario: (id, patch) =>
           set((state) => {
+            const projectId = state.data?.parcel.id;
+            const target = findProjectPlanningScenario(state.planningScenarios, id, projectId);
+            if (!target) return state;
+            if (patch.projectId !== undefined && patch.projectId !== projectId) throw new Error("계획안의 프로젝트를 편집으로 변경할 수 없습니다.");
             const invalidatesRepresentative =
               state.representativePlanningScenarioId === id;
             return {
               planningScenarios: state.planningScenarios.map((scenario) =>
-                scenario.id === id
+                scenario === target
                   ? touchPlanningScenario(
                       scenario,
-                      protectLockedPlanningGeometryPatch(scenario, patch)
+                      { ...protectLockedPlanningGeometryPatch(scenario, patch), projectId }
                     )
                   : scenario
               ),
@@ -480,16 +542,21 @@ export const useProjectStore = create<ProjectStore>()(
           }),
         removePlanningScenario: (id) =>
           set((state) => {
+            const projectId = state.data?.parcel.id;
+            const target = findProjectPlanningScenario(state.planningScenarios, id, projectId);
+            if (!target) return state;
             const planningScenarios = state.planningScenarios.filter(
-              (scenario) => scenario.id !== id
+              (scenario) => scenario !== target
             );
             const removedRepresentative =
               state.representativePlanningScenarioId === id;
             return {
               planningScenarios,
+              leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
+                draft.scenarioId !== id || draft.projectId !== projectId)),
               selectedPlanningScenarioId:
                 state.selectedPlanningScenarioId === id
-                  ? planningScenarios[0]?.id ?? null
+                  ? planningScenarios.find(scenario => planningScenarioBelongsToProject(scenario, projectId))?.id ?? null
                   : state.selectedPlanningScenarioId,
               representativePlanningScenarioId: removedRepresentative
                 ? null
@@ -508,11 +575,10 @@ export const useProjectStore = create<ProjectStore>()(
             };
           }),
         duplicatePlanningScenario: (id, name) => {
-          const source = get().planningScenarios.find(
-            (scenario) => scenario.id === id
-          );
+          const current = get(), projectId = current.data?.parcel.id;
+          const source = findProjectPlanningScenario(current.planningScenarios, id, projectId);
           if (!source) return null;
-          const copy = clonePlanningScenario(source, name);
+          const copy = { ...clonePlanningScenario(source, name), projectId };
           set((state) => ({
             planningScenarios: [...state.planningScenarios, copy],
             selectedPlanningScenarioId: copy.id,
@@ -520,7 +586,8 @@ export const useProjectStore = create<ProjectStore>()(
           return copy.id;
         },
         selectPlanningScenario: (selectedPlanningScenarioId) =>
-          set({ selectedPlanningScenarioId }),
+          set(state => selectedPlanningScenarioId === null || findProjectPlanningScenario(state.planningScenarios,
+            selectedPlanningScenarioId, state.data?.parcel.id) ? { selectedPlanningScenarioId } : state),
         setRepresentativePlanningScenarioId: (id, purpose = "verified-reference") => {
           if (id == null) {
             set({
@@ -533,10 +600,8 @@ export const useProjectStore = create<ProjectStore>()(
           }
 
           const state = get();
-          const scenario = state.planningScenarios.find(
-            (candidate) => candidate.id === id
-          );
           const parcel = state.data?.parcel;
+          const scenario = findProjectPlanningScenario(state.planningScenarios, id, parcel?.id);
           if (!scenario || !parcel) {
             set(
               representativeInvalidation(
@@ -609,12 +674,12 @@ export const useProjectStore = create<ProjectStore>()(
           }
           const nextPlanningScenarios = state.planningScenarios.map(
             (candidate) =>
-              candidate.id === id
-                ? applyPlanningScenarioCalculation(candidate, calculation)
+              candidate === scenario
+                ? applyPlanningScenarioCalculation({ ...candidate, projectId: parcel.id }, calculation)
                 : candidate
           );
           const calculatedScenario =
-            nextPlanningScenarios.find((candidate) => candidate.id === id) ??
+            findProjectPlanningScenario(nextPlanningScenarios, id, parcel.id) ??
             scenario;
 
           const geometry = buildPlanningGeometry({
@@ -709,15 +774,21 @@ export const useProjectStore = create<ProjectStore>()(
           return true;
         },
         clearPlanningScenarios: () =>
-          set({
-            planningScenarios: [],
+          set(state => {
+            const projectId = state.data?.parcel.id;
+            if (!projectId) return state;
+            const removed = new Set(state.planningScenarios.filter(scenario => planningScenarioBelongsToProject(scenario, projectId)).map(scenario => scenario.id));
+            return {
+            planningScenarios: state.planningScenarios.filter(scenario => !planningScenarioBelongsToProject(scenario, projectId)),
+            leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
+              draft.projectId !== projectId || !removed.has(draft.scenarioId))),
             selectedPlanningScenarioId: null,
             representativePlanningScenarioId: null,
             representativeGeometrySnapshot: null,
             representativeParcelBasisHash: null,
             geometryValidationError: null,
             activeScenarioId: null,
-          }),
+          }; }),
 
         activeScenarioId: null,
         setActiveScenarioId: (activeScenarioId) =>
@@ -741,6 +812,7 @@ export const useProjectStore = create<ProjectStore>()(
           draftAcquisitionPrices: state.draftAcquisitionPrices,
           financialSources: state.financialSources,
           revenuePricingDrafts: state.revenuePricingDrafts,
+          leaseRollDrafts: state.leaseRollDrafts,
           expertTaxContracts: state.expertTaxContracts,
           stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
         }),

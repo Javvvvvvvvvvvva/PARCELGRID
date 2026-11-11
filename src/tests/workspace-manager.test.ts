@@ -5,6 +5,7 @@ import { WorkspaceManager, useWorkspaceStatus } from "@/lib/workspace/manager";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { emptyWorkspace, documentFromRecord, importWorkspace } from "@/lib/workspace/document";
 import { createBlankPlanningScenario } from "@/lib/planning/scenario-utils";
+import { projectWorkspaceFixture } from "./helpers/project-workspace-fixture";
 const holder = vi.hoisted(() => ({ database: null as WorkspaceDatabase | null }));
 vi.mock("@/lib/workspace/database", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/workspace/database")>(), workspaceDatabase: () => holder.database! }));
 let manager: WorkspaceManager, db: WorkspaceDatabase, planId: string;
@@ -15,12 +16,22 @@ beforeEach(async () => {
   const plan = createBlankPlanningScenario({ projectId: document.projectId, name: "첫 계획" }); planId = plan.id;
   document.payload.planningScenarios = [plan]; document.payload.selectedScenarioId = plan.id;
   await db.save(document, null); manager = new WorkspaceManager(); await manager.open(document.projectId);
+  // The retained legacy manager loads plan inputs; the project shell supplies active parcel data before editing.
+  useProjectStore.getState().setData(projectWorkspaceFixture(document.projectId).projectData);
 });
 afterEach(async () => { vi.restoreAllMocks(); await manager.retry(); await manager.open(null); await db.delete(); vi.unstubAllGlobals(); });
 const rename = (name: string) => useProjectStore.getState().editPlanningScenarioDraft(planId, { name });
 const nameInStore = () => useProjectStore.getState().planningScenarios[0].name;
 
 describe("workspace editor coordination", () => {
+  it("does not edit loaded plan inputs before the active parcel is available", async () => {
+    useProjectStore.setState({ data: null });
+    rename("부지 로딩 전 편집");
+    await manager.flush();
+    expect(nameInStore()).toBe("첫 계획");
+    expect(manager.hasUnsavedChanges()).toBe(false);
+    expect((await db.load("P-1"))?.payload.planningScenarios[0].name).toBe("첫 계획");
+  });
   it("drains edits arriving during a commit and joins simultaneous flush callers", async () => {
     const save = db.save.bind(db); let release!: () => void, started!: () => void;
     const entered = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });

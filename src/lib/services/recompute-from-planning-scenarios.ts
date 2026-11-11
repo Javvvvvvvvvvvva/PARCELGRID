@@ -17,6 +17,7 @@ import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { assessFullQuoteAdoption } from "@/lib/planning/full-quote-adoption";
 import { quoteAdoptionBusinessDate } from "@/lib/planning/construction-quote-adoption-review";
 import type { PlanningScenario } from "@/lib/planning/types";
+import { planningScenarioBelongsToProject } from "@/lib/planning/project-scope";
 import {
   computeProject,
   type ComputeOptions,
@@ -84,7 +85,10 @@ export function recomputeFromPlanningScenarios(
   previous: ProjectComputed | null,
   options: RecomputePlanningOptions = {}
 ): ProjectComputed | null {
-  const candidates = eligibleScenarios(planningScenarios, representativeId);
+  const scoped = planningScenarios.filter(scenario => planningScenarioBelongsToProject(scenario, parcel.id));
+  if (new Set(scoped.map(scenario => scenario.id)).size !== scoped.length) throw new Error("현재 프로젝트의 계산 계획안 ID가 중복됩니다.");
+  if (previous && previous.parcel.id !== parcel.id) throw new Error("다른 프로젝트의 계산 결과를 현재 계획안의 기준으로 사용할 수 없습니다.");
+  const candidates = eligibleScenarios(scoped, representativeId);
   if (!candidates.some((scenario) => scenario.id === representativeId)) return null;
 
   const baseAssumptions = cloneAssumptions(previous);

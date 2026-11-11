@@ -7,11 +7,12 @@ import { analysisReferenceInputKey, analysisReferenceIsCurrent } from "@/lib/pla
 import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 import { clientSession } from "@/lib/auth/client-session";
 import { runInteriorDrawingWorker } from "@/lib/planning/interior-drawing-worker";
+import { findProjectPlanningScenario } from "@/lib/planning/project-scope";
 
 export function InteriorDrawingExport({ projectId, scenarioId }: { projectId: string; scenarioId: string }) {
   const data = useProjectStore(state => state.data);
   const geometry = useProjectStore(state => state.representativeGeometrySnapshot);
-  const scenario = useProjectStore(state => state.planningScenarios.find(item => item.id === scenarioId));
+  const scenario = useProjectStore(state => findProjectPlanningScenario(state.planningScenarios, scenarioId, projectId));
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ error: boolean; text: string } | null>(null);
   const pending = useRef<AbortController | null>(null);
@@ -33,7 +34,7 @@ export function InteriorDrawingExport({ projectId, scenarioId }: { projectId: st
     setBusy(true); setFeedback(null);
     try {
       clientSession.assertActive();
-      const state = useProjectStore.getState(), live = state.planningScenarios.find(item => item.id === scenarioId);
+      const state = useProjectStore.getState(), live = findProjectPlanningScenario(state.planningScenarios, scenarioId, projectId);
       if (!live || !state.data || !state.representativeGeometrySnapshot || state.data.parcel.id !== projectId ||
           state.selectedPlanningScenarioId !== scenarioId || state.representativePlanningScenarioId !== scenarioId) {
         throw new Error("내보내기 준비 중 선택한 계획이 변경됐습니다. 현재 기준안을 다시 확인하세요.");
@@ -42,7 +43,7 @@ export function InteriorDrawingExport({ projectId, scenarioId }: { projectId: st
       const unchanged = () => {
         const latest = useProjectStore.getState();
         return latest.data === sourceData && latest.representativeGeometrySnapshot === sourceGeometry &&
-          latest.planningScenarios.find(item => item.id === scenarioId) === live &&
+          findProjectPlanningScenario(latest.planningScenarios, scenarioId, projectId) === live &&
           latest.selectedPlanningScenarioId === scenarioId && latest.representativePlanningScenarioId === scenarioId;
       };
       unsubscribe = useProjectStore.subscribe(() => {

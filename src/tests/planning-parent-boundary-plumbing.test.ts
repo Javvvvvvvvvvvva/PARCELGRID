@@ -25,13 +25,14 @@ const harness = vi.hoisted(() => ({
   panels: [] as ReactNode[], fetch: vi.fn(), massing: vi.fn(() => null),
   parkingSequence: vi.fn(() => null),
   linework: vi.fn(), sketchup: vi.fn(), cad: vi.fn(),
+  effects: [] as Array<() => void | (() => void)>,
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return { ...actual, useState: (initial: unknown) => {
     const index = harness.cursor++;
     return index < harness.hooks.length ? [harness.hooks[index], vi.fn()] : actual.useState(initial);
-  } };
+  }, useEffect: (effect: () => void | (() => void)) => { harness.effects.push(effect); } };
 });
 vi.mock("@/lib/stores/project-store", () => ({
   useProjectStore: (selector: (state: Record<string, unknown>) => unknown) => selector(harness.state),
@@ -135,6 +136,7 @@ afterEach(() => {
 
 function render(panel: (typeof panels)[number], loadState = "ready") {
   harness.cursor = 0;
+  harness.effects = [];
   harness.panels = [];
   harness.hooks = panel === CadastralRoadContextPanel
     ? [[road], loadState, null, [], null, false]
@@ -143,6 +145,32 @@ function render(panel: (typeof panels)[number], loadState = "ready") {
       : panel === SketchupSiteExportPanel ? [[road], undefined, loadState, [], null] : [];
   return renderToStaticMarkup(React.createElement(panel, { projectId }));
 }
+describe("planning workspace starter ownership", () => {
+  it.each(["missing", "foreign"])("waits for the requested active parcel (%s)", kind => {
+    const add = vi.fn();
+    harness.state = { ...harness.state, data: kind === "missing" ? null : { ...data, parcel: { ...data.parcel, id: "foreign" } },
+      planningScenarios: [], addPlanningScenario: add };
+    render(PlanningScenarioWorkspaceV4);
+    harness.effects[0]();
+    expect(add).not.toHaveBeenCalled();
+  });
+  it("initializes only once after a successful insertion", () => {
+    const add = vi.fn();
+    harness.state = { ...harness.state, planningScenarios: [], addPlanningScenario: add };
+    render(PlanningScenarioWorkspaceV4);
+    harness.effects[0](); harness.effects[0]();
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0][0]).toMatchObject({ projectId });
+  });
+  it("does not latch initialization when insertion fails", () => {
+    const add = vi.fn().mockImplementationOnce(() => { throw new Error("insertion rejected"); });
+    harness.state = { ...harness.state, planningScenarios: [], addPlanningScenario: add };
+    render(PlanningScenarioWorkspaceV4);
+    expect(() => harness.effects[0]()).toThrow("insertion rejected");
+    harness.effects[0](); harness.effects[0]();
+    expect(add).toHaveBeenCalledTimes(2);
+  });
+});
 type Button = ReactElement<{ disabled?: boolean; onClick?: () => void | Promise<void>; children?: ReactNode }>;
 function buttons(node: ReactNode): Button[] {
   if (Array.isArray(node)) return node.flatMap(buttons);

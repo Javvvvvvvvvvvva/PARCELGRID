@@ -89,6 +89,26 @@ function calculate(
 }
 
 describe("PlanningScenario → finance bridge", () => {
+  it("ignores foreign same-ID plans and foreign saved alternatives", () => {
+    const scenario = mixedScenario();
+    const foreign = { ...scenario, projectId: "foreign-project", name: "Foreign same ID" };
+    const result = recomputeFromPlanningScenarios(parcel,
+      [foreign, { ...foreign, id: "foreign-alternative" }, scenario], scenario.id, null, { calculateMaxAcquisition: false });
+    expect(result?.scenarios.map(value => [value.id, value.name])).toEqual([[scenario.id, scenario.name]]);
+    expect(recomputeFromPlanningScenarios(parcel, [foreign], scenario.id, null)).toBeNull();
+  });
+  it("rejects ambiguous active and legacy plan IDs before calculating", () => {
+    const scenario = mixedScenario();
+    expect(() => recomputeFromPlanningScenarios(parcel, [scenario, { ...scenario, projectId: undefined }], scenario.id, null))
+      .toThrow("계획안 ID가 중복");
+  });
+  it("rejects previous financial assumptions belonging to another project", () => {
+    const scenario = mixedScenario();
+    const previous = recomputeFromPlanningScenarios(parcel, [scenario], scenario.id, null, { calculateMaxAcquisition: false })!;
+    previous.parcel = { ...previous.parcel, id: "foreign-project" };
+    expect(() => recomputeFromPlanningScenarios(parcel, [scenario], scenario.id, previous))
+      .toThrow("다른 프로젝트의 계산 결과");
+  });
   it("preserves failed transaction evidence across recalculation even with zero observations", () => {
     const scenario = mixedScenario();
     const previous = recomputeFromPlanningScenarios(parcel, [scenario], scenario.id, null, { calculateMaxAcquisition: false })!;
