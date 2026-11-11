@@ -11,6 +11,7 @@ import { compareLeaseRoll, type LeaseRollComparison } from "@/lib/finance/lease-
 import { readLeaseRollFile } from "@/lib/finance/lease-roll-import";
 import { clearLeaseRollEditorRecovery, readLeaseRollEditorRecovery, writeLeaseRollEditorRecovery } from "@/lib/finance/lease-roll-editor-recovery";
 import type { Scenario, ScenarioResult } from "@/lib/finance/types";
+import { OperatingBudgetPanel } from "./OperatingBudgetPanel";
 
 type Props = { projectId: string; scenario: Scenario; baseline: ScenarioResult["hold"] };
 const useLabels = { residential: "주거", retail: "근린생활", office: "업무" };
@@ -173,7 +174,7 @@ function LeaseRollEditor({ projectId, scenario, baseline }: Props) {
     } catch (error) { setMessage(errorText(error)); }
   }
 
-  return <section className="lease-roll" aria-label="호실별 임대차 대사" data-lease-roll data-financial-applied="false">
+  return <><section className="lease-roll" aria-label="호실별 임대차 대사" data-lease-roll data-financial-applied="false">
     <header><div><h2>호실별 임대차</h2><p>초안 · 사업성 미반영 · 원문 진위·전문가 승인 미확정</p></div>
       <span>{saved ? `저장 리비전 ${saved.revision}` : "저장본 없음"}{dirty ? " · 미저장 변경" : ""}</span></header>
     {!sessionValid ? <p role="alert">로그인 세션이 만료됐습니다.</p> : <>
@@ -256,5 +257,6 @@ function LeaseRollEditor({ projectId, scenario, baseline }: Props) {
       .lease-roll{overflow-wrap:anywhere}
       .lease-roll{min-width:0;margin:18px 0;padding:16px 0;border-top:1px solid var(--border);font-size:12px;letter-spacing:0}.lease-roll header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.lease-roll h2{font-size:16px;margin:0}.lease-roll h3{font-size:14px;margin:14px 0 8px}.lease-roll p{line-height:1.6}.lease-roll header p,.lease-boundary{color:var(--fg-muted)}.lease-roll button{display:inline-flex;gap:6px;align-items:center;justify-content:center;min-height:34px;min-width:34px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elev);color:var(--fg);font:inherit;cursor:pointer}.lease-roll button:disabled{opacity:.5;cursor:default}.lease-roll button svg{flex-shrink:0}.lease-actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin:10px 0}.lease-roll label{display:grid;gap:5px;min-width:0}.lease-roll input,.lease-roll select{min-width:0;width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--fg);font:inherit}.lease-roll input[aria-invalid=true]{border-color:var(--neg-fg)}.lease-settings{display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin:12px 0}.lease-settings label{width:240px;max-width:100%}.lease-settings span{color:var(--fg-muted);line-height:1.6}.lease-contracts{margin:12px 0}.lease-contracts details{border-block-start:1px solid var(--border-faint);padding:10px 0}.lease-contracts summary{cursor:pointer;overflow-wrap:anywhere}.lease-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:12px;margin-top:12px}.lease-fields>button{align-self:end;justify-self:start}.lease-preview{padding:12px 0;border-block:1px solid var(--border)}.lease-message{color:var(--warn-fg);overflow-wrap:anywhere;line-height:1.6}.lease-message button{margin-left:8px}.lease-results{min-width:0;margin-top:14px}.lease-results ul{padding-left:20px;line-height:1.7}.lease-results dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin:14px 0}.lease-results dl>div{min-width:0}.lease-results dt{color:var(--fg-muted)}.lease-results dd{margin:6px 0 0;overflow-wrap:anywhere}.lease-table{max-width:100%;overflow-x:auto;border-block:1px solid var(--border)}.lease-table table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:11px}.lease-table caption{text-align:left;padding:10px 0;white-space:normal;line-height:1.6}.lease-table th,.lease-table td{padding:9px;text-align:right;border-bottom:1px solid var(--border-faint)}.lease-table th:first-child{text-align:left}.lease-boundary{margin:12px 0 0;padding-top:10px;border-top:1px solid var(--border-faint)}
     `}</style>
-  </section>;
+  </section><OperatingBudgetPanel projectId={projectId} scenario={scenario} baseline={baseline}
+    leaseDraft={sessionValid && !savedChanged && !numericError ? draft : null} /></>;
 }

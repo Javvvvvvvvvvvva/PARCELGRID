@@ -2,7 +2,14 @@
 
 최종 갱신: 2026-11-11 (America/Chicago)
 
-## 현재 실행: 전체 견적 위험·호실별 임대차 대사
+## 현재 실행: 운영비 검증 완료·프로젝트 인계 보강
+
+- 최신 운영비 완료(2026-11-11): 최종 full verify3747+opt-inDB2제외/lint·타입·build `SbJNgwF-n6XH0Okoto5-P` 통과. 독립 검토의 기존 NOI 합계 상한 누락을 수정했고131신규회귀를 포함한다. 실제PG18.6/Chrome1440·native390 각32동작/19대사상태, 독립24개월검산·권한403/로그아웃401·SPA복구·320~1440화면 검수 통과. DB재시작·dump/restore 후 운영비이력8개/임대차이력12개 및 전체workspace/audit 해시 동일. 소스불변/임시자원·frozen copy정리 완료. 증빙 `artifacts/operating-budget-production-2026-11-11/attempt-1/`, 상세 `docs/OPERATING-BUDGET-NOI-2026.1.md`. 아래 진행 중 기록은 이 최종결과 이전의 경과다. 실제 재무 채택·공식/전문가/운영 인수는 미완료다.
+- 다음 인계 보강은 v2 체크섬 호환을 유지하며 임대차/운영비/가격 초안과 보류가정을 포함한다. bounded 읽기·미리보기·명시적 교체, 세션/프로젝트/원본변경 취소, 다른 프로젝트 동일ID 보존, 권한검사와 서버 전문가 이력 불변을 검증할 예정이다. 사용량43%소진/57%잔여 확인, 잔여30% 보존 지시 유지.
+
+- `9bdec4a` 임대차 대사·프로젝트 격리 체크포인트를 원격 master에 게시했다. 후속 `operating-budget-2026.1`/`lease-roll-noi-comparison-2026.1`은 개발 중: 출처 있는6개 소유자 운영비 항목×24개월, 명시적 달력·전체 보유면적 비용 범위, 미입력/0원 구분과 음수 NOI, 선택적 기존 NOI 비교, 초안/서버 저장·JSON·SPA 복구를 연결한다. 재무 채택·대출·IRR·보고서 변경은 아니다. 상세 `docs/OPERATING-BUDGET-NOI-2026.1.md`; 최종 검증은 아직 미완료다.
+- 운영비 다음 검토 후보: 현재 사용 중인 `src/components/handoff/ProjectTransferPanel.tsx`의 인계 패키지는 신규 임대차/운영비 초안을 포함하지 않는다. 정적 확인상 `file.text()` 읽기에는 크기/기한/취소/세션 변경 가드가 없고, 가져오기 후 다른 프로젝트의 같은 계획ID도 제거하는 필터가 남아 있다. 실제 재현과 인계 계약/구형 호환 범위를 확인해 다음 배치에서 수정할 대상이며, 이번 운영비 검증으로 해결됐다고 취급하지 않는다.
+- 운영비 중간 검증: 대상139회귀와 화면20회귀 통과, 첫 full verify3742+opt-inDB2제외/lint·타입·build 통과. 독립 검토에서 기존안 NOI 비교의24개월 총액 상한 누락(P2)을 재현해 수입/운영비 합계 각각10조 상한·비교만 차단으로 수정했다. 추가5회귀와 기존 직렬화 미소오차 fixture의 독립 분리를 포함한 계산47회귀 통과. 수정 후 전체verify는 `/tmp/parcelgrid-operating-budget-verify-2.log`에서 진행 중이며, production harness는 `artifacts/operating-budget-production-2026-11-11/` 준비 중이다. 아직 실제 운영비DB/브라우저 성공으로 기록하지 않는다.
 
 - 최신 완료 체크포인트(2026-11-11): 임대차 초안·24개월 대사와 프로젝트ID 격리 보완을 전체3616회귀+opt-inDB2제외/lint·타입·build로 확인했다. 최종 `qXtw3c_gm2NN6WmP3gjFr`의 실제PG/Chrome PC1440·native390 각15조건,320~1440 화면 경계·스크린샷, 실제로그아웃/권한403·401, DB재시작·dump/restore의 임대차이력10개+전체 workspace/audit 해시 일치 통과. 원본 재무 불변/소스 불변/임시 자원 정리 완료. 증빙 `artifacts/lease-roll-project-scope-2026-11-11/attempt-1/`, 상세 `docs/LEASE-ROLL-COMPARISON-2026.1.md`. 아래 진행 중/실패 기록은 이 결과 이전의 경과다. 다음은 출처 있는 월별 소유자 운영비와 읽기 전용 NOI 대사이며 실제 재무 채택은 별도다.
 

@@ -19,6 +19,11 @@ import {
   type LeaseRollDraft,
 } from "@/lib/finance/lease-roll-contract";
 import {
+  buildOperatingBudgetDraftKey,
+  operatingBudgetDraftSchema,
+  type OperatingBudgetDraft,
+} from "@/lib/finance/operating-budget-contract";
+import {
   buildRevenuePricingDraftKey,
   REVENUE_PRICING_INPUT_VERSION,
   type RevenuePoolPricingDraft,
@@ -141,6 +146,12 @@ interface ProjectStore {
   /** Requires revision 1 on first save, then current + 1; rejects by throwing. */
   saveLeaseRollDraft: (draft: LeaseRollDraft) => void;
   removeLeaseRollDraft: (projectId: string, scenarioId: string) => void;
+
+  /** Draft-only operating expenses; saving never updates calculated project data. */
+  operatingBudgetDrafts: Record<string, OperatingBudgetDraft>;
+  /** Requires revision 1 on first save, then current + 1; rejects by throwing. */
+  saveOperatingBudgetDraft: (draft: OperatingBudgetDraft) => void;
+  removeOperatingBudgetDraft: (projectId: string, scenarioId: string) => void;
 
   /** 계획안·처분전략별 세무 전문가 입력과 납부·환급 일정. */
   expertTaxContracts: Record<string, ExpertTaxInputContract>;
@@ -377,6 +388,33 @@ export const useProjectStore = create<ProjectStore>()(
             return { leaseRollDrafts: next };
           }),
 
+        operatingBudgetDrafts: {},
+        saveOperatingBudgetDraft: (draft) => {
+          const parsed = operatingBudgetDraftSchema.parse(draft);
+          set((state) => {
+            if (
+              state.data?.parcel.id !== parsed.projectId ||
+              !state.data.scenarios.some((scenario) => scenario.id === parsed.scenarioId)
+            ) {
+              throw new Error("운영비 예산 초안은 현재 프로젝트의 계산 계획안에 속해야 합니다.");
+            }
+            const key = buildOperatingBudgetDraftKey(parsed.projectId, parsed.scenarioId);
+            const expectedRevision = (state.operatingBudgetDrafts[key]?.revision ?? 0) + 1;
+            if (parsed.revision !== expectedRevision) {
+              throw new Error(`운영비 예산 초안 revision 충돌: 다음 저장 버전은 ${expectedRevision}입니다.`);
+            }
+            return {
+              operatingBudgetDrafts: { ...state.operatingBudgetDrafts, [key]: parsed },
+            };
+          });
+        },
+        removeOperatingBudgetDraft: (projectId, scenarioId) =>
+          set((state) => {
+            const next = { ...state.operatingBudgetDrafts };
+            delete next[buildOperatingBudgetDraftKey(projectId, scenarioId)];
+            return { operatingBudgetDrafts: next };
+          }),
+
         expertTaxContracts: {},
         setExpertTaxContract: (contract) =>
           set((state) => ({
@@ -441,6 +479,8 @@ export const useProjectStore = create<ProjectStore>()(
             return {
               planningScenarios: [...state.planningScenarios.filter(scenario => !planningScenarioBelongsToProject(scenario, projectId)), ...current],
               leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
+                draft.projectId !== projectId || !removed.has(draft.scenarioId))),
+              operatingBudgetDrafts: Object.fromEntries(Object.entries(state.operatingBudgetDrafts).filter(([, draft]) =>
                 draft.projectId !== projectId || !removed.has(draft.scenarioId))),
               selectedPlanningScenarioId: current.some(
                 (scenario) => scenario.id === state.selectedPlanningScenarioId
@@ -553,6 +593,8 @@ export const useProjectStore = create<ProjectStore>()(
             return {
               planningScenarios,
               leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
+                draft.scenarioId !== id || draft.projectId !== projectId)),
+              operatingBudgetDrafts: Object.fromEntries(Object.entries(state.operatingBudgetDrafts).filter(([, draft]) =>
                 draft.scenarioId !== id || draft.projectId !== projectId)),
               selectedPlanningScenarioId:
                 state.selectedPlanningScenarioId === id
@@ -782,6 +824,8 @@ export const useProjectStore = create<ProjectStore>()(
             planningScenarios: state.planningScenarios.filter(scenario => !planningScenarioBelongsToProject(scenario, projectId)),
             leaseRollDrafts: Object.fromEntries(Object.entries(state.leaseRollDrafts).filter(([, draft]) =>
               draft.projectId !== projectId || !removed.has(draft.scenarioId))),
+            operatingBudgetDrafts: Object.fromEntries(Object.entries(state.operatingBudgetDrafts).filter(([, draft]) =>
+              draft.projectId !== projectId || !removed.has(draft.scenarioId))),
             selectedPlanningScenarioId: null,
             representativePlanningScenarioId: null,
             representativeGeometrySnapshot: null,
@@ -813,6 +857,7 @@ export const useProjectStore = create<ProjectStore>()(
           financialSources: state.financialSources,
           revenuePricingDrafts: state.revenuePricingDrafts,
           leaseRollDrafts: state.leaseRollDrafts,
+          operatingBudgetDrafts: state.operatingBudgetDrafts,
           expertTaxContracts: state.expertTaxContracts,
           stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
         }),

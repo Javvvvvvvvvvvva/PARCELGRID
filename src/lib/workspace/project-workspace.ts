@@ -3,6 +3,10 @@ import {
   leaseRollDraftSchema,
   type LeaseRollDraft,
 } from "@/lib/finance/lease-roll-contract";
+import {
+  operatingBudgetDraftSchema,
+  type OperatingBudgetDraft,
+} from "@/lib/finance/operating-budget-contract";
 import { validateParcelBoundaryInput } from "@/lib/geo/manual-parcel-boundary";
 import { interiorDraftSchema } from "@/lib/planning/interior-layout";
 import { interiorLayoutSchema } from "@/lib/planning/interior/types";
@@ -57,6 +61,7 @@ export interface ProjectWorkspacePayload {
   financialSources: FinancialSourceMap;
   revenuePricingDrafts: RevenuePricingDraftContract[];
   leaseRollDrafts?: LeaseRollDraft[];
+  operatingBudgetDrafts?: OperatingBudgetDraft[];
   expertTaxContracts: ExpertTaxInputContract[];
   stage3Snapshot: Stage3FeasibilitySnapshot | null;
   priceVerifications: Partial<
@@ -518,6 +523,30 @@ export function validateProjectWorkspacePayload(
         }
         if (scenarioIds.has(draft.scenarioId)) {
           errors.push("동일 계획안의 임대차 초안이 중복됩니다.");
+          break;
+        }
+        scenarioIds.add(draft.scenarioId);
+      }
+    }
+  }
+  if (value.operatingBudgetDrafts !== undefined) {
+    if (!Array.isArray(value.operatingBudgetDrafts) || value.operatingBudgetDrafts.length > 256) {
+      errors.push("운영비 예산 초안 목록은 256개 이하여야 합니다.");
+    } else {
+      const scenarioIds = new Set<string>();
+      for (const draft of value.operatingBudgetDrafts) {
+        if (
+          !isRecord(draft) ||
+          !operatingBudgetDraftSchema.safeParse(draft).success ||
+          draft.projectId !== value.projectId ||
+          typeof draft.scenarioId !== "string" ||
+          !allScenarioIds.has(draft.scenarioId)
+        ) {
+          errors.push("운영비 예산 초안 형식 또는 프로젝트·계획안 연결이 올바르지 않습니다.");
+          break;
+        }
+        if (scenarioIds.has(draft.scenarioId)) {
+          errors.push("동일 계획안의 운영비 예산 초안이 중복됩니다.");
           break;
         }
         scenarioIds.add(draft.scenarioId);
