@@ -1,3 +1,6 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { priceVerificationRecordSchema } from "./price-verification-schema";
 import type { FinancialSourceRecord } from "./source-data-gate";
 
 export const SQM_PER_PYEONG = 3.305785;
@@ -123,6 +126,21 @@ export function validatePriceVerification(
   return { valid: errors.length === 0, errors };
 }
 
+export function priceVerificationRecordHash(record: PriceVerificationRecord): string {
+  // Fixed field order includes review details that do not appear in the derived source.
+  const fields = [
+    record.projectId, record.target, record.status,
+    record.selectedComps.map(comp => [
+      comp.id, comp.address, comp.date, comp.type, comp.lotAreaSqm, comp.pricePerPyeongManwon,
+    ]),
+    record.medianPricePerPyeongManwon, record.adjustmentPct,
+    record.verifiedPricePerPyeongManwon, record.verifiedTotalManwon, record.verifiedPricePerSqmWon,
+    record.reviewer, record.organization, record.rationale, record.sourceModelVersion ?? null,
+    record.verifiedAt, record.updatedAt,
+  ];
+  return bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(fields))));
+}
+
 export function buildFinancialSourceFromPriceVerification(
   record: PriceVerificationRecord
 ): FinancialSourceRecord | null {
@@ -143,5 +161,58 @@ export function buildFinancialSourceFromPriceVerification(
     asOf: record.verifiedAt,
     verifiedBy: `${record.reviewer} · ${record.organization}`,
     recordedAt: record.updatedAt.slice(0, 10),
+    priceReviewOrigin: {
+      version: "price-review-source-2026.1",
+      projectId: record.projectId,
+      target: record.target,
+      recordHash: priceVerificationRecordHash(record),
+    },
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function matchesGeneratedCore(source: Record<string, unknown>, generated: FinancialSourceRecord): boolean {
+  return Object.entries(generated).every(([key, value]) =>
+    key === "priceReviewOrigin" || (Object.hasOwn(source, key) && source[key] === value),
+  );
+}
+
+export function isPriceReviewSourceLinkedToRecord(
+  source: unknown,
+  record: unknown,
+  projectId: string,
+): boolean {
+  if (!isRecord(source) || !isRecord(source.priceReviewOrigin)) return false;
+  const parsed = priceVerificationRecordSchema.safeParse(record);
+  if (!parsed.success || parsed.data.projectId !== projectId) return false;
+  const generated = buildFinancialSourceFromPriceVerification(parsed.data);
+  if (!generated || !matchesGeneratedCore(source, generated)) return false;
+  const marker = source.priceReviewOrigin;
+  return Object.entries(generated.priceReviewOrigin!).every(([key, value]) =>
+    Object.hasOwn(marker, key) && marker[key] === value,
+  );
+}
+
+export function classifyPriceReviewSource(
+  source: FinancialSourceRecord,
+  previous: PriceVerificationRecord | undefined,
+): "owned" | "protected-link" | "invalid-link" | "ambiguous" | "independent" {
+  const generated = previous && buildFinancialSourceFromPriceVerification(previous);
+  if (Object.hasOwn(source, "priceReviewOrigin")) {
+    if (!previous || !isPriceReviewSourceLinkedToRecord(source, previous, previous.projectId)) {
+      return "invalid-link";
+    }
+    // Any attachment or extra metadata is independent evidence, even on a valid link.
+    return Reflect.ownKeys(source).length === Reflect.ownKeys(generated!).length &&
+      Reflect.ownKeys(source.priceReviewOrigin!).length === Reflect.ownKeys(generated!.priceReviewOrigin!).length
+      ? "owned" : "protected-link";
+  }
+  if (generated && matchesGeneratedCore(source as unknown as Record<string, unknown>, generated) &&
+      Reflect.ownKeys(source).length === Reflect.ownKeys(generated).length - 1) {
+    return "ambiguous";
+  }
+  return "independent";
 }

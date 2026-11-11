@@ -25,6 +25,7 @@ import type {
   PriceVerificationRecord,
   PriceVerificationTarget,
 } from "@/lib/finance/price-verification";
+import { isPriceReviewSourceLinkedToRecord } from "@/lib/finance/price-verification";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { ProjectComputed } from "@/lib/services/compute-project";
@@ -572,6 +573,19 @@ export function validateProjectWorkspacePayload(
     )
   ) {
     errors.push("가격 검증 항목의 프로젝트·대상 또는 필수 필드가 올바르지 않습니다.");
+  }
+  if (isRecord(value.financialSources)) {
+    for (const source of Object.values(value.financialSources)) {
+      if (!isRecord(source) || !Object.hasOwn(source, "priceReviewOrigin")) continue;
+      const marker = source.priceReviewOrigin;
+      const verification = isRecord(marker) && isRecord(value.priceVerifications) &&
+        (marker.target === "acquisition" || marker.target === "sale")
+        ? value.priceVerifications[marker.target] : undefined;
+      if (!isPriceReviewSourceLinkedToRecord(source, verification, String(value.projectId))) {
+        errors.push("가격 검토 출처의 소유권 표식·검토 기록 또는 파생 값 연결이 올바르지 않습니다.");
+        break;
+      }
+    }
   }
 
   const byteLength = new TextEncoder().encode(

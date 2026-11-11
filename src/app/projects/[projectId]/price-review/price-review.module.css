@@ -16,6 +16,13 @@
 
 .review { position: sticky; top: 16px; }
 
+.workspace button:disabled,
+.workspace input:disabled,
+.workspace textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .comparable {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) minmax(80px, 120px);

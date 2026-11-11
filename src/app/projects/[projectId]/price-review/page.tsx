@@ -1,9 +1,8 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  buildFinancialSourceFromPriceVerification,
   calculatePriceVerification,
   validatePriceVerification,
   type PriceComparableSnapshot,
@@ -14,12 +13,15 @@ import {
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { num } from "@/lib/utils/format";
+import { clientSession } from "@/lib/auth/client-session";
+import { resetCurrentPriceVerification, saveCurrentPriceVerification } from "@/lib/finance/price-verification-client";
 import styles from "./price-review.module.css";
 
 const TARGET_LABEL: Record<PriceVerificationTarget, string> = {
   acquisition: "부동산 총 취득대금",
   sale: "매각·분양 단가",
 };
+const EMPTY_REVIEWS: Partial<Record<PriceVerificationTarget, PriceVerificationRecord>> = {};
 
 export default function PriceReviewPage({
   params,
@@ -27,18 +29,25 @@ export default function PriceReviewPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = use(params);
+  return <PriceReviewEditor key={projectId} projectId={projectId} />;
+}
+
+function PriceReviewEditor({ projectId }: { projectId: string }) {
   const data = useProjectStore((state) => state.data);
-  const setFinancialSource = useProjectStore((state) => state.setFinancialSource);
-  const removeFinancialSource = useProjectStore((state) => state.removeFinancialSource);
   const projectReviews = useReviewStore(
-    (state) => state.priceVerifications[projectId] ?? {}
+    (state) => state.priceVerifications[projectId] ?? EMPTY_REVIEWS
   );
-  const setPriceVerification = useReviewStore(
-    (state) => state.setPriceVerification
-  );
-  const removePriceVerification = useReviewStore(
-    (state) => state.removePriceVerification
-  );
+  const [sessionContext] = useState(() => clientSession.context);
+  const [ended, setEnded] = useState(false);
+  const mounted = useRef(true);
+  const sessionValid = !ended && clientSession.active && sessionContext !== null && clientSession.context === sessionContext;
+  const canWrite = sessionValid && data?.parcel.id === projectId && clientSession.principal?.capabilities.includes("project.update") === true;
+
+  useEffect(() => {
+    mounted.current = true;
+    const unsubscribe = clientSession.subscribe(() => setEnded(true));
+    return () => { mounted.current = false; unsubscribe(); };
+  }, []);
   const [target, setTarget] = useState<PriceVerificationTarget>("acquisition");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [adjustmentPct, setAdjustmentPct] = useState(0);
@@ -97,10 +106,12 @@ export default function PriceReviewPage({
     setOrganization(saved?.organization ?? "");
     setRationale(saved?.rationale ?? "");
     setVerifiedAt(saved?.verifiedAt ?? new Date().toISOString().slice(0, 10));
-    setMessage(null);
   }, [projectReviews, target]);
 
-  if (!data?.parcel) {
+  if (!sessionValid) {
+    return <div role="alert" style={{ padding: 40 }}>사용자 세션이 잠겼습니다. 다시 로그인해 주세요.</div>;
+  }
+  if (data?.parcel.id !== projectId) {
     return <div style={{ padding: 40 }}>가격 검증 데이터를 준비하는 중입니다.</div>;
   }
 
@@ -147,34 +158,33 @@ export default function PriceReviewPage({
   };
 
   const saveReview = (status: PriceVerificationStatus) => {
+    if (!mounted.current) return;
     const record = buildRecord(status);
     if (!record) return;
-    setPriceVerification(projectId, record);
-    if (status === "verified") {
-      const source = buildFinancialSourceFromPriceVerification(record);
-      if (source) setFinancialSource(projectId, source);
+    try {
+      const result = saveCurrentPriceVerification({ projectId, sessionContext, expectedData: data, record });
+      setMessage({ tone: "positive", text:
+        result.sourceAction === "applied" ? "검토 가격을 로컬 가격 근거에 반영했습니다. 서버 저장 상태를 확인하세요." :
+        result.sourceAction === "removed" ? "재검토 상태로 저장하고 이전 검토의 가격 근거를 해제했습니다. 서버 저장 상태를 확인하세요." :
+        result.sourceAction === "preserved" ? "검토 요청 상태를 저장했습니다. 별도로 등록한 가격 근거는 유지했습니다. 서버 저장 상태를 확인하세요." :
+        "검토 요청 상태를 로컬에 저장했습니다. 서버 저장 상태를 확인하세요.",
+      });
+    } catch (error) {
+      if (mounted.current) setMessage({ tone: "negative", text: error instanceof Error ? error.message : "가격 검토를 저장하지 못했습니다." });
     }
-    setMessage({
-      tone: "positive",
-      text:
-        status === "verified"
-          ? `${TARGET_LABEL[target]} 검증값을 Stage 3 계산에 반영했습니다.`
-          : "가격 검토 요청 상태를 저장했습니다.",
-    });
   };
 
   const resetReview = () => {
-    removePriceVerification(projectId, target);
-    removeFinancialSource(
-      projectId,
-      target === "acquisition" ? "acquisitionPrice" : "salePricePerSqM"
-    );
-    setSelectedIds([]);
-    setAdjustmentPct(0);
-    setReviewer("");
-    setOrganization("");
-    setRationale("");
-    setMessage(null);
+    if (!mounted.current) return;
+    try {
+      const result = resetCurrentPriceVerification({ projectId, sessionContext, expectedData: data, target });
+      setSelectedIds([]); setAdjustmentPct(0); setReviewer(""); setOrganization(""); setRationale("");
+      setMessage({ tone: "positive", text: result.sourceAction === "preserved"
+        ? "가격 검토 기록만 초기화했습니다. 별도로 등록한 가격 근거는 유지했습니다. 서버 저장 상태를 확인하세요."
+        : "가격 검토 기록과 해당 검토에서 만든 근거를 초기화했습니다. 서버 저장 상태를 확인하세요." });
+    } catch (error) {
+      if (mounted.current) setMessage({ tone: "negative", text: error instanceof Error ? error.message : "가격 검토를 초기화하지 못했습니다." });
+    }
   };
 
   const current = projectReviews[target];
@@ -201,6 +211,7 @@ export default function PriceReviewPage({
           알고리즘 중앙값을 그대로 확정하지 않습니다. 채택 사례·보정률·검토자·사유를 함께 저장하고, 검증된 값만 Stage 3 원장에 반영합니다.
         </p>
       </header>
+      {!canWrite && <p role="status" style={{ color: "var(--fg-muted)", fontSize: 12 }}>읽기 전용입니다. 가격 검토 변경 권한이 없습니다.</p>}
 
       <section style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
         {(["acquisition", "sale"] as PriceVerificationTarget[]).map((item) => (
@@ -208,7 +219,7 @@ export default function PriceReviewPage({
             type="button"
             key={item}
             aria-pressed={target === item}
-            onClick={() => setTarget(item)}
+            onClick={() => { setTarget(item); setMessage(null); }}
             style={{
               ...tabStyle,
               background: target === item ? "var(--fg)" : "var(--bg-elev)",
@@ -234,7 +245,7 @@ export default function PriceReviewPage({
               const checked = selectedIds.includes(comp._key);
               return (
                 <label key={comp._key} className={styles.comparable} style={{ background: checked ? "var(--bg-active)" : "transparent" }}>
-                  <input type="checkbox" checked={checked} onChange={() => toggleComparable(comp._key)} />
+                  <input type="checkbox" disabled={!canWrite} checked={checked} onChange={() => toggleComparable(comp._key)} />
                   <span style={{ minWidth: 0 }}>
                     <b style={{ display: "block", fontSize: 11 }}>{comp.address}</b>
                     <small style={{ color: "var(--fg-muted)" }}>{comp.date} · {comp.type} · 대지 {num(comp.lotArea)}㎡{comp.sameDong ? " · 같은 동" : ""}</small>
@@ -259,19 +270,19 @@ export default function PriceReviewPage({
           </div>
 
           <label style={labelStyle}>입지·상품 보정률 (-30%~30%)
-            <input type="number" min={-30} max={30} step={0.5} value={adjustmentPct} onChange={(event) => setAdjustmentPct(Number(event.target.value))} style={inputStyle} />
+            <input type="number" disabled={!canWrite} min={-30} max={30} step={0.5} value={adjustmentPct} onChange={(event) => setAdjustmentPct(Number(event.target.value))} style={inputStyle} />
           </label>
           <label style={labelStyle}>검토자
-            <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="이름" style={inputStyle} />
+            <input disabled={!canWrite} value={reviewer} onChange={(event) => setReviewer(event.target.value)} placeholder="이름" style={inputStyle} />
           </label>
           <label style={labelStyle}>소속·역할
-            <input value={organization} onChange={(event) => setOrganization(event.target.value)} placeholder="예: ○○부동산 / 감정평가사" style={inputStyle} />
+            <input disabled={!canWrite} value={organization} onChange={(event) => setOrganization(event.target.value)} placeholder="예: ○○부동산 / 감정평가사" style={inputStyle} />
           </label>
           <label style={labelStyle}>검토 기준일
-            <input type="date" value={verifiedAt} onChange={(event) => setVerifiedAt(event.target.value)} style={inputStyle} />
+            <input type="date" disabled={!canWrite} value={verifiedAt} onChange={(event) => setVerifiedAt(event.target.value)} style={inputStyle} />
           </label>
           <label style={labelStyle}>사례 채택·보정 사유
-            <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="준공연도·입지·면적·도로조건 차이를 어떻게 반영했는지 기록" style={{ ...inputStyle, minHeight: 82, padding: 9, resize: "vertical" }} />
+            <textarea disabled={!canWrite} value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="준공연도·입지·면적·도로조건 차이를 어떻게 반영했는지 기록" style={{ ...inputStyle, minHeight: 82, padding: 9, resize: "vertical" }} />
           </label>
 
           {calculation && (
@@ -283,9 +294,9 @@ export default function PriceReviewPage({
           {message && <div role="status" style={{ padding: 9, borderRadius: 8, marginBottom: 9, background: message.tone === "positive" ? "var(--pos-soft)" : "var(--neg-soft)", color: message.tone === "positive" ? "var(--pos-fg)" : "var(--neg-fg)", fontSize: 10, lineHeight: 1.5 }}>{message.text}</div>}
 
           <div style={{ display: "grid", gap: 7 }}>
-            <button type="button" onClick={() => saveReview("review-requested")} style={secondaryButtonStyle}>검토 요청 상태 저장</button>
-            <button type="button" onClick={() => saveReview("verified")} style={primaryButtonStyle}>가격 확정 · Stage 3 반영</button>
-            {current && <button type="button" onClick={resetReview} style={textButtonStyle}>검증 기록 초기화</button>}
+            <button type="button" disabled={!canWrite} onClick={() => saveReview("review-requested")} style={secondaryButtonStyle}>검토 요청 상태 저장</button>
+            <button type="button" disabled={!canWrite} onClick={() => saveReview("verified")} style={primaryButtonStyle}>가격 확정 · Stage 3 반영</button>
+            {current && <button type="button" disabled={!canWrite} onClick={resetReview} style={textButtonStyle}>검증 기록 초기화</button>}
           </div>
           <p style={{ margin: "11px 0 0", color: "var(--fg-faint)", fontSize: 9, lineHeight: 1.5 }}>
             검증 상태는 외부 감정평가를 대체하지 않습니다. 선택 사례와 검토자 책임을 기록해 예비 계산의 출처를 재현하기 위한 절차입니다.

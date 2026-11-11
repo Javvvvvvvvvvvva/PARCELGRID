@@ -44,6 +44,12 @@ export interface FinancialSourceRecord {
   verifiedBy: string;
   recordedAt: string;
   document?: SourceDocumentMetadata;
+  priceReviewOrigin?: {
+    version: "price-review-source-2026.1";
+    projectId: string;
+    target: "acquisition" | "sale";
+    recordHash: string;
+  };
 }
 
 export type FinancialSourceMap = Partial<
