@@ -63,5 +63,6 @@ export function protectLockedPlanningGeometryPatch<
   delete protectedPatch.layoutFinanceHistory;
   delete protectedPatch.quantityCost;
   delete protectedPatch.constructionQuote;
+  delete protectedPatch.fullQuoteAdoption;
   return protectedPatch as T;
 }

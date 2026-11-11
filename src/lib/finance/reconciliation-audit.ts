@@ -1,4 +1,5 @@
 import { revenueCollectionPolicyForScenario } from "@/lib/finance/project-ledger";
+import { fullQuoteCostForScenario } from "@/lib/finance/scenario";
 import {
   FINANCIAL_REVENUE_POOL_KEYS,
   revenuePricingForScenario,
@@ -20,6 +21,7 @@ export interface FinancialReconciliationCheck {
   id:
     | "revenue-components"
     | "cost-components"
+    | "full-quote-hard-cost"
     | "profit-identity"
     | "funding-sources"
     | `stage2-${FinancialRevenuePoolKey}`
@@ -86,9 +88,10 @@ function exactCheck(input: {
   rightLabel: string;
   rightManwon: number;
   roundedTermCount: number;
+  toleranceManwon?: number;
 }): FinancialReconciliationCheck {
   const gap = difference(input.leftManwon, input.rightManwon);
-  const toleranceManwon = roundingTolerance(input.roundedTermCount);
+  const toleranceManwon = input.toleranceManwon ?? roundingTolerance(input.roundedTermCount);
   const status = withinTolerance(gap, toleranceManwon) ? "pass" : "fail";
   return {
     ...input,
@@ -155,6 +158,17 @@ export function buildFinancialReconciliationAudit(input: {
   scenario: Scenario;
 }): FinancialReconciliationAudit {
   const { result, scenario } = input;
+  const fullQuote = fullQuoteCostForScenario(scenario);
+  const fullQuoteChecks = fullQuote ? [exactCheck({
+    id: "full-quote-hard-cost",
+    label: "전체 공사 견적 반영",
+    leftLabel: "채택 견적액",
+    leftManwon: fullQuote.totalWon / 10_000,
+    rightLabel: "직접 공사비",
+    rightManwon: result.hardCost,
+    roundedTermCount: 1,
+    toleranceManwon: FINANCIAL_RECONCILIATION_ROUNDING_UNIT_MANWON / 2 + 1e-9,
+  })] : [];
   const revenueComponents =
     result.revenueSale + result.revenueLease + result.revenueRetail;
   const costComponents =
@@ -277,7 +291,7 @@ export function buildFinancialReconciliationAudit(input: {
   const stage2Economics = scenario.program.areaContract?.stage2Economics;
   const stage2Inputs = stage2Economics?.inputs;
   const hardCostInputsChanged = Boolean(
-    stage2Inputs &&
+    !fullQuote && stage2Inputs &&
       (stage2Inputs.constructionCostPerSqmWon !==
         scenario.assumptions.constCostPerSqM ||
         stage2Inputs.basementCostMultiplier !==
@@ -410,6 +424,7 @@ export function buildFinancialReconciliationAudit(input: {
   const checks = [
     revenueCheck,
     costCheck,
+    ...fullQuoteChecks,
     profitCheck,
     ...stage2Checks,
     ...stage2CostChecks,

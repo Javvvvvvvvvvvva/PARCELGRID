@@ -70,7 +70,7 @@ export function PlanningQuantityCostPanel({ scenario, geometry, context, locked:
   const [message, setMessage] = useState("");
   const takeoff = useMemo(() => takeoffPlanningQuantities(scenario), [scenario]);
   const saved = useMemo(() => savedAssessment(scenario, inputs), [scenario, inputs]);
-  const locked = lockedProp || isPlanningGeometryLocked(scenario);
+  const locked = lockedProp || isPlanningGeometryLocked(scenario) || scenario.fullQuoteAdoption !== undefined;
   const savedKey = serialized(scenario.quantityCost);
   const savedChanged = draft.savedKey !== savedKey;
   const stale = !!draft.plan && (draft.plan.sourceBasis !== takeoff.basis ||
@@ -107,6 +107,7 @@ export function PlanningQuantityCostPanel({ scenario, geometry, context, locked:
     if (!current || current.id !== scenario.id || current.projectId !== scenario.projectId) {
       setMessage("현재 계획안이 없거나 다른 계획안으로 변경됐습니다."); return undefined;
     }
+    if (current.fullQuoteAdoption !== undefined) { setMessage("전체 견적 채택을 먼저 해제해야 수량 원가를 변경할 수 있습니다."); return undefined; }
     if (locked || isPlanningGeometryLocked(current)) { setMessage("잠긴 계획안은 변경할 수 없습니다."); return undefined; }
     return current;
   }
@@ -173,9 +174,10 @@ export function PlanningQuantityCostPanel({ scenario, geometry, context, locked:
     ["예상 이익", currentPreview.before.profitManwon, currentPreview.after.profitManwon],
   ] : [];
   return <div className="lv-quantity">
+    {scenario.fullQuoteAdoption && <p role="status">전체 견적 채택 중 · 아래 수량 원가는 비교 근거이며 사업비에 별도 가산되지 않습니다.</p>}
     <p className="lv-status" data-state={saved.status === "conflict" || saved.status === "stale" ? "conflict" : "review"}>
       저장 원가: {statusLabels[saved.status]}
-      {saved.status === "ready" && saved.adjustmentManwon !== null && <> · 공사비 증감 {number(saved.adjustmentManwon)}만원</>}
+      {saved.status === "ready" && saved.adjustmentManwon !== null && <> · {scenario.fullQuoteAdoption ? "기존 산식 증감" : "공사비 증감"} {number(saved.adjustmentManwon)}만원</>}
     </p>
     {saved.issues.length > 0 && <details><summary>저장 원가 확인 사항 ({saved.issues.length})</summary>
       <ul className="lv-issues">{saved.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>

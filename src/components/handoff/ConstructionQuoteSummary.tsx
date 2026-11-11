@@ -15,9 +15,12 @@ export function ConstructionQuoteSummary({ packet }: { packet: ReviewSnapshotPay
   if (!parsed.success) return <p role="alert">저장 견적의 입력 형식이 올바르지 않습니다. 견적 내역을 확인해야 합니다.</p>;
   const quote = parsed.data;
   const checked = packet?.verification.checks.find(check => check.id === "binding.construction-quote")?.status === "checked";
+  const adopted = packet?.planningScenario?.fullQuoteAdoption;
+  const adoptionChecked = packet?.verification.checks.find(check => check.id === "binding.full-quote-cost")?.status === "checked";
   return <section className="iv-quantity iv-quote" aria-label="저장 견적 대사 내역">
     <h3>저장 견적 대사 내역</h3>
-    <p>{checked ? "입력 대사 확인" : "입력 대사 미완료"} · 사업비 미반영 · 원문 진위·전체 실측·전문가 승인 미확정</p>
+    <p>{checked ? "입력 대사 확인" : "입력 대사 미완료"} · {adopted ? adoptionChecked ? "전체 견적 채택 당시 사업비 연결 확인" : "전체 견적 채택 재검토 필요" : "사업비 미반영"} · 원문 진위·전체 실측·전문가 승인 미확정</p>
+    {adopted && <p>채택일 {adopted.adoptedOn} · 채택 총액 {money(adopted.totalWon)} · 현재 견적 유효성은 재확인 대상입니다.</p>}
     <p>문서: {quote.reference || "미입력"} · 발행자: {quote.issuer || "미입력"}<br />대상 주소·공사명: {quote.projectReference || "미입력"}</p>
     <p>발행일 {quote.issuedOn || "미확정"} · 유효기한 {quote.validUntil || "미확정"} · 검토 기준일 {quote.reviewDate || "미확정"}</p>
     <p className="iv-key" aria-label="견적 기준 원문 참조">견적 기준 원문 참조 (sourceBasis): {quote.sourceBasis}</p>

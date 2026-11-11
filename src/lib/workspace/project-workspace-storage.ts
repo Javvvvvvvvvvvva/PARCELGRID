@@ -17,6 +17,7 @@ import {
 import type { AccessPrincipal } from "@/lib/auth/roles";
 import { getDb } from "@/lib/db";
 import { projectWorkspaceVersions } from "@/lib/db/schema";
+import { validateFullQuoteAdoptionTransitions } from "@/lib/workspace/full-quote-adoption-transition";
 import {
   canonicalProjectWorkspaceJson,
   hashProjectWorkspacePayload,
@@ -371,6 +372,19 @@ async function normalizedPayload(
   return { payload, payloadHash: await hashProjectWorkspacePayload(payload) };
 }
 
+function validateAdoptionTransition(
+  payload: ProjectWorkspacePayload,
+  previous?: ProjectWorkspacePayload,
+): void {
+  try {
+    validateFullQuoteAdoptionTransitions(payload, previous);
+  } catch (error) {
+    throw new ProjectWorkspaceIntegrityError(
+      error instanceof Error ? error.message : "전체 견적 채택 전환을 검증하지 못했습니다.",
+    );
+  }
+}
+
 async function saveLocalWorkspace(input: {
   principal: AccessPrincipal;
   projectId: string;
@@ -392,6 +406,7 @@ async function saveLocalWorkspace(input: {
         current?.payloadHash ?? null,
       );
     }
+    validateAdoptionTransition(input.payload, current?.payload);
     const revision = currentRevision + 1;
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const pending = path.join(directory, `.pending-${randomUUID()}.json`);
@@ -484,6 +499,7 @@ async function saveDatabaseWorkspace(input: {
         current?.payloadHash ?? null,
       );
     }
+    validateAdoptionTransition(input.payload, current?.payload as ProjectWorkspacePayload | undefined);
     const revision = currentRevision + 1;
     const event = await appendAuditEventInTransaction(tx, {
       principal: input.principal,

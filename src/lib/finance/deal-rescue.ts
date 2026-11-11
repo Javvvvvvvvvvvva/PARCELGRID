@@ -1,4 +1,4 @@
-import { calculateScenario, minimumConstructionCostRate } from "./scenario";
+import { calculateScenario, FIXED_FULL_QUOTE_COST_REASON, minimumConstructionCostRate } from "./scenario";
 import { ASSUMPTION_VALUE_RULES } from "./assumption-validation";
 import { meetsIrrTarget } from "./return-metrics";
 import {
@@ -122,6 +122,7 @@ export function findDealRescuePaths(
   scenario: Scenario
 ): DealRescueResult {
   const baseline = calculateScenario({ parcel, scenario });
+  const fixedQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
   const target: DealRescueTarget = {
     profit: 0,
     npv: 0,
@@ -132,9 +133,9 @@ export function findDealRescuePaths(
   const bounds: DealRescueBounds = {
     saleOrRentIncreasePct: (SINGLE_REVENUE_MULTIPLIER - 1) * 100,
     constructionCostReductionPct:
-      (1 - SINGLE_CONSTRUCTION_COST_FLOOR) * 100,
+      fixedQuote ? 0 : (1 - SINGLE_CONSTRUCTION_COST_FLOOR) * 100,
     interestRateFloorPct: 0,
-    balanced: { ...BALANCED_BOUNDS },
+    balanced: { ...BALANCED_BOUNDS, ...(fixedQuote ? { constructionCostReductionPct: 0 } : {}) },
   };
   const baseResult: Omit<DealRescueResult, "status" | "paths"> = {
     modelVersion: DEAL_RESCUE_MODEL_VERSION,
@@ -169,7 +170,7 @@ export function findDealRescuePaths(
     };
   }
 
-  const constructionCostFloor = minimumConstructionCostRate({ parcel, scenario });
+  const constructionCostFloor = fixedQuote ? 0 : minimumConstructionCostRate({ parcel, scenario });
   const paths = [
     findLandPricePath(parcel, scenario, target.irr),
     findRevenuePricePath(parcel, scenario, target.irr),
@@ -329,6 +330,9 @@ function findConstructionCostPath(
   targetIRR: number,
   constructionCostFloor: number,
 ): DealRescuePath {
+  if (scenario.program.areaContract?.fullQuoteCost !== undefined) {
+    return unavailablePath("construction-cost", "공사비 VE", "not-applicable", FIXED_FULL_QUOTE_COST_REASON);
+  }
   const baseValue = scenario.assumptions.constCostPerSqM;
   if (baseValue <= 0) {
     return unavailablePath(
@@ -443,6 +447,7 @@ function findBalancedPath(
   targetIRR: number,
   constructionCostFloor: number,
 ): DealRescuePath {
+  const fixedQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
   const revenueField = getRevenueField(scenario);
   const revenueBase = revenueField
     ? blendedRevenueUnitPrice(scenario, revenueField.kind)
@@ -465,7 +470,7 @@ function findBalancedPath(
         (BALANCED_BOUNDS.revenuePriceIncreasePct / 100) *
         profile.revenue *
         intensity;
-      const costReduction =
+      const costReduction = fixedQuote ? 0 :
         (BALANCED_BOUNDS.constructionCostReductionPct / 100) *
         profile.cost *
         intensity;
@@ -484,7 +489,7 @@ function findBalancedPath(
         ...scenario,
         assumptions: {
           ...scenario.assumptions,
-          constCostPerSqM: Math.max(
+          constCostPerSqM: fixedQuote ? scenario.assumptions.constCostPerSqM : Math.max(
             constructionCostFloor,
             Math.floor(
               scenario.assumptions.constCostPerSqM *
@@ -615,7 +620,7 @@ function findBalancedPath(
       "balanced",
       "균형 조정안",
       "unreachable",
-      `토지가 -${BALANCED_BOUNDS.landPriceReductionPct}%, 매출 단가 +${BALANCED_BOUNDS.revenuePriceIncreasePct}%, 공사비 -${BALANCED_BOUNDS.constructionCostReductionPct}%, 금리 -${BALANCED_BOUNDS.interestRateReductionPctPoint}%p 범위의 공개 조합 프로필에서도 목표를 충족하지 못했습니다.`
+      `토지가 -${BALANCED_BOUNDS.landPriceReductionPct}%, 매출 단가 +${BALANCED_BOUNDS.revenuePriceIncreasePct}%, ${fixedQuote ? "전체 견적 고정" : `공사비 -${BALANCED_BOUNDS.constructionCostReductionPct}%`}, 금리 -${BALANCED_BOUNDS.interestRateReductionPctPoint}%p 범위의 공개 조합 프로필에서도 목표를 충족하지 못했습니다.`
     );
   }
 
@@ -625,7 +630,7 @@ function findBalancedPath(
       "균형 조정안",
       best.changes,
       best.result,
-      "공개된 4개 조합 프로필 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다.",
+      `공개된 4개 조합 프로필 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다.${fixedQuote ? ` ${FIXED_FULL_QUOTE_COST_REASON}` : ""}`,
       targetIRR
     ),
     burdenScore: Number(best.score.toFixed(4)),

@@ -5,7 +5,7 @@ import {
   revenuePricingKindForScenario,
   withScenarioRevenueUnitPrice,
 } from "./revenue-contract";
-import { calculateScenario, minimumConstructionCostRate } from "./scenario";
+import { calculateScenario, FIXED_FULL_QUOTE_COST_REASON, minimumConstructionCostRate } from "./scenario";
 import { ASSUMPTION_VALUE_RULES } from "./assumption-validation";
 import type { Parcel, Scenario, ScenarioResult } from "./types";
 
@@ -82,6 +82,7 @@ export interface DealStressResult {
   reconciliationError: number;
   thresholds: DealStressThreshold[];
   stressCases: DealStressCase[];
+  costStressUnavailableReason?: string;
   geometryPolicy: string;
   bounds: string[];
 }
@@ -257,11 +258,12 @@ export function buildDealStressTest(
   );
 
   const constructionCurrent = scenario.assumptions.constCostPerSqM;
+  const fixedQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
   const quantityCostScope = scenario.program.areaContract?.quantityCostAdjustment
     ? "수량 교체 견적액 고정 · 잔여 기본 공종만 증감" : "직접 공사비 단가 변동";
-  const constructionLow = minimumConstructionCostRate({ parcel, scenario });
+  const constructionLow = fixedQuote ? 0 : minimumConstructionCostRate({ parcel, scenario });
   const constructionHigh = Math.min(Math.max(constructionCurrent * 2.5, 1), ASSUMPTION_VALUE_RULES.constCostPerSqM.max);
-  const construction = findHighestPassing(constructionLow, constructionHigh, (value) =>
+  const construction = fixedQuote ? { value: null, hitBound: false } : findHighestPassing(constructionLow, constructionHigh, (value) =>
     pass(
       parcel,
       cloneScenario(scenario, { constCostPerSqM: value }),
@@ -330,7 +332,7 @@ export function buildDealStressTest(
     revenueCurrent * 0.9,
   );
   const costUp = cloneScenario(scenario, {
-    constCostPerSqM: constructionCurrent * 1.1,
+    ...(fixedQuote ? {} : { constCostPerSqM: constructionCurrent * 1.1 }),
   });
   const rateUp = cloneScenario(scenario, {
     interestRate: rateCurrent + 1.5,
@@ -345,7 +347,7 @@ export function buildDealStressTest(
       revenueCurrent * 0.95,
     ),
     {
-    constCostPerSqM: constructionCurrent * 1.1,
+    ...(fixedQuote ? {} : { constCostPerSqM: constructionCurrent * 1.1 }),
     interestRate: rateCurrent + 1,
     constructionMonths: scenario.assumptions.constructionMonths + 3,
     },
@@ -360,14 +362,14 @@ export function buildDealStressTest(
       revenueDown,
       targetIRR,
     ),
-    stressCase(
+    ...(fixedQuote ? [] : [stressCase(
       "cost-up-10",
       "기본 공사단가 +10%",
       ["직접 공사비 단가 +10%", quantityCostScope, "연동 간접비·예비비 재계산"],
       parcel,
       costUp,
       targetIRR,
-    ),
+    )]),
     stressCase(
       "rate-up-1_5",
       "PF 금리 +1.5%p",
@@ -386,8 +388,8 @@ export function buildDealStressTest(
     ),
     stressCase(
       "combined-downside",
-      "복합 하방",
-      ["매출 -5%", "기본 공사단가 +10%", quantityCostScope, "PF +1.0%p", "공사 +3개월"],
+      fixedQuote ? "복합 하방 · 전체 견적 고정" : "복합 하방",
+      ["매출 -5%", ...(fixedQuote ? [FIXED_FULL_QUOTE_COST_REASON] : ["기본 공사단가 +10%", quantityCostScope]), "PF +1.0%p", "공사 +3개월"],
       parcel,
       combined,
       targetIRR,
@@ -414,14 +416,15 @@ export function buildDealStressTest(
     costDna: summedCost,
     reconciliationError:
       baseline.totalRevenue - baseline.totalCost - baseline.profit,
-    thresholds,
+    thresholds: fixedQuote ? thresholds.filter(row => row.id !== "construction-cost") : thresholds,
     stressCases,
+    ...(fixedQuote ? { costStressUnavailableReason: FIXED_FULL_QUOTE_COST_REASON } : {}),
     geometryPolicy:
       "계획 규모·용적률은 연속 보간하지 않습니다. Stage 2에서 저장된 법규·배치 검증 계획안끼리만 별도 비교합니다.",
     bounds: [
       `부동산 총 취득대금 0~${Math.round(landHigh)}만원`,
       `매출 단가 0~${revenueHigh}원 (현재의 4배와 입력 상한 중 작은 값)`,
-      `직접 공사비 ${constructionLow}~${constructionHigh}원/㎡ (음수 공사비 제외 · 현재의 2.5배와 입력 상한 중 작은 값)`,
+      fixedQuote ? FIXED_FULL_QUOTE_COST_REASON : `직접 공사비 ${constructionLow}~${constructionHigh}원/㎡ (음수 공사비 제외 · 현재의 2.5배와 입력 상한 중 작은 값)`,
       `PF 금리 0~25%`,
     ],
   };

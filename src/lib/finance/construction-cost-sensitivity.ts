@@ -1,4 +1,4 @@
-import { calculateScenario, CONST_COST_RANGE, type CalcInput } from "./scenario";
+import { calculateScenario, CONST_COST_RANGE, FIXED_FULL_QUOTE_COST_REASON, type CalcInput } from "./scenario";
 import { PROJECT_LEDGER_MODEL_VERSION } from "./project-ledger";
 import { D } from "./math";
 import type { ScenarioResult } from "./types";
@@ -56,6 +56,9 @@ export function calculateScenarioWithCostSensitivity(input: CalcInput): Scenario
   const baseRate = input.scenario.assumptions.constCostPerSqM;
   const stress = (multiplier: number): ConstructionCostCase => {
     const unitCostPerSqmWon = D(baseRate).times(multiplier).toNumber();
+    if (input.scenario.program.areaContract?.fullQuoteCost !== undefined) {
+      return { multiplier, unitCostPerSqmWon, status: "unavailable", reason: FIXED_FULL_QUOTE_COST_REASON };
+    }
     try {
       const result = calculateScenario({ ...input, scenario: { ...input.scenario,
         assumptions: { ...input.scenario.assumptions, constCostPerSqM: unitCostPerSqmWon },

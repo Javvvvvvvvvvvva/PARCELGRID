@@ -97,6 +97,7 @@ export function evaluateQuantityCost(scenario: PlanningScenario, inputs: Quantit
 export function applyQuantityCost(scenario: PlanningScenario, draft: QuantityCostPlan, inputs: QuantityCostInputs,
   geometry: PlanningGeometrySnapshot | null): { patch?: Partial<PlanningScenario>; error?: string } {
   if (isPlanningGeometryLocked(scenario)) return { error: "잠긴 대표 계획안은 변경할 수 없습니다." };
+  if (scenario.fullQuoteAdoption !== undefined) return { error: "전체 견적 채택을 먼저 해제해야 상세 수량 원가를 변경할 수 있습니다." };
   if (!geometry || geometry.projectId !== scenario.projectId || geometry.scenarioId !== scenario.id ||
       geometry.scenarioInputBasis !== planningGeometryInputBasis(scenario) ||
       scenario.floorPrograms.some(f => f.zones.some(z => z.useType === "residential") &&

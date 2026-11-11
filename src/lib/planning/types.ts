@@ -338,6 +338,9 @@ export interface PlanningEconomicsPreview {
   quantityCostStatus?: "absent" | "ready" | "missing" | "stale" | "conflict";
   /** 이 계산에 사용한 수량 계획·단가·포함액 전체 입력 기준. */
   quantityCostInputBasis?: string;
+  fullQuoteCostStatus?: "ready" | "stale";
+  fullQuoteCostIssue?: string;
+  fullQuoteSourceKey?: string;
   residentialFallbackUnitPriceWon?: number;
   /** 재료비 계산에 사용한 외벽 순면적. */
   facadeAreaSqm?: number;
@@ -407,6 +410,7 @@ export interface PlanningScenario {
   dwellingProgram?: PlanningDwellingProgram;
   quantityCost?: QuantityCostPlan;
   constructionQuote?: import("./construction-quote").ConstructionQuote;
+  fullQuoteAdoption?: import("./full-quote-cost-contract").FullQuoteCostContract;
   egressPlan?: import("./egress-core").EgressPlan;
   layoutFinanceHistory?: import("./layout-finance-state").LayoutFinanceApplication[];
   checks: PlanningCheck[];

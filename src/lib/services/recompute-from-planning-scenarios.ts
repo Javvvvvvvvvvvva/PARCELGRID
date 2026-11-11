@@ -14,6 +14,8 @@ import {
 } from "@/lib/planning/scenario-calculator";
 import { planningScenarioToBuildingProgram } from "@/lib/planning/scenario-to-building-program";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { assessFullQuoteAdoption } from "@/lib/planning/full-quote-adoption";
+import { quoteAdoptionBusinessDate } from "@/lib/planning/construction-quote-adoption-review";
 import type { PlanningScenario } from "@/lib/planning/types";
 import {
   computeProject,
@@ -148,13 +150,17 @@ export function recomputeFromPlanningScenarios(
       calculationContext
     );
     const scenarioAssumptions: AssumptionSet = { ...assumptions };
-    const geometry = planningScenario.quantityCost && calculation.economicsPreview.facadeCost?.areaBasis === "geometry-derived"
+    const geometry = planningScenario.fullQuoteAdoption || (planningScenario.quantityCost && calculation.economicsPreview.facadeCost?.areaBasis === "geometry-derived")
       ? buildPlanningGeometry({ projectId: planningScenario.projectId!, scenario: planningScenario,
           boundary: calculationContext.parcel.boundary, boundaryPolygons: calculationContext.parcel.boundaryPolygons,
           roads: calculationContext.parcel.roads, setback: calculationContext.parcel.setback,
           lotAreaSqm: calculationContext.parcel.lotAreaSqm, zoning: calculationContext.parcel.zoning ?? "",
           sunlight: calculation.sunlight, roofAllowanceM: calculationContext.parcel.roofAllowanceM,
           generatedAt: calculationContext.calculatedAt }).snapshot : undefined;
+    if (planningScenario.fullQuoteAdoption !== undefined) assessFullQuoteAdoption(planningScenario, {
+      constructionCostPerSqmWon: planningAssumptions.constructionCostPerSqmWon,
+      basementCostMultiplier: planningAssumptions.basementCostMultiplier,
+    }, geometry, quoteAdoptionBusinessDate());
 
     return {
       id: planningScenario.id,

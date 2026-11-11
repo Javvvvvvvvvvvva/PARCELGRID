@@ -21,7 +21,7 @@ afterEach(() => vi.useRealTimers());
 describe("integrated bounded verification", () => {
   it("binds separate monthly arithmetic checks without granting expert approval", () => {
     const report = buildIntegratedVerification(fresh());
-    expect(report.version).toBe("integrated-verification-2026.17");
+    expect(report.version).toBe("integrated-verification-2026.18");
     expect(report.modelVersions.ledgerArithmetic).toBe(PROJECT_LEDGER_AUDIT_VERSION);
     expect(report.checks.find(c => c.id === "binding.ledger-arithmetic")).toMatchObject({ status: "checked" });
     expect(report.approvalStatus).toBe("unverified");

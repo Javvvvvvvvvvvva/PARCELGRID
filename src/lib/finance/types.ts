@@ -340,6 +340,8 @@ export interface FinancialGeometryAreaContract {
   /** Stage 2에서 사용한 일조·채광 규칙, 예외와 입력 신뢰도. */
   sunlightAssessment?: SunlightRegulationResult;
   materialAdjustmentCostManwon: ManWon;
+  /** Adopted whole-construction quote; replaces every legacy hard-cost component. */
+  fullQuoteCost?: import("@/lib/planning/full-quote-cost-contract").FullQuoteCostContract;
   /** 상세 수량 대체 원가와 기본 공사비 포함액의 반올림 전 계약. */
   quantityCostAdjustment?: QuantityCostContract;
   dwellingCostAdjustment?: {

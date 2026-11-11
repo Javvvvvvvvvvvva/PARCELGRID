@@ -36,7 +36,8 @@ export function analysisReferenceInputBasis(scenario: PlanningScenario, parcel: 
     floors: scenario.floorPrograms, placement: scenario.placement, parking: scenario.parking, egress: scenario.egressPlan,
     geometrySource: scenario.geometrySource,
     primaryUse: scenario.primaryUse, dwellingProgram: scenario.dwellingProgram, layoutFinanceHistory: scenario.layoutFinanceHistory,
-    quantityCost: scenario.quantityCost, parcelBasis: representativeParcelBasis(parcel), geometryHash: geometry.geometryHash };
+    quantityCost: scenario.quantityCost, fullQuoteAdoption: scenario.fullQuoteAdoption,
+    constructionQuote: scenario.constructionQuote, parcelBasis: representativeParcelBasis(parcel), geometryHash: geometry.geometryHash };
 }
 
 /** Change binding only. Approval and the server review seal remain separate. */

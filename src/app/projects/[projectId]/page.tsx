@@ -1261,8 +1261,8 @@ export default function DashboardPage({
           <section className="dashboard-section" id="sensitivity">
             <SectionHeader
               eyebrow="TWO-WAY SENSITIVITY"
-              title={`${sensitivity.revenueLabel} × 기본 공사단가 민감도`}
-              description="각 셀은 현재 토지 검토가와 금융조건을 고정하고 두 핵심 변수만 바꾼 예상 손익입니다."
+              title={`${sensitivity.revenueLabel}${sensitivity.costStressUnavailableReason ? " 민감도 · 전체 견적 고정" : " × 기본 공사단가 민감도"}`}
+              description={sensitivity.costStressUnavailableReason ?? "각 셀은 현재 토지 검토가와 금융조건을 고정하고 두 핵심 변수만 바꾼 예상 손익입니다."}
             />
             {scenario.program.areaContract?.quantityCostAdjustment && <p>
               수량 교체 견적액과 기존 포함 비율은 유지합니다. 세로축은 남은 기본 공종의 단가 변화이며 전체 공사비의 같은 비율 증감을 뜻하지 않습니다.
@@ -2503,6 +2503,7 @@ function DealStressLabPanel({
                 </small>
               </div>
               <div style={{ display: "grid", gap: 7 }}>
+                {stress.costStressUnavailableReason && <p role="status">{stress.costStressUnavailableReason}</p>}
                 {stress.thresholds.map((row) => (
                   <StressThresholdRow
                     key={row.id}

@@ -26,6 +26,7 @@ import { facadeFingerprint, FACADE_COST_VERSION } from "@/lib/planning/facade-qu
 import { calculateEffectiveGFA } from "@/lib/finance/parking-core";
 import { buildProjectLedger } from "@/lib/finance/project-ledger";
 import { quantityAdjustmentForBase, quantityCostContractSchema } from "@/lib/planning/quantity-cost-contract";
+import { validateFullQuoteCostContract } from "@/lib/planning/full-quote-cost-contract";
 import {
   DEFAULT_RETAIL_RENT_PREMIUM,
   DEFAULT_STABILIZATION_FACTOR_PCT,
@@ -65,6 +66,26 @@ const WON_TO_MANWON = D(10_000);
 const AREA_CONTRACT_TOLERANCE_SQM = 0.05;
 const QUANTITY_AREA_ROUNDING_TOLERANCE_SQM = 0.0051;
 
+export const FIXED_FULL_QUOTE_COST_REASON = "채택한 전체 공사 견적액은 고정입니다. 기본 공사단가 변경으로 견적 증감이나 공사비 한도를 산출하지 않습니다.";
+
+/** Validate against the adopted plan and original inputs, never stress assumptions. */
+export function fullQuoteCostForScenario(scenario: Pick<Scenario, "id" | "program">) {
+  const area = scenario.program.areaContract;
+  if (area?.fullQuoteCost === undefined) return undefined;
+  const quote = validateFullQuoteCostContract(area.fullQuoteCost);
+  if (area.quantityCostAdjustment !== undefined) {
+    throw new Error("전체 공사 견적과 상세 수량 교체 원가를 중복 적용할 수 없습니다.");
+  }
+  const inputs = area.stage2Economics?.inputs;
+  if (quote.scenarioId !== scenario.id || quote.scenarioId !== area.sourceScenarioId ||
+      quote.scenarioVersion !== area.sourceScenarioVersion || !inputs ||
+      quote.inputs.constructionCostPerSqmWon !== inputs.constructionCostPerSqmWon ||
+      quote.inputs.basementCostMultiplier !== inputs.basementCostMultiplier) {
+    throw new Error("Stage 2/3 전체 공사 견적의 계획안·버전·원래 공사비 입력이 잠금 계약과 다릅니다.");
+  }
+  return quote;
+}
+
 function roundRevenuePoolAmounts(
   amounts: ScenarioResult["revenueByPool"],
 ): ScenarioResult["revenueByPool"] {
@@ -88,6 +109,8 @@ function validateFinancialGeometryContract(
       `Stage 2/3 계획안 ID가 일치하지 않습니다: ${contract.sourceScenarioId} / ${scenarioId}`
     );
   }
+
+  fullQuoteCostForScenario({ id: scenarioId, program });
 
   const facade = contract.facadeCost;
   if (facade) {
@@ -319,6 +342,9 @@ function hardConstructionCost(input: CalcInput, unitCostPerSqmWon: number): Deci
   const { parcel, scenario } = input;
   const { program, assumptions } = scenario;
   const areaContract = program.areaContract;
+  if (areaContract?.fullQuoteCost !== undefined) {
+    return D(areaContract.fullQuoteCost.totalWon).div(WON_TO_MANWON);
+  }
   const quantityAreas = areaContract?.quantityCostAdjustment?.constructionAreas;
   const weightedArea = areaContract
     ? D(quantityAreas?.aboveGroundSqm ?? areaContract.aboveGroundAreaSqm).plus(

@@ -6,6 +6,7 @@ import {
   type FinancialRevenueAreaPools,
 } from "@/lib/finance/types";
 import { resolvePlanningGeometrySource } from "@/lib/planning/geometry-source";
+import { assessFullQuoteAdoption } from "./full-quote-adoption";
 import { planningRevenueAreas } from "@/lib/planning/revenue-pools";
 import { evaluateQuantityCost } from "@/lib/planning/quantity-cost";
 import { quantityCostPlanBasis, type QuantityCostContract } from "@/lib/planning/quantity-cost-contract";
@@ -174,8 +175,43 @@ export function planningScenarioToBuildingProgram(
   const type = buildingTypeForScenario(scenario);
   const revenueAreas = planningRevenueAreas(scenario);
   const geometrySource = resolvePlanningGeometrySource(scenario);
+  if (scenario.fullQuoteAdoption === undefined && (calculation.economicsPreview.fullQuoteCostStatus !== undefined ||
+      calculation.economicsPreview.fullQuoteSourceKey !== undefined)) {
+    throw new Error("전체 견적 채택이 해제됐습니다. 기존 산식으로 다시 계산해야 합니다.");
+  }
+  const fullQuoteCost = scenario.fullQuoteAdoption === undefined ? undefined : assessFullQuoteAdoption(scenario,
+    { constructionCostPerSqmWon: calculation.economicsPreview.costInputs?.constructionCostPerSqmWon as number,
+      basementCostMultiplier: calculation.economicsPreview.costInputs?.basementCostMultiplier as number }, options.geometry);
+  if (fullQuoteCost) {
+    const preview = calculation.economicsPreview, inputs = preview.costInputs;
+    if (!inputs || preview.status !== "estimated" || preview.fullQuoteCostStatus !== "ready" ||
+        preview.fullQuoteSourceKey !== fullQuoteCost.sourceKey) throw new Error("전체 견적 비용 계산 기준이 다릅니다.");
+    const hard = fullQuoteCost.totalWon / 10_000;
+    const soft = hard * inputs.softCostRatePct / 100;
+    const contingency = (hard + soft) * inputs.contingencyRatePct / 100;
+    const construction = hard + soft + contingency;
+    const interest = construction * inputs.financingCostRatePct / 100;
+    const pfFee = construction * inputs.ltcTargetPct / 100 * inputs.pfUpfrontFeeRatePct / 100;
+    const financing = interest + pfFee + inputs.trustFeeManwon;
+    const total = preview.acquisitionCostManwon + preview.demolitionCostManwon + inputs.acquisitionTaxManwon +
+      inputs.acquisitionOtherCostManwon + inputs.tenantRelocationCostManwon + construction + financing;
+    for (const [actual, expected, tolerance] of [
+      [preview.constructionCostManwon, hard, 0.0051], [preview.softCostManwon, soft, 0.0051],
+      [preview.contingencyCostManwon, contingency, 0.0051], [preview.financingCostManwon, financing, 0.0051],
+      [preview.interestEstimateManwon ?? NaN, interest, 0.0051], [preview.pfFeeManwon ?? NaN, pfFee, 0.0051],
+      [preview.trustFeeManwon ?? NaN, inputs.trustFeeManwon, 0.0051],
+      [preview.acquisitionTaxManwon ?? NaN, inputs.acquisitionTaxManwon, 0.0051],
+      [preview.acquisitionOtherCostManwon ?? NaN, inputs.acquisitionOtherCostManwon, 0.0051],
+      [preview.tenantRelocationCostManwon ?? NaN, inputs.tenantRelocationCostManwon, 0.0051],
+      [preview.expectedRevenueManwon, calculation.revenueProjection.totalRevenueManwon, 0.0051],
+      [preview.totalCostManwon, total, 0.0151],
+      [preview.profitManwon, calculation.revenueProjection.totalRevenueManwon - total, 0.0151],
+    ]) if (!Number.isFinite(actual) || !Number.isFinite(expected) || Math.abs(actual - expected) > tolerance) {
+      throw new Error("전체 견적 반영 사업비 스냅샷이 원본 계산과 다릅니다.");
+    }
+  }
   let quantityCostAdjustment: QuantityCostContract | undefined;
-  if (scenario.quantityCost !== undefined) {
+  if (scenario.quantityCost !== undefined && !fullQuoteCost) {
     const inputs = calculation.economicsPreview.costInputs;
     if (!inputs) {
       throw new Error("Stage 2/3 상세 수량 원가를 검증할 기본 공사비 입력이 없습니다.");
@@ -270,6 +306,7 @@ export function planningScenarioToBuildingProgram(
       materialAdjustmentCostManwon:
         calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
       ...(quantityCostAdjustment ? { quantityCostAdjustment } : {}),
+      ...(fullQuoteCost ? { fullQuoteCost } : {}),
       dwellingCostAdjustment: scenario.dwellingProgram ? {
         unitCount: calculation.metrics.residentialUnitCount,
         baselineDwellingCount: scenario.dwellingProgram.baselineDwellingCount,

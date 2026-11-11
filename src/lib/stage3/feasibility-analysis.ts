@@ -1,4 +1,4 @@
-import { calculateScenario } from "@/lib/finance/scenario";
+import { calculateScenario, FIXED_FULL_QUOTE_COST_REASON } from "@/lib/finance/scenario";
 import {
   blendedRevenueUnitPrice,
   revenuePricingKindForScenario,
@@ -20,7 +20,8 @@ export interface Stage3Sensitivity {
   rows: Stage3SensitivityCell[][];
   revenueLabel: string;
   revenueSteps: typeof STAGE3_REVENUE_STEPS;
-  costSteps: typeof STAGE3_COST_STEPS;
+  costSteps: readonly number[];
+  costStressUnavailableReason?: string;
 }
 
 export interface Stage3BreakEvenPrice {
@@ -44,8 +45,10 @@ export function buildStage3Sensitivity(
   const saleDriven = revenueKind === "sale";
   const baseRevenue = blendedRevenueUnitPrice(scenario, revenueKind);
   const baseCost = scenario.assumptions.constCostPerSqM;
+  const fixedQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
+  const costSteps = fixedQuote ? [0] : STAGE3_COST_STEPS;
 
-  const rows = STAGE3_COST_STEPS.map((costDelta) =>
+  const rows = costSteps.map((costDelta) =>
     STAGE3_REVENUE_STEPS.map((revenueDelta) => {
       const pricedScenario = withScenarioRevenueUnitPrice(
         scenario,
@@ -74,7 +77,8 @@ export function buildStage3Sensitivity(
     rows,
     revenueLabel: saleDriven ? "매각·분양 단가" : "임대료",
     revenueSteps: STAGE3_REVENUE_STEPS,
-    costSteps: STAGE3_COST_STEPS,
+    costSteps,
+    ...(fixedQuote ? { costStressUnavailableReason: FIXED_FULL_QUOTE_COST_REASON } : {}),
   };
 }
 

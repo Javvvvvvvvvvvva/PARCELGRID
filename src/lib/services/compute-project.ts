@@ -34,7 +34,7 @@ import type { Parcel, Scenario } from "@/lib/finance/types";
 import type { ScenarioComparison } from "@/lib/finance/scenario-verdict";
 import type { SalePriceEstimate } from "@/lib/finance/sale-price-from-comps";
 
-export const PROJECT_CALCULATION_VERSION = "v228" as const;
+export const PROJECT_CALCULATION_VERSION = "v229" as const;
 
 export interface ProjectComputed {
   /** Retained only for the explicitly unpriced site-inspection workflow. */

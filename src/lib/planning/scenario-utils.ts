@@ -150,6 +150,7 @@ export function clonePlanningScenario(
     layoutFinanceHistory: undefined,
     quantityCost: undefined,
     constructionQuote: undefined,
+    fullQuoteAdoption: undefined,
     dwellingProgram: source.dwellingProgram ? {
       ...source.dwellingProgram,
       salePriceBands: source.dwellingProgram.salePriceBands?.map((band) => structuredClone(band)),

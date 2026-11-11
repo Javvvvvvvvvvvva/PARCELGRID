@@ -1,5 +1,19 @@
 # Full Quote Adoption Preflight
 
+## Financial Adoption Follow-up (2026-11-11)
+
+The read-only preflight remains distinct from the newly implemented explicit adoption action. The historical sections below describe v228. The current calculation is v229 and integrated verification is 2026.18.
+
+- `full-quote-cost-2026.1` persists the whole quote, scope declarations, adoption date, original cost inputs, plan/version and raw-source SHA-256 key. Adoption requires a saved matching quote, a current Korean business date, an unexpired VAT-included quote and an explicit confirmation. Removal restores the original formula and preserves quote evidence.
+- The adopted positive total replaces direct hard cost exactly once. Base, facade, dwelling and quantity costs remain comparison evidence; an active additive quantity finance contract cannot coexist. Indirect costs, contingency, financing and monthly ledgers recompute from this single cost source.
+- Planning calculation and the financial bridge recheck raw source bindings. Invalid adoption preserves only visibly stale historic preview amounts and cannot enter finance as a valid fallback. Clone clears adoption; geometry lock blocks adoption changes. Saving a new plan version requires renewed quote validation.
+- Workspace validation runs inside the local revision lock and the PostgreSQL transaction before audit/write. New/changed adoption requires today's Korean date; live promotion/recomputation checks current quote validity and rebuilt geometry. Unchanged historical drafts and explicit removal remain possible. Existing workspace revision/audit history records changes; no second approval ledger is invented.
+- Financial calculation is deterministic: historic contracts validate their adoption date, not the wall clock. Live service reuse separately checks current validity. Integrated handoff rechecks the raw plan/geometry/quote and exactly one hard-cost total; a checked historic binding is not current quote validity or professional approval.
+- Base-unit-rate low/high cost stress is unavailable for fixed quotes. No fake cost limit, VE saving, downside credit or balanced-rescue cost reduction is reported. Revenue sensitivity, break-even, finance/delay shocks and a disclosed fixed-quote combined case remain operational. Explicit quote escalation/change-order stress is still required separately.
+- Actual Next synthetic UI: 1440/390 pixels, adopt/remove, expired and unsaved source cases passed. Browser errors and horizontal overflow were zero. Real writes were blocked; isolated browser storage was discarded. Evidence: `artifacts/full-quote-adoption-2026-11-11/browser.json`.
+- Final `pnpm verify`: 3,335 tests passed; one opt-in PostgreSQL test skipped; lint, TypeScript and production build passed. The 110-test focused suite also passed. Independent code review found expired live reuse, reuse of a pre-removal calculation and missing financial snapshot-field checks; all three were fixed, regression-tested and re-reviewed. Primary-use changes also invalidate adoption.
+- Actual database/production acceptance, full report/PDF path, real BOQ/QS/tax review and original-document authenticity are not proven by these tests. Official boundaries, permits and professional approvals remain unconfirmed.
+
 ## Implemented
 
 - Version: `quote-adoption-review-2026.1`. This is a read-only preflight, not an adopted financial source.

@@ -57,11 +57,17 @@ function canonical(value: unknown): unknown {
 export function quoteAdoptionReviewKey(scenario: PlanningScenario, inputs: QuantityCostInputs,
   geometry?: PlanningGeometrySnapshot): string {
   const raw = { version: QUOTE_ADOPTION_REVIEW_VERSION, projectId: scenario.projectId, scenarioId: scenario.id,
-    scenarioVersion: scenario.version, planBasis: planningGeometryInputBasis(scenario),
+    scenarioVersion: scenario.version, primaryUse: scenario.primaryUse, planBasis: planningGeometryInputBasis(scenario),
     quote: constructionQuoteSchema.parse(scenario.constructionQuote), inputs: quantityCostInputsSchema.parse(inputs),
     materials: scenario.materials, dwellingProgram: scenario.dwellingProgram, quantityCost: scenario.quantityCost,
-    egress: scenario.egressPlan, floors: scenario.floorPrograms, geometrySource: scenario.geometrySource,
-    geometry: geometry ? { ...geometry, generatedAt: undefined } : null };
+    egress: scenario.egressPlan, floors: scenario.floorPrograms, parking: scenario.parking,
+    geometrySource: scenario.geometrySource ? { ...scenario.geometrySource, locked: undefined,
+      lockedAt: undefined, lockedGeometryHash: undefined } : undefined,
+    // Selection, display names and lifecycle validation are not physical quote scope.
+    geometry: geometry ? { version: geometry.version, projectId: geometry.projectId, scenarioId: geometry.scenarioId,
+      scenarioVersion: geometry.scenarioVersion, scenarioInputBasis: geometry.scenarioInputBasis,
+      geometryHash: geometry.geometryHash, coordinateSystem: geometry.coordinateSystem, parcel: geometry.parcel,
+      roads: geometry.roads, building: geometry.building } : null };
   if (!validateJsonStructure(raw, { maxDepth: 32, maxNodes: 100000 }).ok) throw new Error("견적 반영 검토 입력 한도를 초과했습니다.");
   const json = JSON.stringify(canonical(raw));
   if (json.length > 2_000_000) throw new Error("견적 반영 검토 입력 한도를 초과했습니다.");

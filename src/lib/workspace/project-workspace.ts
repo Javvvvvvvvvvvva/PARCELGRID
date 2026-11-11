@@ -6,6 +6,7 @@ import { planningMaterialSelectionSchema } from "@/lib/planning/material-contrac
 import { layoutFinanceHistorySchema } from "@/lib/planning/layout-finance-state";
 import { quantityCostPlanSchema } from "@/lib/planning/quantity-cost-contract";
 import { constructionQuoteSchema } from "@/lib/planning/construction-quote";
+import { validateFullQuoteCostContract } from "@/lib/planning/full-quote-cost-contract";
 import { egressPlanSchema } from "@/lib/planning/egress-core";
 import { analysisReferenceIsCurrent } from "@/lib/planning/analysis-reference-contract";
 import type { Parcel } from "@/lib/finance/types";
@@ -266,6 +267,10 @@ export function validateProjectWorkspacePayload(
       }
       if (scenario.constructionQuote !== undefined && !constructionQuoteSchema.safeParse(scenario.constructionQuote).success) {
         errors.push("공종 견적의 항목·범위·원문 참조 형식이 올바르지 않습니다.");
+      }
+      if (scenario.fullQuoteAdoption !== undefined) {
+        try { validateFullQuoteCostContract(scenario.fullQuoteAdoption); }
+        catch { errors.push("전체 견적 채택의 금액·범위·유효일이 올바르지 않습니다."); }
       }
       if (scenario.egressPlan != null && !egressPlanSchema.safeParse(scenario.egressPlan).success) {
         errors.push("피난·층간 코어 설정 또는 지상 출구 데이터가 올바르지 않습니다.");

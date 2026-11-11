@@ -5,7 +5,8 @@ import {
   revenuePricingFromAssumptions,
   valueRevenueAreaPools,
 } from "@/lib/finance/revenue-contract";
-import { buildPlanningGeometry } from "./planning-geometry";
+import { buildPlanningGeometry, type PlanningGeometrySnapshot } from "./planning-geometry";
+import { assessFullQuoteAdoption } from "./full-quote-adoption";
 import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import type {
   AssumptionSet,
@@ -301,7 +302,8 @@ function calculateEconomics(
   aboveGroundAreaSqm: number,
   basementAreaSqm: number,
   calculatedAt?: string,
-  materialAdjustment = calculatePlanningMaterialAdjustment(scenario)
+  materialAdjustment = calculatePlanningMaterialAdjustment(scenario),
+  geometry?: PlanningGeometrySnapshot,
 ): {
   preview: PlanningEconomicsPreview;
   revenueProjection: FinancialRevenueProjectionSnapshot;
@@ -327,7 +329,15 @@ function calculateEconomics(
     ? quantityCost.adjustmentManwon!
     : 0;
   const invalidQuantityCost = scenario.quantityCost !== undefined && !quantityCostReady;
-  const constructionCostManwon = Math.max(
+  let fullQuote: ReturnType<typeof assessFullQuoteAdoption>;
+  let quoteError: string | undefined;
+  try {
+    fullQuote = assessFullQuoteAdoption(scenario, {
+      constructionCostPerSqmWon: assumptions.constructionCostPerSqmWon,
+      basementCostMultiplier: assumptions.basementCostMultiplier,
+    }, geometry);
+  } catch (error) { quoteError = error instanceof Error ? error.message : "전체 견적 채택 재검토 필요"; }
+  const constructionCostManwon = fullQuote ? fullQuote.totalWon / WON_PER_MANWON : Math.max(
     0,
     baseConstructionCostManwon + materialAdjustment.adjustmentManwon + dwellingCostManwon +
       quantityCostAdjustmentManwon
@@ -426,6 +436,7 @@ function calculateEconomics(
   return {
     preview: {
       status: invalidQuantityCost ? "stale" : "estimated",
+      ...(fullQuote ? { fullQuoteCostStatus: "ready" as const, fullQuoteSourceKey: fullQuote.sourceKey } : {}),
       acquisitionCostManwon: round(acquisitionCostManwon),
       acquisitionTaxManwon: round(acquisitionTaxManwon),
       acquisitionOtherCostManwon: round(acquisitionOtherCostManwon),
@@ -491,6 +502,9 @@ function calculateEconomics(
       },
       assumptionsVersion: assumptions.version,
       calculatedAt: calculatedAt ?? new Date().toISOString(),
+      // Invalid adoption never silently falls back to a newly valid baseline estimate.
+      ...(quoteError ? { ...scenario.economicsPreview, status: "stale" as const,
+        fullQuoteCostStatus: "stale" as const, fullQuoteCostIssue: quoteError } : {}),
     },
     revenueProjection,
     quantityCost,
@@ -508,6 +522,11 @@ function buildChecks(
   quantityCost: ReturnType<typeof evaluateQuantityCost>
 ): PlanningCheck[] {
   const checks: PlanningCheck[] = [];
+  if (scenario.fullQuoteAdoption !== undefined) checks.push({ code: "full-quote-cost", label: "전체 견적 공사비 채택",
+    status: economics.fullQuoteCostStatus === "ready" ? "review" : "fail",
+    message: economics.fullQuoteCostStatus === "ready"
+      ? "전체 견적 총액으로 직접 공사비를 교체했습니다. 기본·외장·세대·수량 원가는 중복 가산하지 않습니다. 원문 진위·전문가 승인은 미확정입니다."
+      : `${economics.fullQuoteCostIssue} 표시된 사업비는 이전 계산이며 현재 사업성은 미확정입니다.`, source: "전체 견적 예비 채택" });
   if (scenario.quantityCost !== undefined) {
     const ready = economics.quantityCostStatus === "ready";
     checks.push({
@@ -515,7 +534,8 @@ function buildChecks(
       label: "상세 수량·공사비",
       status: ready ? "review" : "fail",
       message: ready
-        ? "상세 수량 대체 원가에서 기본 공사비 포함액을 차감해 반영했습니다. 예비 산정이며 견적·전문가 검토는 미확정입니다."
+        ? scenario.fullQuoteAdoption ? "상세 수량 원가는 전체 견적의 비교 기준으로 보존되며 별도 가산되지 않습니다."
+          : "상세 수량 대체 원가에서 기본 공사비 포함액을 차감해 반영했습니다. 예비 산정이며 견적·전문가 검토는 미확정입니다."
         : `상세 수량 원가를 반영할 수 없어 사업성이 미확정입니다. ${quantityCost.issues.join(" · ") || "수량·단가·기본 포함액과 현재 계획의 연결을 확인해야 합니다."}`,
       source: "상세 수량 원가 계약 · 전문가 검토 전",
     });
@@ -1037,7 +1057,7 @@ export function calculatePlanningScenario(
   const needsFacadeGeometry = scenario.materials && (scenario.materials.primaryFacadeMaterial !== "unselected"
     || (scenario.materials.secondaryFacadeMaterial !== "unselected" && scenario.materials.primaryFacadeSharePct < 100)
     || Object.keys(scenario.materials.faceAssignments ?? {}).length > 0);
-  const geometry = needsFacadeGeometry && hasParcelBoundary(parcel) ? buildPlanningGeometry({
+  const geometry = (needsFacadeGeometry || scenario.fullQuoteAdoption !== undefined) && hasParcelBoundary(parcel) ? buildPlanningGeometry({
     projectId: scenario.projectId ?? "planning", scenario, boundary: parcel.boundary, boundaryPolygons: parcel.boundaryPolygons,
     lotAreaSqm: parcel.lotAreaSqm, zoning: parcel.zoning ?? "", roads: parcel.roads,
     setback: parcel.setback,
@@ -1051,7 +1071,8 @@ export function calculatePlanningScenario(
     aboveGroundProgramAreaSqm,
     basementProgramAreaSqm,
     context.calculatedAt,
-    materialAdjustment
+    materialAdjustment,
+    geometry ?? undefined,
   );
   const checks = buildChecks(
     scenario,

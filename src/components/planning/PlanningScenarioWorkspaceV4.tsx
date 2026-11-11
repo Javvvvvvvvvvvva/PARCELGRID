@@ -1300,7 +1300,7 @@ export function PlanningScenarioWorkspaceV4({
                 bodyStyle={{ padding: "var(--s5)" }}
               >
                 {selectedCalculation.economicsPreview.status === "stale" ? <p role="alert">
-                  상세 수량 원가의 기준이 달라 사업비·이익은 미확정입니다. 수량·원가에서 포함액과 견적을 다시 검토해야 합니다.
+                  원가 또는 전체 견적 채택의 기준이 달라 사업비·이익은 미확정입니다. 수량·원가와 견적 대사에서 현재 기준을 다시 검토해야 합니다.
                 </p> : <>
                 <div className="economics-grid">
                   <Metric

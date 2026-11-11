@@ -15,10 +15,10 @@ function money(value: number | null, signed = false): string {
   return `${signed && value > 0 ? "+" : ""}${value.toLocaleString("ko-KR", { maximumFractionDigits: 2 })} 원`;
 }
 
-export function ConstructionQuoteCostComparison({ comparison }: { comparison: Comparison }) {
+export function ConstructionQuoteCostComparison({ comparison, adopted = false }: { comparison: Comparison; adopted?: boolean }) {
   return <section className="lv-quote-cost-comparison" aria-label="전체 공사비 비교" data-status={comparison.status}>
     <div className="lv-quote-heading"><h5>전체 공사비 비교</h5>
-      <span className="lv-note">사업비 미반영 · 전문가 승인 미확정</span></div>
+      <span className="lv-note">{adopted ? "채택 전 산식 비교 · 추가 가산 없음" : "사업비 미반영"} · 전문가 승인 미확정</span></div>
     <p className={comparison.status === "conflict" ? "lv-quote-error" : "lv-note"}>{statusLabels[comparison.status]}</p>
     <dl className="lv-quote-metrics">
       <div><dt>기본 공사비 (BASE)</dt><dd>{money(comparison.baseConstructionCostWon)}</dd></div>
@@ -27,7 +27,7 @@ export function ConstructionQuoteCostComparison({ comparison }: { comparison: Co
       <div><dt>상세 수량 원가 증감</dt><dd>{money(comparison.quantityAdjustmentWon, true)}</dd></div>
     </dl>
     <dl className="lv-quote-metrics lv-quote-cost-totals">
-      <div><dt>현재 공사비 합계</dt><dd>{money(comparison.currentConstructionCostWon)}</dd></div>
+      <div><dt>{adopted ? "기존 산식 공사비 합계" : "현재 공사비 합계"}</dt><dd>{money(comparison.currentConstructionCostWon)}</dd></div>
       <div><dt>견적 공사비 합계</dt><dd>{money(comparison.quoteConstructionCostWon)}</dd></div>
       <div><dt>차액 (견적 − 현재)</dt><dd>{money(comparison.differenceWon, true)}</dd></div>
     </dl>

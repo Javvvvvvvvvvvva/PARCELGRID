@@ -12,7 +12,7 @@ import { evaluateConstructionQuoteCostComparison } from "@/lib/planning/construc
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import { ConstructionQuoteImport } from "./ConstructionQuoteImport";
 import { ConstructionQuoteCostComparison } from "./ConstructionQuoteCostComparison";
-import { ConstructionQuoteAdoptionReview } from "./ConstructionQuoteAdoptionReview";
+import { ConstructionQuoteAdoptionReview, FullQuoteAdoptionStatus } from "./ConstructionQuoteAdoptionReview";
 import { ConstructionScopeLedgerSummary } from "@/components/handoff/ConstructionScopeLedgerSummary";
 import type { QuantityCostInputs } from "@/lib/planning/quantity-cost-contract";
 import { QUANTITY_ITEM_IDS } from "@/lib/planning/quantity-takeoff";
@@ -22,6 +22,7 @@ import "./construction-quote.css";
 type Props = {
   scenario: PlanningScenario; inputs: QuantityCostInputs; locked: boolean;
   geometry?: import("@/lib/planning/planning-geometry").PlanningGeometrySnapshot;
+  context?: import("@/lib/planning/scenario-calculator").PlanningCalculationContext;
   getCurrentScenario: () => PlanningScenario | undefined;
   onChange: (patch: Partial<PlanningScenario>) => void;
 };
@@ -95,7 +96,7 @@ export function PlanningConstructionQuotePanel(props: Props) {
   return <ConstructionQuoteEditor key={`${props.scenario.projectId}:${props.scenario.id}`} {...props} />;
 }
 
-function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedProp, getCurrentScenario, onChange }: Props) {
+function ConstructionQuoteEditor({ scenario, inputs, geometry, context, locked: lockedProp, getCurrentScenario, onChange }: Props) {
   const [sessionAtMount] = useState(() => ({ key: clientSession.context, active: clientSession.active, generation: 0 }));
   const sessionGeneration = useRef(sessionAtMount.generation);
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -190,6 +191,13 @@ function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedPro
     setDraft(previous => previous.quote ? { ...previous, quote: update(previous.quote) } : previous);
     setMessage("");
     return true;
+  }
+  function readAdoptionCurrent() {
+    const current = readCurrent(true, false);
+    if (serialized(current.fullQuoteAdoption) !== serialized(scenario.fullQuoteAdoption)) {
+      throw new Error("저장된 견적 채택이 변경됐습니다. 최신 상태에서 다시 확인하세요.");
+    }
+    return current;
   }
   function editLine(id: string, patch: Partial<ConstructionQuoteLine>) {
     return editQuote(value => ({ ...value, lines: value.lines.map(line => line.id === id ? { ...line, ...patch } : line) }));
@@ -356,7 +364,9 @@ function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedPro
 
   return <div className="lv-quote">
     <div className="lv-quote-heading"><h4>신축 공사 견적 대사</h4>
-      <span className="lv-note">공식 승인 미확정 · 재무 미반영</span></div>
+      <span className="lv-note">공식 승인 미확정 · {scenario.fullQuoteAdoption ? "전체 견적 채택 있음" : "재무 미반영"}</span></div>
+    <FullQuoteAdoptionStatus scenario={scenario} inputs={costInputs} geometry={geometry} context={context}
+      readWritableCurrent={locked ? undefined : readAdoptionCurrent} onChange={onChange} />
     <p className="lv-status">저장 증빙: {scenario.constructionQuote === undefined ? "없음" : "있음 · 입력 증빙"}</p>
     {quote && <p className="lv-status" data-state={stale || savedChanged ? "conflict" : "review"}>
       초안: {savedChanged ? "외부 저장본 변경 · 현재 초안 보존 중" : dirty ? "저장되지 않은 변경 있음" : "저장본과 동일"}
@@ -538,9 +548,15 @@ function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedPro
             <div><dt>기본단가만 비교한 차액</dt><dd>{formatMoney(currentReview.differenceFromBaseWon, true)}</dd></div>
           </dl>
           <p className="lv-note">BASE는 현재 연면적·기본 단가·지하층 배율의 산술값입니다. 기본단가만 비교한 차액은 재료비·추가 세대·상세 수량 원가 증감을 제외한 참고값이며 절감액·사업비 반영액을 뜻하지 않습니다. 미확정·불일치가 있는 견적의 차액은 미산정입니다.</p>
-          {currentQuoteReview && <ConstructionQuoteCostComparison comparison={currentQuoteReview.comparison} />}
+          {currentQuoteReview && <ConstructionQuoteCostComparison comparison={currentQuoteReview.comparison} adopted={scenario.fullQuoteAdoption !== undefined} />}
           {currentQuoteReview && <ConstructionQuoteAdoptionReview key={currentQuoteReview.key}
             scenario={{ ...scenario, constructionQuote: quote! }} inputs={costInputs} geometry={geometry}
+            context={context} onChange={onChange}
+            readWritableCurrent={locked || dirty ? undefined : () => {
+              const current = readAdoptionCurrent();
+              if (serialized(current.constructionQuote) !== serialized(quote)) throw new Error("현재 견적을 저장한 뒤 다시 대사하세요.");
+              return current;
+            }}
             readCurrent={() => {
               const current = readCurrent(false);
               if (constructionQuoteBasis(current, costInputs) !== basis.value || comparisonCostKey(current) !== comparisonKey) {
@@ -566,7 +582,7 @@ function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedPro
         <p className="lv-note">문서 진위·실제 전체 공사비의 완결성·공식 승인·전문 검토는 미확정입니다. 견적 증빙은 공사비·사업성에 자동 반영되지 않습니다.</p>
         <div className="lv-actions"><button type="button" disabled={!editable || !validDraft || !dirty} onClick={saveDraft}>
           <Save size={15} aria-hidden="true" />견적 증빙 저장</button>
-          <span className="lv-note">미확정·불일치가 있는 유효 초안도 저장 가능 · 재무 미반영</span></div>
+          <span className="lv-note">증빙 저장과 사업비 채택은 별개 · 변경 후 기존 채택 재검토 필요</span></div>
       </section>
     </>}
   </div>;

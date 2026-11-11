@@ -30,8 +30,10 @@ import { COMPLIANCE_MODEL_VERSION } from "@/lib/finance/compliance";
 import { PROJECT_LEDGER_AUDIT_VERSION } from "@/lib/finance/project-ledger-audit";
 import { HOLD_PERIOD_LEDGER_MODEL_VERSION } from "@/lib/finance/hold-period-ledger";
 import { assessConstructionQuote, buildConstructionScopeLedger, CONSTRUCTION_QUOTE_VERSION, CONSTRUCTION_SCOPE_LEDGER_VERSION } from "@/lib/planning/construction-quote";
+import { assessFullQuoteAdoption } from "@/lib/planning/full-quote-adoption";
+import { FULL_QUOTE_COST_VERSION, validateFullQuoteCostContract } from "@/lib/planning/full-quote-cost-contract";
 
-export const INTEGRATED_VERIFICATION_VERSION = "integrated-verification-2026.17" as const;
+export const INTEGRATED_VERIFICATION_VERSION = "integrated-verification-2026.18" as const;
 
 export type IntegratedVerificationInput = {
   projectId: string;
@@ -221,7 +223,7 @@ export function buildIntegratedVerification(input: IntegratedVerificationInput):
     modelVersions: { integrated: INTEGRATED_VERIFICATION_VERSION, geometry: PLANNING_GEOMETRY_VERSION,
       interior: INTERIOR_LAYOUT_VERSION, rooms: ROOM_LAYOUT_VERSION, egress: EGRESS_VERSION,
       parking: PLANNING_PARKING_GEOMETRY_VERSION, vehicle: VEHICLE_SCREENING_VERSION, financeArithmetic: "stored-finance-arithmetic-2026.1",
-      quantityTakeoff: QUANTITY_TAKEOFF_VERSION, quantityCost: QUANTITY_COST_VERSION,
+      quantityTakeoff: QUANTITY_TAKEOFF_VERSION, quantityCost: QUANTITY_COST_VERSION, fullQuoteCost: FULL_QUOTE_COST_VERSION,
       costSensitivity: CONSTRUCTION_COST_SENSITIVITY_VERSION, regulatoryRisk: COMPLIANCE_MODEL_VERSION,
       ledgerArithmetic: PROJECT_LEDGER_AUDIT_VERSION, constructionQuote: CONSTRUCTION_QUOTE_VERSION, constructionScopeLedger: CONSTRUCTION_SCOPE_LEDGER_VERSION,
       projectCalculation: PROJECT_CALCULATION_VERSION, holdPeriod: HOLD_PERIOD_LEDGER_MODEL_VERSION, scenarioDecision: SCENARIO_DECISION_MODEL_VERSION },
@@ -488,7 +490,26 @@ export function buildIntegratedVerification(input: IntegratedVerificationInput):
     }
   }
 
-  if (plan?.quantityCost || contract.quantityCostAdjustment) {
+  if (plan?.fullQuoteAdoption !== undefined || contract.fullQuoteCost !== undefined) {
+    try {
+      if (!plan) throw new Error("원본 계획 누락");
+      const stored = validateFullQuoteCostContract(contract.fullQuoteCost);
+      const rawInputs = record(record(contract.stage2Economics).inputs);
+      const inputs = quantityCostInputsSchema.parse({ constructionCostPerSqmWon: rawInputs.constructionCostPerSqmWon,
+        basementCostMultiplier: rawInputs.basementCostMultiplier });
+      const expected = assessFullQuoteAdoption(plan, inputs, geometry ?? undefined, stored.adoptedOn);
+      if (!expected || !calculatedValueMatches(stored, expected) || contract.quantityCostAdjustment !== undefined ||
+          typeof vm.hardCost !== "number" || Math.abs(vm.hardCost - expected.totalWon / 10000) > 0.500001) {
+        throw new Error("전체 견적 원본과 재무 공사비가 다르거나 수량 조정이 중복 연결됐습니다.");
+      }
+      add("binding.full-quote-cost", "finance-tax", "전체 견적 채택·사업비 연결", "checked",
+        "원시 계획·형상·견적·포함 범위와 채택 당시 유효일을 대사했습니다. 견적 총액이 직접 공사비로 한 번 반영됩니다. 현재 유효기간·원문 진위·전문가 승인은 별도 확인 대상입니다.");
+    } catch (error) {
+      add("binding.full-quote-cost", "finance-tax", "전체 견적 채택·사업비 연결", "fail",
+        error instanceof Error ? error.message : "전체 견적 채택을 검증하지 못했습니다.");
+    }
+  }
+  if ((plan?.quantityCost || contract.quantityCostAdjustment) && !plan?.fullQuoteAdoption && !contract.fullQuoteCost) {
     const costInputs = record(record(contract.stage2Economics).inputs);
     const quantityInputs = quantityCostInputsSchema.safeParse({ constructionCostPerSqmWon: costInputs.constructionCostPerSqmWon,
       basementCostMultiplier: costInputs.basementCostMultiplier });
