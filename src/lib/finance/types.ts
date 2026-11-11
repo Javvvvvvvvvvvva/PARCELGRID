@@ -350,6 +350,7 @@ export interface FinancialGeometryAreaContract {
     evidenceStatus: "assumed" | "user-input" | "quoted";
     source?: string;
   };
+  facadeCost?: import("@/lib/planning/materials").PlanningMaterialCostAdjustment;
   planningAssumptionsVersion?: string;
   geometrySource?: {
     mode: "engine-generated" | "external-model" | "reference-image";
@@ -675,6 +676,7 @@ export interface TaxLine {
 }
 
 export interface TaxBreakdown {
+  modelVersion?: string;
   lines: TaxLine[];
   /** 구버전 표시 호환용. 세전 원장에 이미 반영된 세액 합계이며 추가 차감액이 아니다. */
   total: ManWon;

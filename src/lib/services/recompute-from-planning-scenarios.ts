@@ -117,6 +117,10 @@ export function recomputeFromPlanningScenarios(
           : ("user-entered" as const),
       sunlightRuleAsOf: previous?.meta.lastSyncedAt?.slice(0, 10),
       lotAreaSqm: effectiveParcel.lotArea,
+      boundary: effectiveParcel.boundary,
+      boundaryPolygons: effectiveParcel.boundaryPolygons,
+      roads: effectiveParcel.roads,
+      setback: effectiveParcel.setback,
       maxFARPct: effectiveParcel.maxFAR,
       maxBCRPct: effectiveParcel.maxBCR,
       heightLimitM: effectiveParcel.heightLimit ?? 0,
@@ -161,6 +165,7 @@ export function recomputeFromPlanningScenarios(
   });
 
   const computed = computeProject(effectiveParcel, financeScenarios, {
+    intakeRevision: options.intakeRevision ?? previous?.meta.intakeRevision,
     calculateMaxAcquisition: true,
     ...computeOptions,
     recommendedId: representativeId,

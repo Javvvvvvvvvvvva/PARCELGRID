@@ -10,6 +10,7 @@ import { sessionFetch as fetch } from "@/lib/auth/client-session";
  */
 
 import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
+import { buildingRegistryLabel } from "@/lib/building-registry/evidence";
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -79,6 +80,7 @@ export default function StatusPage({
   const data = useProjectStore((s) => s.data);
   const parcel = data?.parcel;
   const currentBuilding = parcel?.currentBuilding;
+  const [showDetails, setShowDetails] = useState(false);
 
   const [layers, setLayers] = useState<Record<MapLayer, boolean>>({
     subject: true,
@@ -118,8 +120,8 @@ export default function StatusPage({
   }, [parcel?.acquiredPrice, parcel?.lotArea]);
 
   const { stations, status: stationLookupStatus } = useNearbyStations(
-    parcel?.lat,
-    parcel?.lng,
+    showDetails ? parcel?.lat : undefined,
+    showDetails ? parcel?.lng : undefined,
   );
 
   const compsForMap = useMemo(() => {
@@ -218,7 +220,7 @@ export default function StatusPage({
   const heightDecisionGrade = regulatoryConstraintIsDecisionGrade(
     parcel.regulatoryConstraints?.height
   );
-  const ageYears = currentBuilding?.maxAgeYears ?? main?.ageYears ?? null;
+  const ageYears = currentBuilding?.redevelopmentSignal === "unknown" || !main?.approvalDate ? null : currentBuilding?.maxAgeYears ?? main.ageYears;
   const buildingStatus = getBuildingRegistryStatus(currentBuilding);
   const bcrHeadroom = ratios ? headroomPct(ratios.bcrPct, parcel.maxBCR) : null;
   const farHeadroom = ratios ? headroomPct(ratios.farPct, parcel.maxFAR) : null;
@@ -238,21 +240,21 @@ export default function StatusPage({
     ? main.detailPurpose && main.detailPurpose !== main.mainPurpose
       ? `${main.mainPurpose} · ${main.detailPurpose}`
       : main.mainPurpose
-    : buildingStatus === "confirmed-empty"
-      ? "등록 건물 없음"
+    : buildingStatus === "no-records"
+      ? "요청 지번 표제부 0건"
       : "건축물대장 미확인";
 
   const headline = main
-    ? `${ageYears ?? "—"}년 경과한 ${purpose}`
-    : buildingStatus === "confirmed-empty"
-      ? "건축물대장에 등록된 현재 건물이 없습니다"
+    ? ageYears == null ? `${purpose} · 노후도 미확인` : `${ageYears}년 경과한 ${purpose}`
+    : buildingStatus === "no-records"
+      ? "요청 지번의 표제부 조회 결과가 0건입니다"
       : "현재 건축물대장 조회 상태를 확인해야 합니다";
 
   const overviewText = ratios
     ? farDecisionGrade && bcrDecisionGrade
       ? `현재 건폐율은 원문 확인 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 확인 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 함께 검토합니다.`
       : `현재 건물 비율은 계산됐지만 건폐율·용적률 숫자는 출처 확인이 필요한 검토값입니다. 관할 조례·지구단위계획 원문을 확인하기 전에는 법정 여유로 확정하지 않습니다.`
-    : buildingStatus === "confirmed-empty"
+    : buildingStatus === "no-records"
       ? "건축물대장상 등록 건물이 없는 것으로 조회됐습니다. 실제 빈 토지 여부와 멸실 상태를 현장에서 확인한 뒤 Stage 2에서 가능 규모를 검토합니다."
       : "건축물대장 응답이 없어 기존 건물 유무와 비율을 확정할 수 없습니다. 원문과 현장 현황을 확인한 뒤 Stage 2 검토를 진행합니다.";
 
@@ -261,8 +263,8 @@ export default function StatusPage({
       label:
         buildingStatus === "present"
           ? "기존 건물 있음"
-          : buildingStatus === "confirmed-empty"
-            ? "등록 건물 없음"
+          : buildingStatus === "no-records"
+            ? "요청 지번 표제부 0건"
             : "건축물대장 확인 필요",
       tone: buildingStatus === "present" ? "neutral" : "warning",
     },
@@ -313,6 +315,17 @@ export default function StatusPage({
 
   return (
     <div className="status-page" style={{ padding: "var(--s6)", maxWidth: 1200, margin: "0 auto" }}>
+      <section className="site-status-summary" aria-label="부지 현황 요약">
+        <div className="site-status-heading"><div><p className="site-eyebrow">선택한 부지 · 현재 상태</p><h1>{parcel.address}</h1><p>{parcel.addressRoad || "현황을 먼저 확인한 뒤 계획을 검토하세요."}</p></div><Link href="/projects/new">다른 부지 선택</Link></div>
+        <div className="site-status-cards">
+          <article className="site-status-card"><span>어떤 땅인가요?</span><strong>{num(parcel.lotArea, 2)}㎡ <small style={{fontSize: 13, fontWeight: 400}}>· {pyeong(parcel.lotArea)}</small></strong><p>{parcel.zoning}</p><p>{boundarySource}</p></article>
+          <article className="site-status-card"><span>현재 건물은요?</span><strong>{main ? main.missingFields?.includes("grndFlrCnt") ? "층수 미확인" : `지상 ${main.groundFloors}층` : "현장 확인 필요"}</strong><p>{main ? purpose : buildingRegistryLabel(currentBuilding)}</p><p>{main ? ageYears == null ? "사용승인일 미확인" : `사용승인 후 ${ageYears}년 · 관측값 기준` : "조회 결과만으로 빈 땅을 판단하지 않아요."}</p></article>
+          <article className="site-status-card"><span>무엇을 확인해야 하나요?</span><strong>{farDecisionGrade && bcrDecisionGrade ? "세부 조건 검토" : "규제 원문 확인"}</strong><p>{farDecisionGrade && bcrDecisionGrade ? "도로·주차·일조 조건을 계획에서 함께 검토하세요." : "표시된 건폐율·용적률 참고값은 관할 원문과 대조해야 해요."}</p><p>{parcel.acquiredPrice > 0 ? "취득대금 입력됨" : "취득대금 미입력 · 현황 확인 가능"}</p></article>
+        </div>
+        <div className="site-status-next"><div><strong>이 땅에 어떤 계획이 가능할까요?</strong><p>{parcel.acquiredPrice > 0 ? "계획 스튜디오에서 규모와 배치를 비교해보세요." : "현재 계획 화면은 손익도 함께 비교하므로, 다음 단계에서 취득대금을 입력해요."}</p></div><Link className="site-primary" href={`/projects/${projectId}/envelope`}>계획 검토하기 →</Link></div>
+      </section>
+      <button type="button" className="site-detail-toggle" aria-expanded={showDetails} aria-controls="site-condition-details" onClick={() => setShowDetails(value => !value)}><span>{showDetails ? "상세 현황 접기 −" : "상세 현황과 근거 보기 +"}</span><small>토지 · 건축물대장 · 3D · 도로 · 지도</small></button>
+      {showDetails && <div id="site-condition-details">
       <div
         style={{
           display: "flex",
@@ -419,8 +432,8 @@ export default function StatusPage({
             value={
               main
                 ? `지상 ${main.groundFloors}층`
-                : buildingStatus === "confirmed-empty"
-                  ? "없음"
+                : buildingStatus === "no-records"
+                  ? "현장 미확인"
                   : "미확인"
             }
             sub={main && main.undergroundFloors > 0 ? `지하 ${main.undergroundFloors}층` : purpose}
@@ -550,8 +563,8 @@ export default function StatusPage({
                   main.undergroundFloors > 0 ? ` / 지하 ${main.undergroundFloors}층` : ""
                 }`}
               />
-              <DataRow label="건축면적" value={`${num(main.buildingArea, 2)} m²`} />
-              <DataRow label="연면적" value={`${num(main.totalArea, 2)} m²`} />
+              <DataRow label="건축면적" value={main.missingFields?.includes("archArea") ? "미제공" : `${num(main.buildingArea, 2)} m²`} />
+              <DataRow label="연면적" value={main.missingFields?.includes("totArea") ? "미제공" : `${num(main.totalArea, 2)} m²`} />
               {main.height > 0 && <DataRow label="높이" value={`${num(main.height, 2)} m`} />}
               {ratios && (
                 <DataRow
@@ -571,8 +584,8 @@ export default function StatusPage({
                 }
                 sub="건축물대장 연면적 × 구조별 단가 · 견적 아님"
               />
-              <DataRow label="기존 주차대수" value="추가 조회 필요" sub="표제부 외 추가 API 필요" />
-              <DataRow label="승강기·지붕" value="추가 조회 필요" sub="층별개요·설비 데이터 미연동" />
+              <DataRow label="기존 주차대수" value={main.parkingCount == null ? "미제공" : `${main.parkingCount}대`} sub="표제부 옥내/외 기계식·자주식 4항목 모두 제공된 경우 합계" />
+              <DataRow label="승강기·지붕" value={`승용 ${main.passengerElevators ?? "미제공"} / 비상 ${main.emergencyElevators ?? "미제공"} · ${main.roof || "지붕 미제공"}`} sub="승용·비상 승강기 수는 합산하지 않음" />
               <DataRow label="위반건축물 여부" value="추가 확인 필요" sub="현재 API 응답에 포함되지 않음" />
               {(currentBuilding?.buildings.length ?? 0) > 1 && (
                 <DataRow
@@ -582,15 +595,16 @@ export default function StatusPage({
                 />
               )}
             </>
-          ) : buildingStatus === "confirmed-empty" ? (
+          ) : buildingStatus === "no-records" ? (
             <p style={{ margin: 0, fontSize: 13, color: "var(--fg-muted)" }}>
-              건축물대장에 등록된 건축물이 없습니다. 실제 빈 토지 여부는 현장 확인이 필요합니다.
+              요청 지번의 표제부 조회 결과가 0건입니다. 실제 빈 토지 여부는 현장 확인이 필요합니다.
             </p>
           ) : (
             <p style={{ margin: 0, fontSize: 13, color: "var(--warn-fg)" }}>
               건축물대장 조회 결과를 확보하지 못했습니다. 기존 건물 유무를 원문과 현장에서 확인하세요.
             </p>
           )}
+          <BuildingRegistryEvidencePanel info={currentBuilding} />
         </Panel>
       </div>
 
@@ -608,9 +622,9 @@ export default function StatusPage({
           title="③ 기존 건물·필지 개략 매스"
           source={
             buildingStatus === "present"
-              ? "건축물대장 면적·층수 기반 · 실제 배치도 아님"
-              : buildingStatus === "confirmed-empty"
-                ? "필지 경계 + 건축물대장상 등록 건물 없음"
+              ? currentBuilding?.source === "vworld-gis" ? "GIS 속성 기반 · 대장 별도 확인" : "건축물대장 면적·층수 기반 · 실제 배치도 아님"
+              : buildingStatus === "no-records"
+                ? "필지 경계 + 요청 지번 표제부 0건"
                 : "필지 경계만 표시 · 건축물대장 미확인"
           }
         >
@@ -635,9 +649,9 @@ export default function StatusPage({
             <span>드래그로 회전 · 휠로 확대</span>
             <span>
               {buildingStatus === "present"
-                ? "형상 정확도: 개략 · 면적·층수: 건축물대장"
-                : buildingStatus === "confirmed-empty"
-                  ? "필지 경계만 표시 · 등록 건물 없음은 현장 재확인"
+                ? currentBuilding?.source === "vworld-gis" ? "GIS 속성 · 원문 대조 필요" : "형상 정확도: 개략 · 면적·층수: 건축물대장"
+                : buildingStatus === "no-records"
+                  ? "필지 경계만 표시 · 표제부 0건은 현장 재확인"
                   : "필지 경계만 표시 · 기존 건물 형상 미확인"}
             </span>
           </div>
@@ -689,6 +703,7 @@ export default function StatusPage({
         </div>
       )}
 
+      {data?.meta.mode === "site-only" && <p className="site-muted" style={{marginTop: 20}}>현황 단계에서는 실거래·사업성 계산을 실행하지 않았습니다. 시장 비교는 가격 입력 후 검토 화면에서 확인할 수 있습니다.</p>}
       <Panel
         title="⑥ 지도와 주변 시장"
         source="Kakao Map · MOLIT 실거래"
@@ -792,6 +807,7 @@ export default function StatusPage({
           </Button>
         </Link>
       </div>
+      </div>}
     </div>
   );
 }
@@ -863,8 +879,8 @@ function Stage1ReadingGuide({
   const buildingLabel =
     buildingStatus === "present"
       ? `건축물대장상 기존 건물 있음${buildingAgeYears != null ? ` · 약 ${buildingAgeYears}년 경과` : ""}`
-      : buildingStatus === "confirmed-empty"
-        ? "건축물대장상 등록 건물 없음"
+      : buildingStatus === "no-records"
+        ? "요청 지번 표제부 0건 · 현장 미확인"
         : "건축물대장 조회 결과 미확보 · 건물 유무 확인 필요";
 
   return (
@@ -1110,26 +1126,29 @@ function formatApprovalDate(date: string, ageYears: number | null): string {
 }
 
 function signalTitle(info: BuildingLookupResult): string {
+  if (info.redevelopmentSignal === "unknown") return "노후도·조회 범위 확인 필요";
   if (info.redevelopmentSignal === "rebuild") return "노후도 기준 재건축 검토";
   if (info.redevelopmentSignal === "renovate") return "유지·리모델링·신축 비교";
-  if (info.redevelopmentSignal === "vacant") return "등록 건물 없음";
+  if (getBuildingRegistryStatus(info) !== "present") return buildingRegistryLabel(info);
   return "기존 건물 유지 검토";
 }
 
 function signalDescription(info: BuildingLookupResult): string {
+  if (info.redevelopmentSignal === "unknown") return info.signalReasoning;
   if (info.redevelopmentSignal === "rebuild") {
     return "노후도 신호는 철거 후 신축을 검토할 근거 중 하나입니다. 최종 판단은 구조 상태·철거비·신축 가능 규모·사업성을 함께 비교해야 합니다.";
   }
   if (info.redevelopmentSignal === "renovate") {
     return "노후도만으로 한 방향을 확정하지 않습니다. 유지보수 비용과 신축 시 확보 가능한 규모를 비교해야 합니다.";
   }
-  if (info.redevelopmentSignal === "vacant") {
-    return "건축물대장상 등록 건물이 없습니다. 실제 현황과 멸실 신고 여부를 추가로 확인해야 합니다.";
+  if (getBuildingRegistryStatus(info) !== "present") {
+    return `${buildingRegistryLabel(info)}. 부속지번·미등재·현장 현황을 추가 확인해야 합니다.`;
   }
   return "비교적 최근 건물로 분류됩니다. 철거보다 기존 가치와 유지 비용을 먼저 검토하는 구간입니다.";
 }
 
 function signalDot(info: BuildingLookupResult): "pos" | "warn" | "neg" {
+  if (info.redevelopmentSignal === "unknown" || getBuildingRegistryStatus(info) !== "present") return "warn";
   if (info.redevelopmentSignal === "rebuild") return "neg";
   if (info.redevelopmentSignal === "renovate") return "warn";
   return "pos";

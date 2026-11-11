@@ -18,6 +18,9 @@ import {
   toSunlightGeometryProfile,
   type SunlightRegulationResult,
 } from "@/lib/regulatory/sunlight-rules";
+import { validateInteriorLayout } from "@/lib/planning/interior/geometry";
+import { interiorFinanceSignature, isInteriorFinanceCurrent } from "@/lib/planning/interior/finance";
+import type { InteriorLayout, InteriorAssessment } from "@/lib/planning/interior/types";
 
 export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v6" as const;
 export const GEOMETRY_AREA_PASS_TOLERANCE_PCT = 0.1;
@@ -48,6 +51,7 @@ export interface PlanningGeometryFloor extends PlanningFloorMass {
   areaDifferenceSqm: number;
   areaStatus: "pass" | "review" | "fail";
   selfIntersects: boolean;
+  interior?: { layout: InteriorLayout; assessment: InteriorAssessment };
 }
 
 export interface PlanningGeometrySnapshot {
@@ -205,6 +209,7 @@ export function planningGeometryInputBasis(scenario: PlanningScenario): string {
       id: f.id, level: f.level, floorHeightM: f.floorHeightM,
       footprintScalePct: f.footprintScalePct, northSetbackM: f.northSetbackM,
       gross: f.zones.reduce((sum, z) => sum + z.areaSqm, 0),
+      ...(f.interior ? { interior: interiorFinanceSignature(f.interior, []) } : {}),
     })),
   });
 }
@@ -217,7 +222,7 @@ function canonicalPoint(point: LocalPlanPoint): [number, number] {
 export function planningGeometryContentHash(input: {
   projectId: string; scenarioId: string; origin: [number, number]; polygons: LocalParcelPolygon[];
   parcelAvailable: boolean; officialAreaSqm: number; zoning: string;
-  floors: Pick<PlanningGeometryFloor, "id" | "level" | "baseHeightM" | "topHeightM" | "programAreaSqm" | "visualAreaSqm" | "shape">[];
+  floors: Pick<PlanningGeometryFloor, "id" | "level" | "baseHeightM" | "topHeightM" | "programAreaSqm" | "visualAreaSqm" | "shape" | "interior">[];
   roads: Pick<PlanningGeometrySnapshot["roads"][number], "name" | "points">[];
 }): string {
   return stableGeometryHash({
@@ -232,6 +237,7 @@ export function planningGeometryContentHash(input: {
     floors: input.floors.map(floor => ({
       id: floor.id, level: floor.level, baseHeightM: round(floor.baseHeightM), topHeightM: round(floor.topHeightM),
       programAreaSqm: round(floor.programAreaSqm), visualAreaSqm: round(floor.visualAreaSqm), shape: floor.shape.map(canonicalPoint),
+      ...(floor.interior ? { interior: interiorFinanceSignature(floor.interior.layout, []) } : {}),
     })),
     roads: input.roads.map(road => ({ name: road.name, points: road.points.map(canonicalPoint) })),
   });
@@ -473,11 +479,13 @@ export function buildPlanningGeometry(
   );
   const floors: PlanningGeometryFloor[] = model.floors.map((floor) => {
     const absDifferencePct = Math.abs(floor.areaDifferencePct);
+    const interior = scenario.floorPrograms.find(program => program.id === floor.id)?.interior;
     return {
       ...floor,
       areaDifferenceSqm: floor.visualAreaSqm - floor.programAreaSqm,
       areaStatus: areaStatus(absDifferencePct),
       selfIntersects: polygonSelfIntersects(floor.shape),
+      ...(interior ? { interior: { layout: interior, assessment: validateInteriorLayout(interior, floor.shape) } } : {}),
     };
   });
   const aboveGroundFloors = floors.filter((floor) => floor.level > 0);
@@ -512,6 +520,24 @@ export function buildPlanningGeometry(
     message: "전체 대지 경계가 없거나 유효하지 않아 형상 검증을 보류했습니다. 외곽선 일부로 대체하지 않았습니다." });
   if (parcel.available && !frontage) baseValidation.issues.push({ code: "parcel-frontage-unavailable", severity: "review",
     message: "도로 접면 계산을 완료하지 못했습니다. 전체 경계에 기본 이격을 적용했으며 도로측 완화는 확인되지 않았습니다." });
+  const interiorFailures = floors.flatMap(floor =>
+    (floor.interior?.assessment.issues ?? []).filter(issue => issue.severity === "fail").map(issue => ({
+      code: `interior-${issue.code}`, severity: "fail" as const,
+      floorId: floor.id, floorLabel: floor.label, message: `${floor.label}: ${issue.message}`,
+    }))
+  );
+  for (const floor of scenario.floorPrograms) {
+    if (floor.interior && !isInteriorFinanceCurrent(floor)) interiorFailures.push({
+      code: "interior-finance-stale", severity: "fail", floorId: floor.id, floorLabel: floor.label,
+      message: `${floor.label}: 내부 구획과 사업성 면적을 다시 대조·반영해야 합니다.`,
+    });
+  }
+  if (interiorFailures.length) {
+    baseValidation.issues.push(...interiorFailures);
+    baseValidation.status = "fail";
+    baseValidation.exportable = false;
+    baseValidation.representativeEligible = false;
+  }
   const roads = (input.roads ?? []).map((road) => ({
     name: road.name,
     points: lineToLocalMeters(road.points, origin),

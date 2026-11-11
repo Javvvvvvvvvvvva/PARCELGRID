@@ -10,10 +10,8 @@ import {
 
 export type SummaryTone = "neutral" | "positive" | "warning" | "negative";
 export type SummaryKind = "observation" | "check";
-export type BuildingRegistryStatus =
-  | "present"
-  | "confirmed-empty"
-  | "unknown";
+import { getBuildingRegistryStatus } from "@/lib/building-registry/evidence";
+export { getBuildingRegistryStatus, type BuildingRegistryStatus } from "@/lib/building-registry/evidence";
 
 export interface StatusSummaryBullet {
   text: string;
@@ -23,17 +21,6 @@ export interface StatusSummaryBullet {
 
 function mainBuilding(info: BuildingLookupResult) {
   return info.buildings.find((b) => b.isMainBuilding) ?? info.buildings[0] ?? null;
-}
-
-export function getBuildingRegistryStatus(
-  info: BuildingLookupResult | null | undefined
-): BuildingRegistryStatus {
-  if (!info) return "unknown";
-  if (!info.hasBuilding) {
-    const title = info.registry?.title;
-    return title?.status === "complete" && title.totalCount === 0 && title.fetchedCount === 0 && title.pagesFetched > 0 && title.rows.length === 0 && info.buildings.length === 0 ? "confirmed-empty" : "unknown";
-  }
-  return mainBuilding(info) ? "present" : "unknown";
 }
 
 function unitCount(info: BuildingLookupResult): number {
@@ -53,7 +40,7 @@ function ageBullet(
       kind: "check",
     };
   }
-  if (status === "confirmed-empty") {
+  if (status === "no-records") {
     return {
       text: "조회 범위 내 건축물대장 표제부가 0건입니다. 실제 빈 토지 여부는 현장과 추가 자료로 확인해야 합니다.",
       tone: "neutral",
@@ -81,6 +68,8 @@ function ageBullet(
         tone: "positive",
         kind: "observation",
       };
+    case "unknown":
+      return { text: "대장 조회 범위나 사용승인일이 불완전해 전체 노후도를 판단하지 않습니다.", tone: "warning", kind: "check" };
     default:
       return null;
   }

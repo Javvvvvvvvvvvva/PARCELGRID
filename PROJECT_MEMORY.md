@@ -2,6 +2,10 @@
 
 최종 갱신: 2026-11-10 (America/Chicago)
 
+## Master 통합 검증 완료
+
+`9ca74d4`의 지도·개념 실내·외벽 수량 기능을 `49ae4a1`의 검증·조직 저장·권한 흐름에 통합했다. 최종 전체3224테스트+실제DB opt-in1제외/lint·타입·운영빌드 통과, 실제Next 합성 PC/모바일8조건 통과. 상세 결정과 검증 범위는 `docs/MASTER-INTEGRATION-2026-11-10.md`를 우선한다. 계산은 `v228`, 통합 검증은 `2026.17`이다. 공식 경계·허가·전문가 승인은 계속 미확정이다.
+
 이 파일은 다음 작업자가 오래된 세션 메모를 현재 요구사항으로 오해하지 않도록 실제 코드의 핵심 계약과 다음 우선순위만 유지한다. 전체 방향은 `docs/ASTRA-MASTER-PROMPT-KO.md`, 계산 세부는 각 버전 문서를 따른다.
 
 ## 최종 Goal · 재개
@@ -20,6 +24,13 @@
 - 계산·설계·승인·보고서·운영·디자인·홍보 자동화까지 포함한다. 기능·검증·운영 이후 전체 디자인을 정비한다.
 - 동일 과제 벤치마크, 독립 전문가 검산, 실제 DB·복구·보안·성능, 역할별 사용자 평가, 승인된 실제 게시 시험과 사용자 인수가 필요하다.
 - 공식 경계·허가·전문가 승인은 만들어내지 않는다. 비용·계약·외부 자료 제공·실제 게시에는 필요한 사용자 승인을 받는다.
+
+## 현재 업데이트 순서
+
+- 사용자 우선순위는 라이브러리를 활용한 기능·편의성·정확성 개선이다. [업데이트 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md)에 단계별 도입 후보와 완료 기준을 기록했다.
+- KR-U1의 주변 필지·건물 외곽·도로 필지 조회와 레이어를 구현했다. 선택 PNU·중심 좌표·조회 revision을 대조하며 이전 응답을 폐기한다. 실제 승인 계정의 지도·도형 정합성은 아직 미확인이다.
+- KR-U2의 Dexie 저장 모듈은 과거 브랜치 구현으로 보존하지만 현재 앱에는 연결하지 않는다. 조직별 서버 Workspace와 세션별 Zustand/임시 입력, 서버 revision 충돌 검사를 유지한다. `docs/KR-WORKSPACE-STORAGE.md`는 과거 설계이며 현재 정책은 `docs/MASTER-INTEGRATION-2026-11-10.md`를 우선한다.
+- KR-U3 외벽 수량·재료·공사비, 개념 실내·3DM/DXF 내보내기·예비 그림자를 통합했다. 실제 CAD 수신·전문가 검산은 미확정이다. Flatten.js·HiGHS 등은 여전히 도입 후보이며 설치하지 않았다.
 
 ## 제품 기준
 
@@ -166,6 +177,46 @@
 | 월별 원장 산술 검산 | `project-ledger-arithmetic-2026.1` (내부 식 대사, 외부 승인 아님) |
 | 프로젝트 저장 | `project-workspace-2026.1`, `PROJECT-WORKSPACE-2026.1.md` |
 | 브라우저 세션 격리 | `CLIENT-SESSION-ISOLATION-2026.1.md` |
+
+### Remote master integration history (superseded where noted)
+- 대상 흐름: 주소·지도 부지 선택 → 가격 없는 현황 요약 → 취득대금 입력 → 계획 스튜디오 → 사업성 → 전문가 인계 → 보고서
+- 기준 프로젝트: 서울 도봉구 쌍문동 281-23, PNU `1132010500102810023`
+- 규제값은 출처와 검증 등급을 가진다. 전국 상한 참고값을 필지별 확정값처럼 사용하지 않는다.
+- 사용자 입력, 공식·원문 근거, 알고리즘 추천은 저장과 화면에서 구분한다.
+- 계획·3D·DAE·DXF·Stage 3는 같은 대표 계획안과 Geometry Hash를 사용한다.
+- 기준 이미지의 정확 좌표가 없으면 층수·실루엣·후퇴·배치·회전·도로 관계를 새로 추정하지 않는다.
+
+## 지도·주소 진입 흐름
+
+- `/`와 `/projects/new`는 하나의 부지 탐색 화면이다. 주소/지역 검색과 지도 이동·확대·위성·클릭을 지원한다.
+- 선택 lookup은 PNU·경계·면적을 확인한다. 확인된 선택 뒤 별도 `selection-context` API로 동서남북 약 80m 범위의 지적·건물 도형만 비동기 조회한다. 건축물대장과 상세 주변 분석은 확인 버튼 뒤에 실행한다. 클릭 지점이 경계 밖이거나 다른 PNU이면 선택을 거절한다.
+- 주변 지도 도형은 표시용이다. 선택 boundary·면적·사업성·현황의 원본으로 덮어쓰지 않는다. 도로 레이어는 지목이 도로인 필지이며 실제 통행·도로 폭·접도 적합성은 확정하지 않는다. 도형 미수신도 빈 땅을 뜻하지 않는다.
+- `/status`는 `site-only` 데이터로 동작한다. 취득대금은 `null`, 취득일은 빈 값으로 저장하며 재무 엔진을 호출하지 않는다. 호환용 Parcel VM의 0은 계산 입력이 아니다.
+- 현황은 세 카드로 요약하고 상세 대장·3D·도로를 펼친다. 기존 계획 스튜디오에는 손익이 있으므로 진입 전 양수 취득대금과 예정일을 받는다.
+- 주변 토지 거래 분포는 가격 단계에서 요청할 때만 조회한다. 미확인 가격을 자동 추정해 채우지 않는다.
+- 새 선택의 `intakeRevision`은 캐시·재계산·저장 사업성의 동일성을 구분한다. 같은 PNU를 재선택해도 이전 사업성·승인을 현재 결과로 표시하지 않는다. 저장 계획은 보존하지만 대표안은 재확정한다.
+- `docs/KR-MAP-INTAKE.md` 참조. 브라우저 검사는 합성 SDK/응답이며 실제 Kakao·VWorld 승인 계정 확인은 남아 있다.
+
+## 현재 코드 경로
+
+한국판 업그레이드: 내부 구획·사업성 대사·예비 일영·DXF/3DM 인계를 추가했다. 사용법·현재 한계는 `docs/KR-INTERIOR-UPGRADE.md`, 9월 라이선스 조사 기록은 `docs/KR-UPGRADE-RESOURCES-2026-09-28.md`, 현재 후속 구현 순서는 `docs/KR-UPGRADE-PLAN-2026-10-07.md`를 참조한다. 미국판 변경은 포함하지 않는다. 후속 공공 원문 품질 구현은 `docs/KR-BUILDING-EVIDENCE.md`: 건축HUB 페이지/오류 상태, 층별·전유공용 속성, PK·면적제외 대조, 키 없는 근거 JSON을 연결했다. 실제 승인 계정 검증은 남아 있다.
+
+| 역할 | 현재 구현 |
+|---|---|
+| 부지 탐색·가격 없는 현황 | `/projects/new` + `ParcelSelectionMap.tsx` + `SiteProjectAccess.tsx` |
+| Plan Studio 화면 | `src/app/projects/[projectId]/envelope/page.tsx` |
+| 추천 비교 | `PlanningRecommendationPanelV2.tsx` |
+| 빠른 계획·정밀 편집 | `PlanningScenarioWorkspaceV4.tsx` |
+| 추천 생성 | `recommendation-engine-v2.ts` + `recommendation-analysis.ts` |
+| 실제 층별 매스 | `planning-massing.ts` + `scenario-spatial-validation.ts` |
+| 대표안·Geometry 잠금 | `project-store.ts` + `planning-geometry.ts` |
+| 내부 구획 편집 | `components/planning/interior/InteriorPlanWorkspace.tsx` |
+| 독립 구획·검증·사업성·출력 | `lib/planning/interior/` |
+| 건축물대장 조회·근거 | `lib/integrations/molit-building-client.ts` + `lib/building-registry/` + `BuildingRegistryEvidence.tsx` |
+| 예비 일영·Worker | `solar-access.ts` + `workers/interior.worker.ts` |
+| Stage 3 연결 | `recompute-from-planning-scenarios.ts` |
+| 전문가 인계 | `/projects/[projectId]/handoff` |
+| 보고서 | `/projects/[projectId]/report` |
 
 ## 프로젝트 저장
 

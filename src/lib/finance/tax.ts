@@ -10,6 +10,7 @@
 import type { Parcel, ScenarioResult, TaxBreakdown, TaxLine } from "./types";
 
 export const TAX_MODEL_AS_OF = "2026-09-09";
+export const TAX_MODEL_VERSION = "tax-pretax-ledger-2026.1";
 
 export const TAX_RATES = {
   realEstateAcquisitionGeneral: 0.04,
@@ -144,6 +145,7 @@ export function calculateTaxes(input: TaxInput): TaxBreakdown {
     .reduce((sum, line) => sum + line.amount, 0);
 
   return {
+    modelVersion: TAX_MODEL_VERSION,
     lines,
     total: includedInPretaxTotal,
     includedInPretaxTotal,

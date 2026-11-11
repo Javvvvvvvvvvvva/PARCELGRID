@@ -1,6 +1,7 @@
 "use client";
 
 import { TransactionEvidence } from "@/components/ui/TransactionEvidence";
+import { AcquisitionAccess } from "@/components/project/SiteProjectAccess";
 import { use, useEffect, useRef, useState } from "react";
 import { readWorkspaceDraft } from "@/lib/workspace/workspace-draft";
 import { useDynamicProject } from "@/lib/hooks/use-dynamic-project";
@@ -44,12 +45,14 @@ const STANDALONE_SUBROUTES = ["/acquisition-check"];
 
 export default function ProjectLayout({ children, params }: ProjectLayoutProps) {
   const pathname = usePathname();
+  const { projectId } = use(params);
 
   if (STANDALONE_SUBROUTES.some((sub) => pathname.endsWith(sub))) {
     return <>{children}</>;
   }
 
-  return <ProjectShell params={params}>{children}</ProjectShell>;
+  if (pathname.endsWith("/status")) return <ProjectShell params={params}>{children}</ProjectShell>;
+  return <AcquisitionAccess key={projectId} projectId={projectId}><ProjectShell params={params}>{children}</ProjectShell></AcquisitionAccess>;
 }
 
 function ProjectShell({
@@ -59,6 +62,7 @@ function ProjectShell({
   children: React.ReactNode;
   params: Promise<{ projectId: string }>;
 }) {
+  const pathname = usePathname();
   const { projectId } = use(params);
   const {
     data: projectLoad,
@@ -83,7 +87,6 @@ function ProjectShell({
   const savedStage3Snapshot = useProjectStore(
     (s) => s.stage3FeasibilitySnapshots[projectId]
   );
-  const pathname = usePathname();
   const lastKeyRef = useRef<string>("");
   const [hydratedWorkspaceKey, setHydratedWorkspaceKey] = useState("");
   const workspaceHydrationKey = projectLoad?.workspace
@@ -127,6 +130,7 @@ function ProjectShell({
     if (representativeScenario && representativePlanningScenarioId) {
       const savedSnapshotMatches =
         savedStage3Snapshot?.projectId === projectId &&
+        savedStage3Snapshot.data.meta.intakeRevision === data.meta.intakeRevision &&
         validateReviewSnapshotAlignment({
           snapshot: savedStage3Snapshot,
           geometry: representativeGeometrySnapshot,

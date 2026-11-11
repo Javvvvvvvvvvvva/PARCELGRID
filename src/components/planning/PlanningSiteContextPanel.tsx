@@ -5,7 +5,7 @@ import { sessionLocalStorage } from "@/lib/auth/client-session";
 
 import { Suspense, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
-import { Line, OrbitControls } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { Panel } from "@/components/ui/primitives";
 import { SceneText as Text } from "@/components/ui/SceneText";
@@ -327,18 +327,16 @@ function RoadClearanceMarker({
           lineWidth={2.4}
         />
       )}
-      <Text
+      <Html
         position={midpoint}
-        rotation={[-Math.PI / 2, 0, 0]}
-        fontSize={0.7}
-        color={color}
-        anchorX="center"
-        anchorY="bottom"
+        center
+        zIndexRange={[10, 0]}
+        style={{ pointerEvents: "none", color, fontSize: 11, fontWeight: 650, whiteSpace: "nowrap", background: "rgba(255,255,255,0.85)", borderRadius: 3, padding: "2px 4px" }}
       >
         {assessment.intrudes
           ? `도로 저촉 ${assessment.intrusionAreaSqm.toFixed(2)}㎡`
           : `도로 경계 ${assessment.minimumClearanceM.toFixed(2)}m`}
-      </Text>
+      </Html>
     </group>
   );
 }
@@ -660,6 +658,10 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           ? "public-observation" : "user-entered",
         sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
+        boundary: parcel.boundary,
+        boundaryPolygons: parcel.boundaryPolygons,
+        roads: parcel.roads,
+        setback: parcel.setback,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
         heightLimitM: parcel.heightLimit ?? 0,

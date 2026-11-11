@@ -14,52 +14,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
 import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
 
-const SDK_ID = "kakao-map-sdk";
-const JS_KEY = process.env.NEXT_PUBLIC_KAKAO_JS_KEY;
-
-declare global {
-  interface Window {
-    kakao: any;
-  }
-}
-
-let sdkPromise: Promise<void> | undefined;
-
-export function loadKakaoSdk(): Promise<void> {
-  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
-  // autoload=false exposes maps before constructors are ready. Every caller
-  // must wait for maps.load, including Strict Mode effects and remounts.
-  if (typeof window.kakao?.maps?.LatLng === "function" && typeof window.kakao?.maps?.Map === "function") return Promise.resolve();
-  if (sdkPromise) return sdkPromise;
-  sdkPromise = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Kakao 지도 초기화 시간 초과 · 네트워크·키·등록 도메인을 확인하세요")), 15_000);
-    const fail = () => { clearTimeout(timer); reject(new Error("Kakao SDK 로드 실패 · 네트워크·키·등록 도메인을 확인하세요")); };
-    const initialize = () => {
-      if (typeof window.kakao?.maps?.load !== "function") { fail(); return; }
-      window.kakao.maps.load(() => {
-        clearTimeout(timer);
-        if (typeof window.kakao?.maps?.LatLng !== "function" || typeof window.kakao?.maps?.Map !== "function") { fail(); return; }
-        resolve();
-      });
-    };
-    if (window.kakao?.maps) { initialize(); return; }
-    const existing = document.getElementById(SDK_ID) as HTMLScriptElement | null;
-    if (existing) {
-      existing.addEventListener("load", initialize, { once: true });
-      existing.addEventListener("error", fail, { once: true });
-      return;
-    }
-    if (!JS_KEY) { clearTimeout(timer); reject(new Error("NEXT_PUBLIC_KAKAO_JS_KEY 없음")); return; }
-    const script = document.createElement("script");
-    script.id = SDK_ID;
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${JS_KEY}&autoload=false`;
-    script.async = true;
-    script.onload = initialize;
-    script.onerror = fail;
-    document.head.appendChild(script);
-  });
-  return sdkPromise;
-}
+import { loadKakaoSdk } from "@/lib/integrations/kakao-maps-sdk";
+export { loadKakaoSdk } from "@/lib/integrations/kakao-maps-sdk";
 
 export interface StationMarker {
   name: string;

@@ -31,7 +31,7 @@ import { PROJECT_LEDGER_AUDIT_VERSION } from "@/lib/finance/project-ledger-audit
 import { HOLD_PERIOD_LEDGER_MODEL_VERSION } from "@/lib/finance/hold-period-ledger";
 import { assessConstructionQuote, buildConstructionScopeLedger, CONSTRUCTION_QUOTE_VERSION, CONSTRUCTION_SCOPE_LEDGER_VERSION } from "@/lib/planning/construction-quote";
 
-export const INTEGRATED_VERIFICATION_VERSION = "integrated-verification-2026.16" as const;
+export const INTEGRATED_VERIFICATION_VERSION = "integrated-verification-2026.17" as const;
 
 export type IntegratedVerificationInput = {
   projectId: string;
@@ -514,7 +514,7 @@ export function buildIntegratedVerification(input: IntegratedVerificationInput):
         if (!hardInputs.success || !plan) throw new Error("수치 누락 또는 형식 불일치");
         const h = hardInputs.data;
         const rawDwelling = additionalDwellingCostManwon(plan.floorPrograms, plan.dwellingProgram);
-        const rawMaterial = calculatePlanningMaterialAdjustment(plan).adjustmentManwon;
+        const rawMaterial = calculatePlanningMaterialAdjustment(plan, geometry).adjustmentManwon;
         const exactAreas = stored.data.constructionAreas;
         if (Math.abs(exactAreas.aboveGroundSqm - h.above) > 0.005001 || Math.abs(exactAreas.basementSqm - h.basement) > 0.005001) {
           throw new Error("상세 원가와 재무 공사면적 불일치");

@@ -1,10 +1,10 @@
 # PARCELGRID
 
-주소 하나에서 시작해 필지 현황, 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 연결하는 **한국 저층 개발 의사결정 도구**입니다.
+주소 검색이나 지도에서 부지를 선택해 필지 현황, 계획 매스, 사업성, 전문가 인계, 예비 보고서까지 연결하는 **한국 저층 개발 의사결정 도구**입니다.
 
 PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리해 개발 초기 의사결정을 설명 가능하게 만드는 로컬 우선 플랫폼입니다. 서울 소규모 주거의 **예비 면적 프로그램·세대 구성·주차·손익 비교를 자동화**하며, 실시설계나 허가 승인을 자동 확정하지 않습니다. 현재 회귀 기준 프로젝트는 **서울 도봉구 쌍문동 281-23**이며, 화면·사업성·SketchUp(COLLADA DAE)·CAD(DXF)가 같은 대표 계획안과 Geometry Hash를 사용합니다.
 
-> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md), 최신 변경은 [2026-08-26 릴리스 노트](docs/RELEASE-NOTES-2026-08-26.md), 출시 전 실제 확인 절차는 [릴리스 스모크 테스트](docs/release-smoke-test.md)를 확인하세요.
+> 현재 구현 기준은 [PROJECT_MEMORY.md](PROJECT_MEMORY.md)와 [최신 master 통합 결정](docs/MASTER-INTEGRATION-2026-11-10.md)입니다. 지도·실내·외벽 기능을 통합하되 저장은 조직별 서버 Workspace를 유지합니다. 이전 IndexedDB 문서는 현행 인증·저장 정책을 대체하지 않습니다.
 
 ## 제품 원칙
 
@@ -23,22 +23,27 @@ PARCELGRID는 공공데이터와 사용자 가정, 알고리즘 추천을 분리
 | 법정 용도 선별 | 상품과 건축법상 세부 용도 분리, 서울 조례·기준일·층수·면적·가구수 기반 후보 게이트 |
 | Plan Studio | 실행 가능 후보 생성, 건축 타당성안·개략 손익안·법적 상한 참고안 비교, 빠른 계획·정밀 편집 |
 | 3D·형상 검증 | 층별 매스, 배치·회전, 도로 침범, 층 지지, 면적 오차, 주차와 Geometry Hash 검증 |
+| 내부 구획 | 독립 템플릿 후보, 2D 편집·수동 문 연결, 공간 관계, 3D 구획, 경계·겹침·코어 연결 검사, 명시적 사업성 반영 |
+| 예비 일영 | KST 기준 계획 매스의 외부 지면 그림자 계산. 주변 건물·지형·실내 채광·법정 판정은 미포함 |
 | 사업성 | 토지비, 공사비, 금융비, 매출, 손익, 수익률과 자금조달·사용액 대사 |
 | 전문가 인계 | 건축·시공·금융·세무 근거, 승인 기록, 다른 PC로 옮길 수 있는 프로젝트 패키지 |
 | 보고서 | 현황·계획·사업성·리스크·근거·승인·AI 외장 콘셉트를 포함한 A4 인쇄형 결과 |
 | 내보내기 | SketchUp용 COLLADA DAE, AutoCAD 호환 R2000 ASCII DXF, 메타데이터·안내문 |
 | 조직 Workspace | 프로젝트 전체 상태의 불변 revision, 낙관적 충돌 감지, 감사 해시와 최근 프로젝트 목록 |
+| 내부 구획 인계 | 별도 개념 DXF ZIP과 Rhino 3DM, 미터·층·원점·레이어·Geometry Hash. 벽체 상세/허가도면은 미포함 |
 
 ## 사용자 흐름
 
 | 단계 | 경로 | 주요 결과 |
 |---|---|---|
-| 0. 새 프로젝트 | `/projects/new` | 주소, PNU, 필지, 규제 출처 확인 |
-| 1. 현황 분석 | `/projects/[projectId]/status` | 기존 건축물·도로·실거래·주변 환경 검토 |
-| 2. 계획 스튜디오 | `/projects/[projectId]/envelope` | 추천 비교, 층별 프로그램, 배치, 주차, 3D, 대표안 확정 |
+| 0. 부지 선택 | `/projects/new` | 조직 프로젝트 목록(`/`)에서 새 부지 → 주소 또는 지도 선택 → 경계·면적 확인 |
+| 1. 현황 확인 | `/projects/[projectId]/status` | 취득대금 없이 요약 확인, 상세 대장·3D·도로는 펼쳐보기 |
+| 2. 계획 스튜디오 | `/projects/[projectId]/envelope` | 취득대금 입력 후 추천 비교·층별 프로그램·배치·주차·3D·대표안 확정 |
 | 3. 사업성 | `/projects/[projectId]` | 인수가·공사비·금융비·매출·수익성 재계산 |
 | 4. 전문가 인계 | `/projects/[projectId]/handoff` | 근거·승인 기록과 로컬 인계 패키지 |
 | 5. 보고서 | `/projects/[projectId]/report` | 인쇄 가능한 통합 예비 검토 보고서 |
+
+현황 단계에서는 실거래 조회나 재무 계산을 실행하지 않습니다. 기존 계획 스튜디오에는 손익 비교가 포함되므로 계획 검토로 넘어갈 때 총 취득대금과 취득 예정일을 받습니다. 주변 토지 거래 분포는 이 단계에서 사용자가 펼칠 때만 조회하며, 가격을 자동 입력하지 않습니다.
 
 보조 화면으로 거래사례 비교(`/comps`), 가격 검토(`/price-review`), 시나리오 비교(`/comparison`), 계산 수정 근거(`/overrides`), 실행 환경 점검(`/system/readiness`)을 제공합니다.
 
@@ -172,14 +177,19 @@ AI 렌더 모델·저장 경로·호출 제한과 원문 저장 경로는 `OPENA
 - **웹:** Next.js 15 App Router, React 19, TypeScript 5.9, Tailwind CSS
 - **상태·검증:** Zustand, TanStack Query, Zod
 - **3D·공간:** Three.js, React Three Fiber, Drei, Turf
-- **계산·저장:** Decimal.js, Drizzle ORM, 선택형 PostgreSQL
+- **계산·저장:** Decimal.js, Dexie 4.4.6 / IndexedDB, Drizzle ORM, 선택형 PostgreSQL
 - **품질:** ESLint, TypeScript, Vitest, Next.js production build
+
+지도 선택은 기존 Kakao Maps SDK·Local REST API와 Turf를 재사용합니다. 지도 레이어에는 신규 npm 의존성을 추가하지 않았고, KR-U2 저장·복구에 Dexie(Apache-2.0)를 도입했습니다. 지도 키가 없거나 SDK 연결이 실패하면 주소 검색을 계속 사용할 수 있습니다.
 
 ### 주요 코드 경로
 
 | 역할 | 경로 |
 |---|---|
 | 페이지·서버 API | `src/app` |
+| 부지 선택·현황 접근 | `src/components/project/ParcelSelectionMap.tsx`, `SiteProjectAccess.tsx` |
+| 선택 주변 도형·출처 | `src/app/api/parcels/selection-context/route.ts`, `src/lib/integrations/vworld-selection-context.ts`, `SelectionContextLegend.tsx` |
+| 필지 선택 계약 | `src/lib/parcels/selection.ts`, `site-intake.ts` |
 | 현재 Plan Studio UI | `src/components/planning/PlanningScenarioWorkspaceV4.tsx` |
 | 추천 비교 UI | `src/components/planning/PlanningRecommendationPanelV2.tsx` |
 | 추천·형상 생성 | `src/lib/planning` |
@@ -205,6 +215,12 @@ V1~V3 Plan Studio와 중복 대시보드 UI는 제거했습니다. 새 기능은
 
 ## 검증
 
+지도·주소 진입 흐름은 프로덕션 빌드 후 `pnpm test:browser:intake`로 확인합니다. 좌표를 투영하는 합성 지도 SDK·API 응답으로 도형의 구멍·복수 영역, 레이어 전환, 이전 선택 응답 폐기, 부분 실패를 검사합니다. 실제 지도 타일과 승인된 공공 API의 정확성 검증은 별도로 필요합니다. [지도 선택 가이드](docs/KR-MAP-INTAKE.md)에 범위와 실제 확인 절차를 기록했습니다.
+
+저장·복구는 `pnpm test:browser:storage`로 실제 Chromium IndexedDB의 재접속·저장 실패·두 탭 충돌·복구·모바일 UI를 검사합니다. 마이그레이션 중단·프로젝트 격리·동시 저장은 fake-indexeddb 단위 테스트로 검증합니다. [저장 계약과 사용법](docs/KR-WORKSPACE-STORAGE.md)을 참고하세요.
+
+건축물대장 근거의 별도 브라우저 검사는 프로덕션 빌드 후 `pnpm test:browser:registry`로 실행합니다. 실제 API 승인 계정 검증은 합성 응답 검사와 별개이며 [가이드](docs/KR-BUILDING-EVIDENCE.md)에 남은 조건을 기록합니다.
+
 ```bash
 pnpm lint
 pnpm typecheck
@@ -217,6 +233,8 @@ pnpm verify
 
 GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행합니다. 프로젝트의 출시 기준은 로컬 우선이며, 호스팅 플랫폼의 PR 미리보기는 보조 확인 수단으로만 사용합니다.
 
+새 내부 구획은 Plan Studio의 **내부 구획 열기**에서 사용합니다. 외곽·구획·사업성 입력이 달라지면 대표안 확정 전에 면적을 다시 반영해야 합니다. 사용 조건과 전체 리소스의 도입 상태는 [49개 리소스·10개 데이터 축](docs/KR-UPGRADE-RESOURCES-2026-09-28.md)을 참고하세요. `pnpm notices:generate`는 설치한 production 의존성의 [오픈소스 고지](public/third-party-notices.txt)를 갱신합니다.
+
 자동 검증이 통과해도 다음 항목은 실제 프로그램과 브라우저에서 확인해야 합니다.
 
 - 새 브라우저에서 주소 검색부터 보고서까지 전체 흐름
@@ -226,11 +244,20 @@ GitHub Actions는 lint, 타입 검사, 전체 Vitest, production build를 실행
 - 실제 API 키를 사용한 외부 API 성공·실패 안내
 - 다른 PC에서 인계 패키지 가져오기와 원문 재연결
 
+Plan Studio의 **외장재·Plan DNA**에서 층/외벽별 재료, 개구부 면적, 공유벽 여부와 재료별 단가를 입력할 수 있습니다. 검증된 형상의 수직 외벽 수량과 재료비 차액을 같은 버전으로 Stage 3·보고서에 전달합니다. 미입력 단가와 경계 미확정 면적은 따로 표시합니다. 실제 시공 수량과 창호 상세는 별도 검토가 필요합니다. 사용법·라이브러리 비교·한계는 [KR-U3 외벽 수량 계약](docs/KR-FACADE-QUANTITIES.md)을 참고하세요. `pnpm test:browser:facade`로 편집·저장·복구를 확인합니다.
+
 ## 문서 안내
+
+향후 한국판 업데이트는 [기능·편의성·정확성 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md)을 따른다. 부지 환경 → 저장·복구 → 외벽 수량·재료 → 내부 평면 → CAD/GIS 교환 → 환경·상세 3D·인계 순서이며, 단계마다 라이브러리 비교 시험과 완료 기준을 기록한다. 신규 후보는 현재 설치된 패키지와 구분한다.
 
 | 문서 | 용도 |
 |---|---|
+| [한국판 업데이트 실행 계획](docs/KR-UPGRADE-PLAN-2026-10-07.md) | 현재 작업 순서·라이브러리 채택 기준·단계별 완료 조건·첫 구현 범위 |
+| [프로젝트 저장·복구](docs/KR-WORKSPACE-STORAGE.md) | 저장 대안 비교·이전·충돌·백업·복구·검증 범위 |
 | [PROJECT_MEMORY.md](PROJECT_MEMORY.md) | 현재 구현 계약과 다음 작업자를 위한 짧은 인계 |
+| [내부 구획·일영 가이드](docs/KR-INTERIOR-UPGRADE.md) | 사용법, 면적·문·좌표·사업성 동기화 계약과 현재 한계 |
+| [건축물대장 조회 근거](docs/KR-BUILDING-EVIDENCE.md) | 페이지·오류·PK·면적제외 대조, 근거 JSON, 0건과 실제 현황 구분 |
+| [한국판 업그레이드 리소스](docs/KR-UPGRADE-RESOURCES-2026-09-28.md) | 오픈소스 49개와 한국 데이터 10개 축의 채택 상태·후속 순서 |
 | [파트너 로컬 실행 안내](docs/PARTNER-LOCAL-SETUP-KO.md) | 다른 PC에서 설치·업데이트·문제 해결 |
 | [VWorld 비활성 운영](docs/VWORLD-FREE-WORKFLOW.md) | VPN 차단 시 수동 부지·GeoJSON·AI 키 설정 |
 | [릴리스 체크리스트](docs/RELEASE-CHECKLIST-2026-08-23.md) | 자동·수동 출시 조건 |

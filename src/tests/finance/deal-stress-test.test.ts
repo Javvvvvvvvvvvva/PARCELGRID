@@ -156,6 +156,7 @@ describe("Deal stress test", () => {
     const scenario = fixture.data.scenarios[0]._raw;
     const original = calculateScenario({ parcel: creditParcel, scenario });
     scenario.program.areaContract!.materialAdjustmentCostManwon = size === "modest" ? -100 : -original.hardCost * 0.95;
+    delete scenario.program.areaContract!.facadeCost;
     const before = structuredClone(scenario);
     const atRate = (rate: number) => calculateScenario({
       parcel: creditParcel,
@@ -194,6 +195,7 @@ describe("Deal stress test", () => {
     const fixture = integratedVerificationFixture();
     const scenario = fixture.data.scenarios[0]._raw;
     scenario.program.areaContract!.materialAdjustmentCostManwon = -fixture.data.scenarios[0].hardCost - 1;
+    delete scenario.program.areaContract!.facadeCost;
     expect(() => buildDealStressTest(fixture.data.parcel, scenario)).toThrow("음수 공사비");
   });
 });

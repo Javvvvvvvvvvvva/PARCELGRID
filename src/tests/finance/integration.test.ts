@@ -98,12 +98,10 @@ describe("calculateTaxes", () => {
     expect(acquisition?.note).toContain("건축물 존재 여부");
   });
 
-  it("does not turn a vacant-land reference rate into tax due", () => {
+  it("does not use registry absence alone as a verified land-only tax base", () => {
     const vacantParcel: Parcel = {
       ...parcel,
-      currentBuilding: {
-        hasBuilding: false,
-      } as NonNullable<Parcel["currentBuilding"]>,
+      currentBuilding: { hasBuilding: false } as NonNullable<Parcel["currentBuilding"]>,
     };
     const vacantResult = calculateScenario({ parcel: vacantParcel, scenario });
     const vacantTaxes = calculateTaxes({

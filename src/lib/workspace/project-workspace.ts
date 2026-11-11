@@ -1,6 +1,8 @@
 import type { AssumptionSet } from "@/lib/finance/types";
 import { validateParcelBoundaryInput } from "@/lib/geo/manual-parcel-boundary";
 import { interiorDraftSchema } from "@/lib/planning/interior-layout";
+import { interiorLayoutSchema } from "@/lib/planning/interior/types";
+import { planningMaterialSelectionSchema } from "@/lib/planning/material-contract";
 import { layoutFinanceHistorySchema } from "@/lib/planning/layout-finance-state";
 import { quantityCostPlanSchema } from "@/lib/planning/quantity-cost-contract";
 import { constructionQuoteSchema } from "@/lib/planning/construction-quote";
@@ -205,12 +207,22 @@ export function validateProjectWorkspacePayload(
     }
     if (
       Array.isArray(value.projectData.scenarios) &&
-      value.projectData.scenarios.length === 0
+      value.projectData.scenarios.length === 0 &&
+      !(isRecord(meta) && meta.mode === "site-only")
     ) {
       errors.push("프로젝트 계산 시나리오가 없습니다.");
     }
     if (!isRecord(value.projectData.decisionSupport)) {
       errors.push("프로젝트 다목적 추천 결과가 없습니다.");
+    }
+    if (isRecord(meta) && meta.mode === "site-only") {
+      const intake = value.projectData.siteIntake;
+      if (!isRecord(intake) || intake.id !== value.projectId || intake.acquiredPrice !== null ||
+          !isRecord(parcel) || parcel.acquiredPrice !== 0 || intake.lotArea !== parcel.lotArea ||
+          !Array.isArray(value.projectData.scenarios) || value.projectData.scenarios.length !== 0 ||
+          value.representativeScenarioId != null || value.representativeGeometry != null || value.stage3Snapshot != null) {
+        errors.push("현황 전용 입력과 재무 결과를 혼합할 수 없습니다.");
+      }
     }
     const dwellingMarket = value.projectData.dwellingMarket;
     if (dwellingMarket != null && (!isRecord(dwellingMarket) ||
@@ -259,8 +271,12 @@ export function validateProjectWorkspacePayload(
         errors.push("피난·층간 코어 설정 또는 지상 출구 데이터가 올바르지 않습니다.");
       }
       if (scenario.floorPrograms.some(floor => !isRecord(floor) ||
-          (floor.interiorLayout != null && !interiorDraftSchema.safeParse(floor.interiorLayout).success))) {
+          (floor.interiorLayout != null && !interiorDraftSchema.safeParse(floor.interiorLayout).success) ||
+          (floor.interior !== undefined && !interiorLayoutSchema.safeParse(floor.interior).success))) {
         errors.push("실내 구획의 좌표·설정·문 데이터가 올바르지 않습니다.");
+      }
+      if (scenario.materials !== undefined && !planningMaterialSelectionSchema.safeParse(scenario.materials).success) {
+        errors.push("외벽 면별 설정·수량·단가 형식이 올바르지 않습니다.");
       }
       if (scenario.parking.vehicleProfile != null && !vehicleProfileSchema.safeParse(scenario.parking.vehicleProfile).success) {
         errors.push("차량 제원·회전반경 입력이 올바르지 않습니다.");

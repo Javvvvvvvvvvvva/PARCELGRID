@@ -297,6 +297,8 @@ describe("construction cost sensitivity monthly calculations", () => {
     const input = quantityFixture();
     const originalHardCost = calculateScenario(input).hardCost;
     input.scenario.program.areaContract!.materialAdjustmentCostManwon = -originalHardCost * 0.9;
+    // A legacy synthetic credit has no reconciled per-face cost contract.
+    delete input.scenario.program.areaContract!.facadeCost;
     const base = calculateScenario(input);
     expect(base.hardCost).toBeGreaterThan(0);
     expect(() => independent(input, 0.85)).toThrow();

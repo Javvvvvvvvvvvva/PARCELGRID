@@ -34,9 +34,11 @@ import type { Parcel, Scenario } from "@/lib/finance/types";
 import type { ScenarioComparison } from "@/lib/finance/scenario-verdict";
 import type { SalePriceEstimate } from "@/lib/finance/sale-price-from-comps";
 
-export const PROJECT_CALCULATION_VERSION = "v227" as const;
+export const PROJECT_CALCULATION_VERSION = "v228" as const;
 
 export interface ProjectComputed {
+  /** Retained only for the explicitly unpriced site-inspection workflow. */
+  siteIntake?: import("@/lib/hooks/use-dynamic-project").StoredParcel;
   parcel: ParcelVM;
   scenarios: ScenarioVM[];
   /** 가중치 없는 파레토 비교와 축별 선두 후보. */
@@ -60,6 +62,8 @@ export interface ProjectComputed {
   /** 시나리오별 최대 시행 가능 인수가 (IRR 10/15/20% 역산). 백엔드에서 계산 후 주입. */
   maxAcquisition: import("@/lib/finance/max-acquisition").ScenarioMaxAcquisition[];
   meta: {
+    mode?: "site-only";
+    intakeRevision?: string;
     lastSyncedAt: string;
     version: string;
     /** Actual schedule input, unlike the non-semantic lastSyncedAt timestamp. */
@@ -68,6 +72,8 @@ export interface ProjectComputed {
 }
 
 export interface ComputeOptions {
+  /** The selected parcel revision that these calculations describe. */
+  intakeRevision?: string;
   /** Project start ISO date for cashflow phasing. */
   startDate?: string;
   /** 사용자 대표안 등 특정 시나리오를 현재 비교 기준으로 고정한다. */
@@ -169,6 +175,7 @@ export function computeProject(
     } : undefined,
     maxAcquisition,
     meta: {
+      intakeRevision: options.intakeRevision,
       lastSyncedAt: new Date().toISOString(),
       version: PROJECT_CALCULATION_VERSION,
       calculationStartDate,

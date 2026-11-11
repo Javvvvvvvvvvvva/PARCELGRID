@@ -5,6 +5,8 @@ import {
   revenuePricingFromAssumptions,
   valueRevenueAreaPools,
 } from "@/lib/finance/revenue-contract";
+import { buildPlanningGeometry } from "./planning-geometry";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import type {
   AssumptionSet,
   FinancialRevenueProjectionSnapshot,
@@ -298,7 +300,8 @@ function calculateEconomics(
   assumptions: PlanningEconomicsAssumptions,
   aboveGroundAreaSqm: number,
   basementAreaSqm: number,
-  calculatedAt?: string
+  calculatedAt?: string,
+  materialAdjustment = calculatePlanningMaterialAdjustment(scenario)
 ): {
   preview: PlanningEconomicsPreview;
   revenueProjection: FinancialRevenueProjectionSnapshot;
@@ -310,7 +313,6 @@ function calculateEconomics(
   const baseConstructionCostManwon =
     (weightedConstructionAreaSqm * nonNegative(assumptions.constructionCostPerSqmWon)) /
     WON_PER_MANWON;
-  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
   const dwellingCostManwon = additionalDwellingCostManwon(scenario.floorPrograms, scenario.dwellingProgram);
   const quantityCost = evaluateQuantityCost(scenario, {
     constructionCostPerSqmWon: assumptions.constructionCostPerSqmWon,
@@ -431,9 +433,7 @@ function calculateEconomics(
       tenantRelocationCostManwon: round(tenantRelocationCostManwon),
       constructionCostManwon: round(constructionCostManwon),
       baseConstructionCostManwon: round(baseConstructionCostManwon),
-      materialAdjustmentCostManwon: round(
-        materialAdjustment.adjustmentManwon
-      ),
+      materialAdjustmentCostManwon: materialAdjustment.adjustmentManwon,
       additionalDwellingCostManwon: round(dwellingCostManwon),
       ...(scenario.quantityCost !== undefined ? {
         quantityCostInputBasis: quantityCostPlanBasis(scenario.quantityCost) ?? undefined,
@@ -446,6 +446,7 @@ function calculateEconomics(
       } : {}),
       residentialFallbackUnitPriceWon: pricing.pools.residentialSale.unitPriceWon,
       facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
+      facadeCost: materialAdjustment,
       materialCostStatus: materialAdjustment.priced
         ? materialAdjustment.evidenceStatus === "source-backed" &&
           materialAdjustment.areaBasis === "user-input"
@@ -883,8 +884,8 @@ function buildChecks(
   }
 
   const materials = resolvePlanningMaterials(scenario.materials);
-  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
-  if (materials.primaryFacadeMaterial !== "unselected") {
+  const materialAdjustment = economics.facadeCost ?? calculatePlanningMaterialAdjustment(scenario);
+  if (materials.primaryFacadeMaterial !== "unselected" || Object.keys(materials.faceAssignments ?? {}).length > 0) {
     const sourceBacked =
       materialAdjustment.priced &&
       materialAdjustment.areaBasis === "user-input" &&
@@ -893,10 +894,10 @@ function buildChecks(
       code: "material-cost",
       label: "외장재·공사비",
       status: sourceBacked ? "pass" : "review",
-      message: materialAdjustment.priced
-        ? `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} · 외벽 ${materialAdjustment.facadeAreaSqm.toFixed(1)}㎡ · 기준 대비 ${materialAdjustment.adjustmentManwon >= 0 ? "+" : ""}${materialAdjustment.adjustmentManwon.toFixed(0)}만원`
+      message: materialAdjustment.hasPricedArea
+        ? `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} · 외벽 ${materialAdjustment.facadeAreaSqm.toFixed(1)}㎡ · 기준 대비 ${materialAdjustment.adjustmentManwon >= 0 ? "+" : ""}${materialAdjustment.adjustmentManwon.toFixed(0)}만원${materialAdjustment.priced ? "" : " (일부만 산정 · 미확정 수량/단가 확인 필요)"}`
         : `${PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial]} 3D 표현만 적용 · 기준·선택 단가 입력 전 공사비 미반영`,
-      source: materialAdjustment.priced
+      source: materialAdjustment.hasPricedArea
         ? `${materialAdjustment.sourceLabel} · ${materialAdjustment.areaNote}`
         : "사용자 단가·견적 근거 필요",
     });
@@ -1033,13 +1034,24 @@ export function calculatePlanningScenario(
     parkingShortfallCars: parking.shortfallCars,
   };
 
+  const needsFacadeGeometry = scenario.materials && (scenario.materials.primaryFacadeMaterial !== "unselected"
+    || (scenario.materials.secondaryFacadeMaterial !== "unselected" && scenario.materials.primaryFacadeSharePct < 100)
+    || Object.keys(scenario.materials.faceAssignments ?? {}).length > 0);
+  const geometry = needsFacadeGeometry && hasParcelBoundary(parcel) ? buildPlanningGeometry({
+    projectId: scenario.projectId ?? "planning", scenario, boundary: parcel.boundary, boundaryPolygons: parcel.boundaryPolygons,
+    lotAreaSqm: parcel.lotAreaSqm, zoning: parcel.zoning ?? "", roads: parcel.roads,
+    setback: parcel.setback,
+    generatedAt: context.calculatedAt, sunlight, roofAllowanceM,
+  }).snapshot : null;
+  const materialAdjustment = calculatePlanningMaterialAdjustment(scenario, geometry);
   const economics = calculateEconomics(
     scenario,
     parcel,
     assumptions,
     aboveGroundProgramAreaSqm,
     basementProgramAreaSqm,
-    context.calculatedAt
+    context.calculatedAt,
+    materialAdjustment
   );
   const checks = buildChecks(
     scenario,

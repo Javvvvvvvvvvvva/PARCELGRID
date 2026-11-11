@@ -20,6 +20,7 @@ import "./construction-quote.css";
 
 type Props = {
   scenario: PlanningScenario; inputs: QuantityCostInputs; locked: boolean;
+  geometry?: import("@/lib/planning/planning-geometry").PlanningGeometrySnapshot;
   getCurrentScenario: () => PlanningScenario | undefined;
   onChange: (patch: Partial<PlanningScenario>) => void;
 };
@@ -93,7 +94,7 @@ export function PlanningConstructionQuotePanel(props: Props) {
   return <ConstructionQuoteEditor key={`${props.scenario.projectId}:${props.scenario.id}`} {...props} />;
 }
 
-function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurrentScenario, onChange }: Props) {
+function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedProp, getCurrentScenario, onChange }: Props) {
   const [sessionAtMount] = useState(() => ({ key: clientSession.context, active: clientSession.active, generation: 0 }));
   const sessionGeneration = useRef(sessionAtMount.generation);
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -134,8 +135,8 @@ function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurr
     dwellingProgram: scenario.dwellingProgram, quantityCost: scenario.quantityCost }),
   [scenario.materials, scenario.dwellingProgram, scenario.quantityCost]);
   const inputKey = useMemo(() => comparisonKey === null ? null : serialized({ scenarioId: scenario.id, projectId: scenario.projectId,
-    basis: basis.value, inputs: costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, session: sessionAtMount.key }),
-  [scenario.id, scenario.projectId, basis.value, costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, sessionAtMount.key]);
+    basis: basis.value, geometry, inputs: costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, session: sessionAtMount.key }),
+  [scenario.id, scenario.projectId, basis.value, geometry, costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, sessionAtMount.key]);
   const currentQuoteReview = sessionValid && inputKey !== null && review?.key === inputKey && validDraft && !stale && !savedChanged ? review : null;
   const currentReview = currentQuoteReview?.assessment;
 
@@ -263,7 +264,7 @@ function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurr
       }
       const reviewScenario = { ...current, constructionQuote: quote };
       const assessment = assessConstructionQuote(reviewScenario, costInputs);
-      const comparison = evaluateConstructionQuoteCostComparison(reviewScenario, costInputs);
+      const comparison = evaluateConstructionQuoteCostComparison(reviewScenario, costInputs, geometry);
       assertSession();
       setReview({ key: inputKey, assessment, comparison });
       setMessage("입력한 검토 기준일에 대한 대사를 실행했습니다. 증빙 저장 및 재무 반영과는 별개입니다.");

@@ -206,7 +206,7 @@ describe("explicit current review comparison", () => {
     expect(html).toContain("기본단가만 비교한 차액");
     expect(html).toContain("절감액·사업비 반영액을 뜻하지 않습니다");
     expect(evaluate).toHaveBeenCalledOnce();
-    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({ constructionQuote: expect.objectContaining({ reference: "Unsaved source AB" }) }), props.inputs);
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({ constructionQuote: expect.objectContaining({ reference: "Unsaved source AB" }) }), props.inputs, undefined);
     draw(); draw();
     expect(evaluate).toHaveBeenCalledOnce();
     expect(source("Changed source")).not.toContain(band);

@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   geocodeAddress,
+  reverseGeocodeLocation,
   type GeocodeResult,
 } from "@/lib/integrations/kakao";
 import { CadastralGeometryError, CadastralIdentityError, lookupCadastral, lookupZoningByPNU } from "@/lib/integrations/vworld";
@@ -34,6 +35,7 @@ import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geome
 import type { CadastralParcelFeature } from "@/lib/geo/cadastral-context";
 import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
 import { manualParcelId, pnuFromParcelAddress } from "@/lib/parcels/parcel-id";
+import { boundaryContainsLocation, parcelSelectionRequestSchema } from "@/lib/parcels/selection";
 import type {
   ManualLookupReasonCode,
   ParcelLookupBase,
@@ -44,6 +46,7 @@ import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 import { vworldEvidenceWarnings, vworldResultEvidence, vworldUnavailableEvidence } from "@/lib/integrations/vworld-evidence";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 async function lookupCurrentBuilding(
   geo: GeocodeResult,
@@ -123,27 +126,28 @@ export async function POST(req: NextRequest) {
   if (!authorization.ok) return authorization.response;
   const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.lookup });
   if (!input.ok) return input.response;
-  const address = typeof input.value.address === "string" ? input.value.address.trim() : "";
-  if (!address) {
+  const parsed = parcelSelectionRequestSchema.safeParse(input.value);
+  if (!parsed.success) {
     return NextResponse.json(
       {
-        code: "ADDRESS_REQUIRED",
-        error: "조회할 주소가 필요합니다.",
-        nextAction: "지번 또는 도로명 주소를 입력하세요.",
+        code: "INVALID_SELECTION",
+        error: "조회할 주소 또는 한국 내 지도 위치를 확인하세요.",
+        nextAction: "주소를 검색하거나 지도를 확대해 필지 안쪽을 선택하세요.",
         retryable: false,
       },
       { status: 400 },
     );
   }
-  if (address.length > 200) return NextResponse.json({ code: "INVALID_ADDRESS", error: "주소는 200자 이내로 입력하세요." }, { status: 422 });
+  const { address, location, phase, expectedPnu: requestedPnu } = parsed.data;
+  const selectionOnly = phase === "selection";
 
   try {
-    const geo = await geocodeAddress(address);
+    const geo = location ? await reverseGeocodeLocation(location.lat, location.lng) : await geocodeAddress(address!);
     if (!geo) {
       return NextResponse.json(
         {
           code: "ADDRESS_NOT_FOUND",
-          error: `주소를 찾을 수 없습니다: ${address}`,
+          error: "선택한 위치의 지번 주소를 찾지 못했습니다.",
           nextAction: "지번 주소를 포함해 다시 입력하고 Kakao REST 키 상태를 확인하세요.",
           retryable: true,
         },
@@ -151,7 +155,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const currentBuildingPromise = lookupCurrentBuilding(geo);
+    const addressPnu = pnuFromParcelAddress(geo);
+    if (!addressPnu && selectionOnly && !location && Number.isFinite(geo.lat) && Number.isFinite(geo.lng) && geo.lat >= 33 && geo.lat <= 39.5 && geo.lng >= 124 && geo.lng <= 132) {
+      return NextResponse.json({ mode: "area", address: geo.address, lat: geo.lat, lng: geo.lng });
+    }
+    if (requestedPnu && requestedPnu !== addressPnu) {
+      return NextResponse.json({ code: "PARCEL_IDENTITY_MISMATCH", error: "선택한 필지와 조회된 주소가 일치하지 않습니다.", nextAction: "정확한 지번 주소로 다시 선택하세요." }, { status: 409 });
+    }
+    if (!addressPnu) return manualLookupResponse(geo, Promise.resolve(null), "CADASTRAL_IDENTITY_UNCONFIRMED",
+      "법정동·지번·산 여부가 충분히 확인되지 않았습니다. 정확한 PNU와 지적 원문을 확인하세요.");
+    const currentBuildingPromise = selectionOnly ? Promise.resolve(null) : lookupCurrentBuilding(geo);
     const vworld = vworldRuntimeState();
     if (vworld.mode === "disabled") {
       return manualLookupResponse(
@@ -177,12 +190,12 @@ export async function POST(req: NextRequest) {
     }
     let cadastral: Awaited<ReturnType<typeof lookupCadastral>>;
     try {
-      cadastral = await lookupCadastral(geo.lat, geo.lng, {
+      cadastral = await lookupCadastral(location?.lat ?? geo.lat, location?.lng ?? geo.lng, {
         pnu: expectedPnu,
         mainAddressNo: geo.mainAddressNo,
         subAddressNo: geo.subAddressNo,
         mountainYn: geo.mountainYn,
-      });
+      }, { includeRoads: !selectionOnly });
     } catch (error) {
       if (error instanceof CadastralGeometryError) {
         return manualLookupResponse(geo, currentBuildingPromise, "CADASTRAL_TOPOLOGY_REVIEW",
@@ -209,15 +222,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (cadastral.pnu !== addressPnu || (location && !boundaryContainsLocation(cadastral.boundary, location))) {
+      return NextResponse.json({ code: "PARCEL_IDENTITY_MISMATCH", error: "클릭 위치·주소·필지 경계가 같은 부지인지 확인하지 못했습니다.", nextAction: "지도를 확대해 필지 안쪽을 다시 누르거나 정확한 지번 주소로 검색하세요." }, { status: 409 });
+    }
+
     const normalizedRoads = normalizeRoadLines(cadastral.roads);
 
     const zoningPromise = lookupZoningByPNU(cadastral.pnu);
-    const geometryPromise = fetchExistingBuildingGeometry({
+    const geometryPromise = selectionOnly ? Promise.resolve(null) : fetchExistingBuildingGeometry({
       pnu: cadastral.pnu,
       boundary: cadastral.boundary,
       center: cadastral.centroid,
     });
-    const cadastralContextPromise = fetchCadastralContextParcels({
+    const cadastralContextPromise = selectionOnly ? Promise.resolve([]) : fetchCadastralContextParcels({
       center: cadastral.centroid,
       targetPnu: cadastral.pnu,
       radiusM: 80,
@@ -247,7 +264,7 @@ export async function POST(req: NextRequest) {
       currentBuilding.status === "fulfilled" ? currentBuilding.value : null;
 
     let buildingGeometry: ExistingBuildingGeometry;
-    if (geometryResult.status === "fulfilled") {
+    if (geometryResult.status === "fulfilled" && geometryResult.value) {
       buildingGeometry = geometryResult.value;
     } else {
       console.warn("V월드 GIS건물통합정보 조회 실패 (비치명적)");

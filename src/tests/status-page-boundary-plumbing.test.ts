@@ -12,6 +12,7 @@ const harness = vi.hoisted(() => ({
 }));
 vi.mock("react", async (importOriginal) => ({
   ...await importOriginal<typeof import("react")>(), use: () => ({ projectId: "status-boundary" }),
+  useState: (initial: unknown) => [initial === false ? true : initial, vi.fn()],
 }));
 vi.mock("next/dynamic", () => ({ default: () => harness.mass }));
 vi.mock("@/lib/stores/project-store", () => ({

@@ -252,6 +252,7 @@ export function planningScenarioToBuildingProgram(
         warnings: calculation.parking.warnings,
       },
       sunlightAssessment: calculation.sunlight,
+      facadeCost: calculation.economicsPreview.facadeCost,
       materialAdjustmentCostManwon:
         calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
       ...(quantityCostAdjustment ? { quantityCostAdjustment } : {}),

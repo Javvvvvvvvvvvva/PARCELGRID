@@ -32,8 +32,10 @@ function parcelWithBuildingState(
 }
 
 describe("building registry status", () => {
-  it("keeps an unavailable lookup distinct from a confirmed empty registry", () => {
+  it("keeps an unavailable lookup distinct from a successful zero-row query", () => {
     const unknownParcel = parcelWithBuildingState(null);
+    const registry = fixtureEvidence();
+    registry.title = { ...registry.title, rows: [], totalCount: 0, fetchedCount: 0 };
     const emptyParcel = parcelWithBuildingState({
       registry: { ...fixtureEvidence(), title: fixtureDataset("getBrTitleInfo") },
       buildings: [],
@@ -49,7 +51,7 @@ describe("building registry status", () => {
 
     expect(getBuildingRegistryStatus(unknownParcel.currentBuilding)).toBe("unknown");
     expect(getBuildingRegistryStatus(emptyParcel.currentBuilding)).toBe(
-      "confirmed-empty",
+      "no-records",
     );
     expect(buildStatusSummary(unknownParcel)[0]).toMatchObject({
       kind: "check",

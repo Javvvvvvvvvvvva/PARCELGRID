@@ -49,6 +49,8 @@ export interface ExistingBuildingGeometryQuery {
   pnu: string;
   boundary: LngLat[];
   center: { lat: number; lng: number };
+  /** Context-only map queries can request a bounded larger window. */
+  contextRadiusM?: number;
 }
 
 interface AssessedFootprint {
@@ -467,10 +469,10 @@ export function attachExistingBuildingGeometry(
       footprint.footprintAreaSqm * Math.max(1, footprint.groundFloors);
     const ageYears = ageFromApprovalDate(footprint.useApprovalDate);
     return {
+      source: "vworld-gis" as const,
       name: footprint.buildingName,
       mainPurpose: "건축물",
       detailPurpose: "GIS건물통합정보",
-      source: "vworld-gis",
       groundFloors: footprint.groundFloors || 1,
       undergroundFloors: footprint.undergroundFloors,
       totalArea,

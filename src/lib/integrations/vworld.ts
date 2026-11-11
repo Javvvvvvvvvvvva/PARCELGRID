@@ -267,12 +267,14 @@ async function featureToCadastralInfo(
   f: CadastralResponseFeature,
   parsed: ReturnType<typeof parseCadastralFeature>,
   budget: ReturnType<typeof createProviderDeadline>,
+  includeRoads = true,
 ): Promise<CadastralInfo> {
   const props = validatedCadastralProperties(f);
   const landPrice = Number(props.jiga || 0);
   const jimokName = props.jimokName ?? "";
   const jimokCode = props.jimokCd ?? "";
-  const roadResult = await fetchRoads(parsed.centroid.lat, parsed.centroid.lng, budget);
+  const roadResult = includeRoads ? await fetchRoads(parsed.centroid.lat, parsed.centroid.lng, budget)
+    : { roads: [], evidence: vworldUnavailableEvidence("LT_L_SPRD", "not-recorded") };
 
   return {
     pnu: props.pnu ?? "",
@@ -296,7 +298,8 @@ async function featureToCadastralInfo(
 export async function lookupCadastral(
   lat: number,
   lng: number,
-  hint?: CadastralMatchHint
+  hint?: CadastralMatchHint,
+  options?: { includeRoads?: boolean },
 ): Promise<CadastralInfo | null> {
   const budget = createProviderDeadline(20_000);
   if (!KEY || vworldRuntimeState().mode !== "enabled") throw new Error("V-World integration unavailable");
@@ -330,7 +333,7 @@ export async function lookupCadastral(
 
   const parsed = parseCadastralFeature(best, budget.check);
   budget.check();
-  return featureToCadastralInfo(best, parsed, budget);
+  return featureToCadastralInfo(best, parsed, budget, options?.includeRoads ?? true);
 }
 
 function parseCadastralFeature(f: CadastralResponseFeature, checkDeadline: () => void): {

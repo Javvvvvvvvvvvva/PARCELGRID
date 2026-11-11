@@ -1,4 +1,7 @@
 "use client";
+import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
+
+import { matchesProjectIntake } from "@/lib/services/project-intake";
 
 /**
  * 예비 사업성 검토서 — 전문가 검토 전 한 장 요약.
@@ -199,7 +202,8 @@ export default function ReportPage({
   const expertReviews =
     reviewLedger.query.data?.reviews ?? storedExpertReviews;
 
-  const stage3Snapshot = stage3Snapshots[projectId] ?? null;
+  const savedSnapshot = stage3Snapshots[projectId];
+  const stage3Snapshot = savedSnapshot && matchesProjectIntake(savedSnapshot.data, liveData) ? savedSnapshot : null;
   const geometry =
     representativeGeometry?.projectId === projectId
       ? representativeGeometry
@@ -680,14 +684,14 @@ export default function ReportPage({
             <>
               <div className="rpt-ov">
                 <OvItem l="존재 여부" v={buildingRegistryLabel(currentBuilding)} />
-                <OvItem l="총 연면적" v={`${num(Math.round(currentBuilding.totalBuildingArea * 10) / 10)}㎡`} />
+                <OvItem l="수신 건물 연면적 합" v={currentBuilding.buildings.length ? `${num(Math.round(currentBuilding.totalBuildingArea * 10) / 10)}㎡ · 누락 여부 확인` : "미확인"} />
                 <OvItem l="가장 오래된 사용승인" v={currentBuilding.oldestApprovalDate || "미확인"} />
                 <OvItem l="최대 노후도" v={currentBuilding.maxAgeYears > 0 ? `${currentBuilding.maxAgeYears}년` : "미확인"} />
-                <OvItem l="검토 시그널" v={currentBuilding.signalLabel} />
+                <OvItem l="검토 시그널" v={currentBuilding.hasBuilding ? currentBuilding.signalLabel : buildingRegistryLabel(currentBuilding)} />
                 <OvItem l="건물 동수" v={`${currentBuilding.buildings.length}동`} />
               </div>
               <p style={{ margin: "10px 0 0", color: "var(--fg-muted)", fontSize: 10.5, lineHeight: 1.55 }}>
-                {currentBuilding.signalReasoning} 건축물대장 관측값이며 철거 가능성·위반건축물·임차권·현황 일치는 별도 원문과 현장조사가 필요합니다.
+                {currentBuilding.hasBuilding ? currentBuilding.signalReasoning : "표제부 조회 0건이나 조회 실패만으로 실제 빈 토지를 확정하지 않습니다."} 건축물대장 관측값이며 철거 가능성·위반건축물·임차권·현황 일치는 별도 원문과 현장조사가 필요합니다.
               </p>
               {currentBuilding.buildings.length > 0 && (
                 <table className="rpt-table" style={{ marginTop: 10 }}>
@@ -698,7 +702,7 @@ export default function ReportPage({
                         <td>{building.name || `${index + 1}동`} · {building.detailPurpose || building.mainPurpose || "용도 미확인"}</td>
                         <td>{building.structure || "미확인"}</td>
                         <td className="num">지상 {building.groundFloors} / 지하 {building.undergroundFloors}</td>
-                        <td className="num">{num(Math.round(building.totalArea * 10) / 10)}㎡</td>
+                        <td className="num">{building.missingFields?.includes("totArea") ? "미제공" : `${num(Math.round(building.totalArea * 10) / 10)}㎡`}</td>
                         <td className="num">{building.buildingCoverage.toFixed(1)}% / {building.floorAreaRatio.toFixed(1)}%</td>
                         <td>{building.approvalDate || "미확인"}</td>
                       </tr>
@@ -712,6 +716,7 @@ export default function ReportPage({
               건축HUB 건축물대장 조회 결과가 저장되지 않았습니다. 주소 분석을 다시 실행하거나 MOLIT_SERVICE_KEY와 해당 API 활용 승인을 확인하세요.
             </p>
           )}
+          <BuildingRegistryEvidencePanel info={currentBuilding} printMode />
         </div>
 
         <div className="rpt-sec">
@@ -807,6 +812,8 @@ export default function ReportPage({
             </div>
           )}
         </div>
+
+        <div className="rpt-sec"><div className="rpt-sec-h">외벽 수량·재료비</div><FacadeCostSummary cost={areaContract?.facadeCost} /></div>
 
         <ConceptRenderStudio
           projectId={projectId}

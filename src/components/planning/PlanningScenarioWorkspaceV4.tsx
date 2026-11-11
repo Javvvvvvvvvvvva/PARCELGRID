@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { constraintStatusLabel } from "@/lib/regulatory/constraints";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
 import { DwellingAssumptionsEditor } from "@/components/planning/DwellingAssumptionsEditor";
@@ -49,6 +50,9 @@ import type {
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num, pyeong, won } from "@/lib/utils/format";
+
+const InteriorPlanWorkspace = dynamic(() => import("./interior/InteriorPlanWorkspace"), { ssr: false });
+const PlanningSolarPanel = dynamic(() => import("./interior/PlanningSolarPanel"), { ssr: false });
 
 const ORIGIN_LABEL: Record<PlanningScenarioOrigin, string> = {
   "algorithm-safe": "안정형",
@@ -648,6 +652,10 @@ export function PlanningScenarioWorkspaceV4({
             : ("user-entered" as const),
         sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
+        boundary: parcel.boundary,
+        boundaryPolygons: parcel.boundaryPolygons,
+        roads: parcel.roads,
+        setback: parcel.setback,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
         heightLimitM: parcel.heightLimit ?? 0,
@@ -1083,7 +1091,7 @@ export function PlanningScenarioWorkspaceV4({
                       <span className="ui-tag">v{selectedScenario.version}</span>
                       {isRepresentative && <span className="ui-tag">{isAnalysisReference ? "예비 기준안" : "대표안"}</span>}
                       {selectedScenario.status === "draft" && (
-                        <span className="ui-tag">미저장 변경</span>
+                        <span className="ui-tag">편집 초안</span>
                       )}
                     </div>
                     <p
@@ -1233,6 +1241,12 @@ export function PlanningScenarioWorkspaceV4({
                   parkingGeometry={selectedParkingGeometry}
                   height={430}
                 />
+
+                {selectedGeometry && <>
+                  <InteriorPlanWorkspace scenario={selectedScenario} planning={selectedGeometry} disabled={geometryLocked}
+                    onChange={(floorPrograms) => editPlanningScenarioDraft(selectedScenario.id, { floorPrograms })} />
+                  <PlanningSolarPanel planning={selectedGeometry} />
+                </>}
 
                 <div className="selected-metrics">
                   <Metric

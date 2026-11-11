@@ -16,6 +16,7 @@ import type {
   SunlightNorthBoundaryInput,
   SunlightRegulationResult,
 } from "@/lib/regulatory/sunlight-rules";
+import type { InteriorLayout } from "@/lib/planning/interior/types";
 
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
@@ -96,6 +97,10 @@ export interface FloorProgram {
   zones: FloorZone[];
   /** Geometry screening only; never silently replaces revenue or legal exclusive areas. */
   interiorLayout?: import("./interior-layout").InteriorDraft;
+  /** Optional independently authored concept layout. Existing floor programs remain compatible. */
+  interior?: InteriorLayout;
+  /** Records the exact concept layout and financial zone inputs explicitly accepted together. */
+  interiorFinanceSignature?: string;
 }
 
 export type ParkingStrategy =
@@ -194,7 +199,23 @@ export interface PlanningMaterialRateEvidence {
  * 외장 선택과 비용 근거를 함께 보존한다.
  * 단가가 없는 재료 선택은 3D 표현에만 사용하고 사업비에는 반영하지 않는다.
  */
+export interface PlanningFacadeFaceSelection {
+  material?: PlanningFacadeMaterial;
+  exposure?: "exposed" | "shared" | "unknown";
+  /** Net opening deduction in m²; replaces the percentage, never added to it. */
+  openingAreaSqm?: number;
+}
+
+export interface PlanningFacadeRate {
+  baselineWonPerSqm?: number;
+  selectedWonPerSqm?: number;
+  evidence?: PlanningMaterialRateEvidence;
+}
+
 export interface PlanningMaterialSelection {
+  pricingMode?: "assembly" | "by-material";
+  faceAssignments?: Record<string, PlanningFacadeFaceSelection>;
+  materialRates?: Partial<Record<PlanningFacadeMaterial, PlanningFacadeRate>>;
   primaryFacadeMaterial: PlanningFacadeMaterial;
   secondaryFacadeMaterial: PlanningFacadeMaterial;
   primaryFacadeSharePct: number;
@@ -323,6 +344,7 @@ export interface PlanningEconomicsPreview {
   /** 외벽 면적·단가의 근거 상태. */
   materialCostStatus?: PlanningMaterialEvidenceStatus | "estimated";
   materialCostSource?: string;
+  facadeCost?: import("./materials").PlanningMaterialCostAdjustment;
   softCostManwon: number;
   contingencyCostManwon: number;
   financingCostManwon: number;
@@ -425,6 +447,10 @@ export interface PlanningCalculationParcel {
   sunlightNorthBoundary?: SunlightNorthBoundaryInput;
   /** 공동주택 채광방향·동간거리에 관한 확인된 입력. */
   sunlightDaylight?: SunlightDaylightInput;
+  boundary?: [number, number][];
+  boundaryPolygons?: import("@/lib/finance/types").Parcel["boundaryPolygons"];
+  setback?: import("@/lib/finance/types").Parcel["setback"];
+  roads?: import("./planning-geometry").PlanningGeometryRoadInput[];
   lotAreaSqm: number;
   maxFARPct: number;
   maxBCRPct: number;

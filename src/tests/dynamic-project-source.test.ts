@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
 import { projectWorkspaceFixture } from "./helpers/project-workspace-fixture";
-import { hashProjectWorkspacePayload, PROJECT_WORKSPACE_VERSION } from "@/lib/workspace/project-workspace";
+import { hashProjectWorkspacePayload, PROJECT_WORKSPACE_VERSION, validateProjectWorkspacePayload } from "@/lib/workspace/project-workspace";
 import type { DynamicProjectLoadResult, StoredParcel } from "@/lib/hooks/use-dynamic-project";
 
 let useDynamicProject: typeof import("@/lib/hooks/use-dynamic-project").useDynamicProject;
@@ -28,11 +28,51 @@ function draft(value: Partial<StoredParcel> | null) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("real project takes precedence over demo PNU", () => {
+  it("stores an explicitly unpriced site without inventing financial candidates", async () => {
+    const { buildSiteProject } = await import("@/lib/hooks/use-dynamic-project");
+    const intake = { id: DEMO_PROJECT_ID, address: "합성 현황 부지", lotArea: 100, zoning: "일반상업지역",
+      acquiredPrice: null, selectedAt: "2026-11-10T00:00:00Z", intakeRevision: "unpriced" } as StoredParcel;
+    const payload = projectWorkspaceFixture(DEMO_PROJECT_ID);
+    payload.projectData = buildSiteProject(intake);
+    expect(validateProjectWorkspacePayload(payload).valid).toBe(true);
+    expect(payload.projectData.scenarios).toEqual([]);
+    payload.projectData.parcel.acquiredPrice = 100;
+    expect(validateProjectWorkspacePayload(payload).valid).toBe(false);
+  });
+
+  it("reopens a hash-validated unpriced site with its price gate input intact", async () => {
+    const { buildSiteProject } = await import("@/lib/hooks/use-dynamic-project");
+    draft(null);
+    const payload = projectWorkspaceFixture(DEMO_PROJECT_ID);
+    payload.projectData = buildSiteProject({ id: DEMO_PROJECT_ID, address: "합성 현황 부지", lotArea: 100,
+      zoning: "일반상업지역", acquiredPrice: null, intakeRevision: "unpriced" } as StoredParcel);
+    const record = { version: PROJECT_WORKSPACE_VERSION, projectId: DEMO_PROJECT_ID, revision: 1, payload,
+      payloadHash: await hashProjectWorkspacePayload(payload), savedAt: "2026-11-10T00:00:00Z", savedBy: "test-user", auditHash: "a".repeat(64), backend: "local-versioned" };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(record)); vi.stubGlobal("fetch", fetchMock);
+    expect(await query().queryFn()).toMatchObject({ source: "server-workspace", data: {
+      meta: { mode: "site-only" }, siteIntake: { acquiredPrice: null, intakeRevision: "unpriced" }, scenarios: [],
+    } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("recomputes an explicitly revised intake while retaining the server revision for conflict detection", async () => {
+    draft({ id: DEMO_PROJECT_ID, address: "합성 변경 부지", lotArea: 100, acquiredPrice: 20000, intakeRevision: "new-intake" });
+    const payload = projectWorkspaceFixture(DEMO_PROJECT_ID);
+    payload.projectData.meta.intakeRevision = "old-intake";
+    const record = { version: PROJECT_WORKSPACE_VERSION, projectId: DEMO_PROJECT_ID, revision: 3, payload,
+      payloadHash: await hashProjectWorkspacePayload(payload), savedAt: "2026-11-10T00:00:00Z", savedBy: "test-user", auditHash: "a".repeat(64), backend: "local-versioned" };
+    const computed = { ...payload.projectData, meta: { ...payload.projectData.meta, intakeRevision: "new-intake" } };
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(record)).mockResolvedValueOnce(Response.json(computed));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await query().queryFn()).toMatchObject({ workspace: { revision: 3 }, data: computed,
+      localDraft: { baseRevision: 3, payload: { representativeScenarioId: null, representativeGeometry: null, stage3Snapshot: null } } });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/projects/dynamic");
+  });
   it("retains every uploaded component and hole through intake storage and the dynamic request", async () => {
     const boundaryPolygons = [{ outer: [[127, 37], [127.001, 37], [127.001, 37.001], [127, 37.001]],
       holes: [[[127.0001, 37.0001], [127.0002, 37.0001], [127.0002, 37.0002], [127.0001, 37.0002]]] },
     { outer: [[127.002, 37], [127.003, 37], [127.003, 37.001], [127.002, 37.001]], holes: [] }] as NonNullable<StoredParcel["boundaryPolygons"]>;
-    draft({ id: DEMO_PROJECT_ID, address: "합성 입력동 1", boundary: [], boundaryPolygons });
+    draft({ id: DEMO_PROJECT_ID, address: "합성 입력동 1", lotArea: 100, acquiredPrice: 100000, boundary: [], boundaryPolygons });
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response("{}", { status: 404 })).mockResolvedValueOnce(Response.json({ parcel: {} }));
     vi.stubGlobal("fetch", fetchMock);
     await query().queryFn();
@@ -95,6 +135,6 @@ describe("real project takes precedence over demo PNU", () => {
   });
   it("uses a new query cache entry when a real draft replaces the seed selection", () => {
     draft(null); const seedKey = query().queryKey;
-    draft({ id: DEMO_PROJECT_ID }); expect(query().queryKey).not.toEqual(seedKey);
+    draft({ id: DEMO_PROJECT_ID, address: "합성 입력동 1", lotArea: 100 }); expect(query().queryKey).not.toEqual(seedKey);
   });
 });

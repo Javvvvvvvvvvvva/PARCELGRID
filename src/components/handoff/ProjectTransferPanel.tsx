@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesProjectIntake } from "@/lib/services/project-intake";
+
 import { useRef, useState } from "react";
 import {
   createProjectTransferBundle,
@@ -67,7 +69,8 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
         expertTaxContracts: Object.values(project.expertTaxContracts).filter(
           (contract) => contract.projectId === projectId
         ),
-        stage3Snapshot: project.stage3FeasibilitySnapshots[projectId] ?? null,
+        stage3Snapshot: matchesProjectIntake(project.stage3FeasibilitySnapshots[projectId]?.data, currentData)
+          ? project.stage3FeasibilitySnapshots[projectId] : null,
         priceVerifications: review.priceVerifications[projectId] ?? {},
         // Authoritative approvals stay in the organization audit ledger.
         expertReviews: {},

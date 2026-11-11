@@ -329,7 +329,7 @@ describe("lookup identity and topology fallbacks", () => {
     const adapter = await import("@/lib/integrations/vworld");
     const spy = vi.spyOn(adapter, "lookupCadastral");
     const payload = await (await (await import("@/app/api/parcels/lookup/route")).POST(lookupRequest())).json();
-    expect(spy).toHaveBeenCalledWith(37, 127, expect.objectContaining({ pnu, mountainYn: "N" }));
+    expect(spy).toHaveBeenCalledWith(37, 127, expect.objectContaining({ pnu, mountainYn: "N" }), { includeRoads: true });
     expect(payload).toMatchObject({ mode: "manual-required", pnu, reason: { code: "CADASTRAL_NOT_FOUND" } });
     expect(mocks.context).not.toHaveBeenCalled();
     expect(mocks.geometry).not.toHaveBeenCalled();

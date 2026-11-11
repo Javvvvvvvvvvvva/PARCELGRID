@@ -3,6 +3,8 @@ import { z } from "zod";
 import { assessConstructionQuote, buildConstructionScopeLedger, constructionQuoteSchema } from "./construction-quote";
 import { DWELLING_PROGRAM_VERSION } from "./dwelling-program";
 import { calculatePlanningMaterialAdjustment } from "./materials";
+import { planningMaterialSelectionSchema as materialsSchema } from "./material-contract";
+import { planningGeometryInputBasis, type PlanningGeometrySnapshot } from "./planning-geometry";
 import { evaluateQuantityCost } from "./quantity-cost";
 import { quantityCostInputsSchema, quantityCostPlanSchema, type QuantityCostInputs } from "./quantity-cost-contract";
 import type { PlanningScenario } from "./types";
@@ -42,23 +44,6 @@ const materialFloorsSchema = z.array(floorSchema.extend({
 const dwellingFloorsSchema = z.array(z.object({
   zones: z.array(z.object({ useType, unitCount: z.number().int().min(0).max(500) })).min(1).max(32),
 })).min(1).max(32);
-const facade = z.enum(["unselected", "standard-render", "brick-veneer", "exposed-concrete", "metal-panel"]);
-const materialsSchema = z.object({
-  primaryFacadeMaterial: facade,
-  secondaryFacadeMaterial: facade.optional(),
-  primaryFacadeSharePct: z.number().finite().min(0).max(100).optional(),
-  windowRatioPct: z.number().finite().min(0).max(80).optional(),
-  facadeAreaOverrideSqm: area.optional(),
-  baselineFacadeUnitCostPerSqmWon: money.optional(),
-  selectedFacadeUnitCostPerSqmWon: money.optional(),
-  rateEvidence: z.object({
-    status: z.enum(["unpriced", "user-input", "source-backed"]),
-    sourceName: z.string().optional(),
-    sourceUrl: z.string().optional(),
-    observedAt: z.string().optional(),
-    note: z.string().optional(),
-  }).strict().optional(),
-}).strict();
 const dwellingSchema = z.object({
   modelVersion: z.literal(DWELLING_PROGRAM_VERSION),
   baseNetRatio: z.number().finite(),
@@ -84,6 +69,7 @@ const moneyLabels: Record<MoneyField, string> = {
 export function evaluateConstructionQuoteCostComparison(
   scenario: PlanningScenario,
   inputs: QuantityCostInputs,
+  geometry?: PlanningGeometrySnapshot,
 ): ConstructionQuoteCostComparison {
   const result: ConstructionQuoteCostComparison = {
     version: CONSTRUCTION_QUOTE_COST_COMPARISON_VERSION, status: "ready", financialApplied: false, approvalStatus: "unverified",
@@ -132,22 +118,33 @@ export function evaluateConstructionQuoteCostComparison(
   const materials = scenario.materials === undefined ? undefined : materialsSchema.safeParse(scenario.materials);
   if (materials && !materials.success) {
     block("conflict", "재료 선택·수량·단가가 올바르지 않습니다. 기본값이나 0원으로 대체하지 않습니다.");
-  } else if (!materials || materials.data.primaryFacadeMaterial === "unselected") {
+  } else if (!materials || (materials.data.primaryFacadeMaterial === "unselected" &&
+      (materials.data.primaryFacadeSharePct === undefined || materials.data.primaryFacadeSharePct === 100) &&
+      Object.keys(materials.data.faceAssignments ?? {}).length === 0)) {
     setMoney("materialAdjustmentWon", new Decimal(0), true);
     result.scopeNotes.push("재료 미선택은 적용된 재료 증감액이 0원이라는 뜻입니다. 외벽 공사가 무료라는 뜻이 아니며 기본 공사비의 포함액은 유지됩니다.");
   } else if (!materialFloorsSchema.safeParse(scenario.floorPrograms).success) {
     block("conflict", "재료 수량에 필요한 층고·용도·면적이 누락됐거나 올바르지 않습니다.");
-  } else if (!(materials.data.baselineFacadeUnitCostPerSqmWon! > 0) || !(materials.data.selectedFacadeUnitCostPerSqmWon! > 0)) {
+  } else if (materials.data.pricingMode !== "by-material" &&
+      (!(materials.data.baselineFacadeUnitCostPerSqmWon! > 0) || !(materials.data.selectedFacadeUnitCostPerSqmWon! > 0))) {
     block("missing", "선택한 재료의 기준 단가 또는 선택 단가가 미확정입니다. 증감액은 0원이 아닌 미산정입니다.");
   } else {
     try {
-      const material = calculatePlanningMaterialAdjustment(scenario);
+      const needsGeometry = Object.keys(materials.data.faceAssignments ?? {}).length > 0 ||
+        scenario.economicsPreview?.facadeCost?.areaBasis === "geometry-derived";
+      if ((needsGeometry && !geometry) || (geometry && (geometry.projectId !== scenario.projectId ||
+          geometry.scenarioId !== scenario.id || geometry.scenarioVersion !== scenario.version ||
+          geometry.scenarioInputBasis !== planningGeometryInputBasis(scenario)))) {
+        block("stale", "현재 외벽 수량과 일치하는 형상 원본이 필요합니다. 면적 추정값으로 대체하지 않습니다.");
+      } else {
+      const material = calculatePlanningMaterialAdjustment(scenario, geometry);
       if (!material.priced || !Number.isFinite(material.facadeAreaSqm) || material.facadeAreaSqm < 0 ||
           !Number.isFinite(material.adjustmentWon)) {
         block("conflict", "재료 수량 또는 증감액을 유효한 금액으로 계산하지 못했습니다.");
       } else {
         setMoney("materialAdjustmentWon", new Decimal(material.adjustmentWon), true);
         if (material.areaBasis === "area-based-estimate") result.scopeNotes.push("재료 면적에는 기존 층 면적 기반의 개략 외벽 추정값을 사용하며 실제 공종 물량을 실측한 값이 아닙니다.");
+      }
       }
     } catch {
       block("conflict", "재료 원가 입력을 검증하지 못했습니다.");

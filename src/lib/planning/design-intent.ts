@@ -27,7 +27,7 @@ export function buildPlanningDesignIntent(
 ) {
   const materials = resolvePlanningMaterials(scenario.materials);
   const geometrySource = resolvePlanningGeometrySource(scenario);
-  const materialCost = calculatePlanningMaterialAdjustment(scenario);
+  const materialCost = calculation?.economicsPreview.facadeCost ?? calculatePlanningMaterialAdjustment(scenario);
   const primaryLabel =
     PLANNING_FACADE_LABELS[materials.primaryFacadeMaterial];
   const secondaryLabel =
@@ -49,6 +49,7 @@ export function buildPlanningDesignIntent(
 
   return {
     schemaVersion: PLANNING_DESIGN_INTENT_VERSION,
+    facadeCost: materialCost,
     documentType: "parcelgrid-plan-dna",
     generatedAt: new Date().toISOString(),
     project: {
@@ -128,13 +129,15 @@ export function buildPlanningDesignIntent(
       materialAdjustmentManwon: materialCost.adjustmentManwon,
       evidenceStatus: materialCost.evidenceStatus,
       sourceLabel: materialCost.sourceLabel,
-      observedAt: materials.rateEvidence?.observedAt ?? null,
-      sourceUrl: materials.rateEvidence?.sourceUrl ?? null,
+      pricingMode: materialCost.pricingMode,
+      costKey: materialCost.costKey,
+      observedAt: materialCost.pricingMode === "assembly" ? materials.rateEvidence?.observedAt ?? null : null,
+      sourceUrl: materialCost.pricingMode === "assembly" ? materials.rateEvidence?.sourceUrl ?? null : null,
     },
     generationInstruction: {
       promptKo:
         `첨부한 PARCELGRID 3D 기준 이미지의 층수, 외곽 실루엣, 층별 후퇴, 대지 내 위치, 회전 방향과 카메라 시점을 변경하지 않는다. ` +
-        `계획 매스 외벽은 ${primaryLabel} ${materials.primaryFacadeSharePct}%와 ${secondaryLabel} ${100 - materials.primaryFacadeSharePct}%로 표현한다. ` +
+        `별도로 면별 지정하지 않은 외벽은 ${primaryLabel} ${materials.primaryFacadeSharePct}%와 ${secondaryLabel} ${100 - materials.primaryFacadeSharePct}%로 표현한다. 면별 지정은 첨부 기준 이미지와 Plan DNA의 facadeCost.quantities.faces를 우선 참조한다. ` +
         `창호 비율은 약 ${materials.windowRatioPct}%로 유지한다. 추가 층, 옥탑, 발코니, 캔틸레버와 새로운 건물 동을 임의로 만들지 않는다.`,
       conceptOnly: true,
       disclaimer:

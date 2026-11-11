@@ -22,6 +22,7 @@
  */
 
 import { D, ZERO, HUNDRED, Decimal } from "./math";
+import { facadeFingerprint, FACADE_COST_VERSION } from "@/lib/planning/facade-quantities";
 import { calculateEffectiveGFA } from "@/lib/finance/parking-core";
 import { buildProjectLedger } from "@/lib/finance/project-ledger";
 import { quantityAdjustmentForBase, quantityCostContractSchema } from "@/lib/planning/quantity-cost-contract";
@@ -86,6 +87,30 @@ function validateFinancialGeometryContract(
     throw new Error(
       `Stage 2/3 계획안 ID가 일치하지 않습니다: ${contract.sourceScenarioId} / ${scenarioId}`
     );
+  }
+
+  const facade = contract.facadeCost;
+  if (facade) {
+    if (facade.version !== FACADE_COST_VERSION || !Array.isArray(facade.rows) || facade.rows.length > 5 ||
+        !Number.isFinite(facade.facadeAreaSqm) || facade.facadeAreaSqm < 0 ||
+        facade.rows.some(row => !Number.isFinite(row.areaSqm) || row.areaSqm < 0 ||
+          (row.adjustmentWon !== null && (!Number.isFinite(row.adjustmentWon) ||
+            row.baselineWonPerSqm === null || row.selectedWonPerSqm === null ||
+            !Number.isFinite(row.baselineWonPerSqm) || !Number.isFinite(row.selectedWonPerSqm) ||
+            row.baselineWonPerSqm < 0 || row.selectedWonPerSqm < 0 ||
+            new Decimal(row.areaSqm).times(new Decimal(row.selectedWonPerSqm).minus(row.baselineWonPerSqm)).minus(row.adjustmentWon).abs().gt(0.000001)))) ||
+        facade.costKey !== facadeFingerprint({ version: facade.version, quantityKey: facade.quantities?.quantityKey,
+          pricingMode: facade.pricingMode, rows: facade.rows })) {
+      throw new Error("외벽 수량·단가 원시 계약을 검증하지 못했습니다.");
+    }
+    const rowArea = facade.rows.reduce((sum, row) => sum + row.areaSqm, 0);
+    const rowWon = facade.rows.reduce((sum, row) => sum + (row.adjustmentWon ?? 0), 0);
+    if (!Number.isFinite(facade.adjustmentManwon) ||
+        Math.abs(facade.adjustmentManwon - contract.materialAdjustmentCostManwon) > 0.000001 ||
+        Math.abs(rowArea - facade.facadeAreaSqm) > 0.000001 ||
+        Math.abs(rowWon / 10000 - facade.adjustmentManwon) > 0.000001) {
+      throw new Error("Stage 2/3 외벽 수량·재료비 합계가 일치하지 않습니다.");
+    }
   }
 
   const numericAreas = [

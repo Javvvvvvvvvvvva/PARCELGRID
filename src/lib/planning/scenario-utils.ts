@@ -162,6 +162,7 @@ export function clonePlanningScenario(
       id: uid("floor"),
       interiorLayout: undefined,
       zones: floor.zones.map((zone) => ({ ...zone, id: uid("zone") })),
+      interior: floor.interior ? structuredClone(floor.interior) : undefined,
     })),
     placement: { ...source.placement },
     parking: { ...source.parking, vehicleProfile: source.parking.vehicleProfile ? { ...source.parking.vehicleProfile } : undefined },
@@ -175,12 +176,7 @@ export function clonePlanningScenario(
         : source.geometrySource?.note,
     },
     materials: source.materials
-      ? {
-          ...source.materials,
-          rateEvidence: source.materials.rateEvidence
-            ? { ...source.materials.rateEvidence }
-            : undefined,
-        }
+      ? structuredClone(source.materials)
       : createDefaultPlanningMaterials(),
     checks: source.checks.map((check) => ({ ...check })),
     economicsPreview: {

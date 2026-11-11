@@ -167,6 +167,7 @@ describe("Deal Rescue", () => {
     const creditParcel = { ...fixture.data.parcel, acquiredPrice: 55_000 };
     const scenario = fixture.data.scenarios[0]._raw;
     scenario.program.areaContract!.materialAdjustmentCostManwon = -fixture.data.scenarios[0].hardCost * 0.95;
+    delete scenario.program.areaContract!.facadeCost;
     const before = structuredClone(scenario);
     expect(() => calculateScenario({
       parcel: creditParcel,
@@ -210,6 +211,7 @@ describe("Deal Rescue", () => {
     const fixture = integratedVerificationFixture();
     const scenario = fixture.data.scenarios[0]._raw;
     scenario.program.areaContract!.materialAdjustmentCostManwon = -fixture.data.scenarios[0].hardCost - 1;
+    delete scenario.program.areaContract!.facadeCost;
     expect(() => findDealRescuePaths(fixture.data.parcel, scenario)).toThrow("음수 공사비");
   });
 });

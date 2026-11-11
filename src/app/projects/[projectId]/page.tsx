@@ -1,4 +1,5 @@
 "use client";
+import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
 
 import { sessionFetch as fetch } from "@/lib/auth/client-session";
 
@@ -1152,6 +1153,7 @@ export default function DashboardPage({
 
       <div className="workspace-grid">
         <main className="stage3-main">
+          <section className="dashboard-section"><h2>외벽 수량·재료비</h2><FacadeCostSummary cost={scenario.program.areaContract?.facadeCost} /></section>
           <section className="dashboard-section">
             <SectionHeader eyebrow="PRELIMINARY PRO FORMA" title="예비 사업수지" description="공사비·금융·매출 가정을 한 원장에서 계산한 세전 결과입니다. 세후 결과는 위 세무 전문가 입력 원장에서 별도로 계산합니다." />
             <FinancialReconciliationPanel audit={reconciliation} />

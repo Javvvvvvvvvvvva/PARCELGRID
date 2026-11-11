@@ -166,7 +166,7 @@ export function PlanningLayoutVerification({ scenario, geometry, parking, calcul
         : <VehicleEditor key={scenario.id} scenario={scenario} geometry={geometry} parking={parking} locked={locked} onChange={onChange} />}
     </div>
     {quoteOpened && <div role="tabpanel" aria-label="견적 대사" hidden={tab !== "quote"}>
-      {calculationContext ? <PlanningConstructionQuotePanel scenario={scenario} inputs={{
+      {calculationContext ? <PlanningConstructionQuotePanel scenario={scenario} geometry={geometry ?? undefined} inputs={{
         constructionCostPerSqmWon: calculationContext.assumptions.constructionCostPerSqmWon,
         basementCostMultiplier: calculationContext.assumptions.basementCostMultiplier,
       }} locked={locked} getCurrentScenario={getCurrentScenario} onChange={onChange} /> : <p>견적 대사에 필요한 기본 공사비 가정이 없습니다.</p>}

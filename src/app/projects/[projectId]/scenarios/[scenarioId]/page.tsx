@@ -1,4 +1,5 @@
 "use client";
+import { FacadeCostSummary } from "@/components/planning/FacadeCostSummary";
 
 import Link from "next/link";
 import { use, useState, useMemo } from "react";
@@ -98,6 +99,7 @@ export default function ScenarioDetailPage({
         </div>
       </div>
 
+      <div style={{ margin: 20 }}><FacadeCostSummary cost={scenario._raw?.program.areaContract?.facadeCost} /></div>
       <div
         className="scenario-detail-notice"
         role="status"

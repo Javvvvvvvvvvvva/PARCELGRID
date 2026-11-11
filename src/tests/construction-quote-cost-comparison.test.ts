@@ -5,10 +5,11 @@ import {
   CONSTRUCTION_QUOTE_COST_COMPARISON_VERSION, evaluateConstructionQuoteCostComparison,
 } from "@/lib/planning/construction-quote-cost-comparison";
 import { DEFAULT_DWELLING_PROGRAM } from "@/lib/planning/dwelling-program";
-import { createDefaultPlanningMaterials } from "@/lib/planning/materials";
+import { calculatePlanningMaterialAdjustment, createDefaultPlanningMaterials } from "@/lib/planning/materials";
 import { createQuantityCostDraft } from "@/lib/planning/quantity-cost";
 import { calculatePlanningScenario, planningEconomicsAssumptionsFromLegacy } from "@/lib/planning/scenario-calculator";
 import { constructionQuoteFixture } from "./helpers/construction-quote-fixture";
+import { interiorFixture } from "./helpers/interior-fixture";
 
 const original = constructionQuoteFixture();
 function fixture() {
@@ -54,6 +55,35 @@ function freeze(value: unknown): void {
 }
 
 describe("read-only construction quote cost comparison", () => {
+  it("compares the imported per-material rate contract without discarding its signed credit", () => {
+    const f = fixture(); materials(f);
+    f.scenario.materials!.pricingMode = "by-material";
+    f.scenario.materials!.materialRates = { "standard-render": { baselineWonPerSqm: 1000, selectedWonPerSqm: 500 } };
+    rebind(f);
+    expect(compare(f)).toMatchObject({ status: "ready", materialAdjustmentWon: -50000 });
+  });
+
+  it("requires current raw geometry for face-based costs and never substitutes the area estimate", () => {
+    const { scenario, initial: geometry } = interiorFixture();
+    scenario.materials = { ...createDefaultPlanningMaterials(), primaryFacadeMaterial: "standard-render",
+      baselineFacadeUnitCostPerSqmWon: 300000, selectedFacadeUnitCostPerSqmWon: 330000 };
+    const inputs = fixture().inputs;
+    const cost = calculatePlanningMaterialAdjustment(scenario, geometry);
+    expect(cost.priced).toBe(true);
+    scenario.economicsPreview.facadeCost = cost;
+    expect(evaluateConstructionQuoteCostComparison(scenario, inputs)).toMatchObject({ status: "stale", materialAdjustmentWon: null });
+    expect(evaluateConstructionQuoteCostComparison(scenario, inputs, geometry)).toMatchObject({
+      status: "absent", materialAdjustmentWon: cost.adjustmentWon,
+    });
+    geometry.scenarioVersion++;
+    expect(evaluateConstructionQuoteCostComparison(scenario, inputs, geometry)).toMatchObject({ status: "stale" });
+  });
+
+  it("rejects malformed imported face quantities instead of stripping them", () => {
+    const f = fixture(); materials(f);
+    f.scenario.materials!.faceAssignments = { "face-12345678": { openingAreaSqm: -1 } };
+    expect(compare(f)).toMatchObject({ status: "conflict", materialAdjustmentWon: null });
+  });
   it("requires allocation reconciliation even when quote assessment is ready", () => {
     const f = structuredClone(original);
     expect(assessConstructionQuote(f.scenario, f.inputs).status).toBe("ready");
