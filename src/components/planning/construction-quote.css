@@ -9,6 +9,13 @@
 .lv-quote-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)); gap: 12px; margin: 12px 0; }
 .lv-quote-metrics dt { font-size: 11px; color: var(--fg-muted, #52645f); }
 .lv-quote-metrics dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.lv-quote-cost-comparison { min-width: 0; margin: 14px 0; padding: 12px 0; border-block: 1px solid var(--line, #dce2e4); overflow-wrap: anywhere; letter-spacing: 0; }
+.lv-quote-cost-comparison h5 { margin: 0; font-size: 12px; font-weight: 700; }
+.lv-quote-cost-comparison .lv-quote-heading > * { min-width: 0; }
+.lv-quote-cost-comparison .lv-quote-metrics > div { min-width: 0; }
+.lv-quote-cost-comparison .lv-quote-cost-totals { padding-top: 10px; border-top: 1px solid var(--line, #dce2e4); }
+.lv-quote-cost-totals dd { font-weight: 700; }
+.lv-quote-cost-notes { margin: 8px 0 0; padding-left: 18px; }
 .lv-quote-line, .lv-quote-scope { border-bottom: 1px solid var(--line, #dce2e4); padding: 9px 0; }
 .lv-quote summary { cursor: pointer; font-weight: 600; }
 .lv-quote summary > span { display: inline-block; max-width: calc(100% - 24px); vertical-align: top; margin-right: 12px; }

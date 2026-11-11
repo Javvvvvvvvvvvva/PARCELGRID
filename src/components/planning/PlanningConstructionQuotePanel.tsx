@@ -8,8 +8,10 @@ import {
   MAX_QUOTE_ALLOCATIONS, QUOTE_SCOPE_IDS, QUOTE_SCOPE_LABELS, saveConstructionQuote,
   type ConstructionQuote, type ConstructionQuoteAssessment, type ConstructionQuoteLine,
 } from "@/lib/planning/construction-quote";
+import { evaluateConstructionQuoteCostComparison } from "@/lib/planning/construction-quote-cost-comparison";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import { ConstructionQuoteImport } from "./ConstructionQuoteImport";
+import { ConstructionQuoteCostComparison } from "./ConstructionQuoteCostComparison";
 import { ConstructionScopeLedgerSummary } from "@/components/handoff/ConstructionScopeLedgerSummary";
 import type { QuantityCostInputs } from "@/lib/planning/quantity-cost-contract";
 import { QUANTITY_ITEM_IDS } from "@/lib/planning/quantity-takeoff";
@@ -23,7 +25,8 @@ type Props = {
 };
 type DraftState = { quote: ConstructionQuote | null; savedKey: string | null; baselineKey: string | null; error: string };
 type NumericState = { raw: string; invalid: boolean };
-type Review = { key: string; assessment: ConstructionQuoteAssessment };
+type Review = { key: string; assessment: ConstructionQuoteAssessment;
+  comparison: ReturnType<typeof evaluateConstructionQuoteCostComparison> };
 type Scope = ConstructionQuote["coverage"][number];
 type Allocation = NonNullable<ConstructionQuoteLine["allocations"]>[number];
 const vatLabels: Record<ConstructionQuote["vatBasis"], string> = {
@@ -43,6 +46,9 @@ const formatMoney = (value: number | null, signed = false) => value === null ? "
 const errorText = (error: unknown) => error instanceof Error ? error.message : "견적 증빙을 처리하지 못했습니다.";
 function serialized(value: unknown): string | null {
   try { return JSON.stringify(value ?? null); } catch { return null; }
+}
+function comparisonCostKey(scenario: Pick<PlanningScenario, "materials" | "dwellingProgram" | "quantityCost">): string | null {
+  return serialized({ materials: scenario.materials, dwellingProgram: scenario.dwellingProgram, quantityCost: scenario.quantityCost });
 }
 function initialDraft(scenario: PlanningScenario, inputs: QuantityCostInputs): DraftState {
   const savedKey = serialized(scenario.constructionQuote);
@@ -124,10 +130,14 @@ function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurr
   const dirty = !!quote && (draft.savedKey === serialized(undefined) || modified);
   const editable = sessionValid && !locked && !savedChanged && !stale && !!basis.value;
   const validDraft = !!quote && parsed.success && !invalidNumbers && !invalidDates;
-  const inputKey = useMemo(() => serialized({ scenarioId: scenario.id, projectId: scenario.projectId,
-    basis: basis.value, inputs: costInputs, savedKey, quote, numbers, dateErrors, locked, session: sessionAtMount.key }),
-  [scenario.id, scenario.projectId, basis.value, costInputs, savedKey, quote, numbers, dateErrors, locked, sessionAtMount.key]);
-  const currentReview = review?.key === inputKey && validDraft && !stale && !savedChanged ? review.assessment : null;
+  const comparisonKey = useMemo(() => comparisonCostKey({ materials: scenario.materials,
+    dwellingProgram: scenario.dwellingProgram, quantityCost: scenario.quantityCost }),
+  [scenario.materials, scenario.dwellingProgram, scenario.quantityCost]);
+  const inputKey = useMemo(() => comparisonKey === null ? null : serialized({ scenarioId: scenario.id, projectId: scenario.projectId,
+    basis: basis.value, inputs: costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, session: sessionAtMount.key }),
+  [scenario.id, scenario.projectId, basis.value, costInputs, comparisonKey, savedKey, quote, numbers, dateErrors, locked, sessionAtMount.key]);
+  const currentQuoteReview = sessionValid && inputKey !== null && review?.key === inputKey && validDraft && !stale && !savedChanged ? review : null;
+  const currentReview = currentQuoteReview?.assessment;
 
   useEffect(() => {
     // ClientSession cannot reactivate after invalidation; also bind this editor to its own generation.
@@ -247,8 +257,15 @@ function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurr
     if (!validDraft || !quote || stale || savedChanged || !inputKey) return;
     try {
       const current = readCurrent(false);
-      if (constructionQuoteBasis(current, costInputs) !== basis.value) throw new Error("현재 계획 기준이 변경됐습니다. 최신 기준을 확인한 뒤 대사를 실행해 주세요.");
-      setReview({ key: inputKey, assessment: assessConstructionQuote({ ...current, constructionQuote: quote }, costInputs) });
+      if (constructionQuoteBasis(current, costInputs) !== basis.value || comparisonCostKey(current) !== comparisonKey ||
+          (lockedProp || isPlanningGeometryLocked(current)) !== locked) {
+        throw new Error("현재 계획·공사비 기준이 변경됐습니다. 최신 기준을 확인한 뒤 대사를 실행해 주세요.");
+      }
+      const reviewScenario = { ...current, constructionQuote: quote };
+      const assessment = assessConstructionQuote(reviewScenario, costInputs);
+      const comparison = evaluateConstructionQuoteCostComparison(reviewScenario, costInputs);
+      assertSession();
+      setReview({ key: inputKey, assessment, comparison });
       setMessage("입력한 검토 기준일에 대한 대사를 실행했습니다. 증빙 저장 및 재무 반영과는 별개입니다.");
     } catch (error) { setReview(null); setMessage(errorText(error)); }
   }
@@ -516,9 +533,10 @@ function ConstructionQuoteEditor({ scenario, inputs, locked: lockedProp, getCurr
             <div><dt>문서 기재 합계</dt><dd>{formatMoney(quote.statedTotalWon)}</dd></div>
             <div><dt>입력 행 합계</dt><dd>{formatMoney(currentReview.lineTotalWon)}</dd></div>
             <div><dt>BASE 기본 공사비</dt><dd>{formatMoney(currentReview.baseEstimateWon)}</dd></div>
-            <div><dt>입력 행 합계 − BASE</dt><dd>{formatMoney(currentReview.differenceFromBaseWon, true)}</dd></div>
+            <div><dt>기본단가만 비교한 차액</dt><dd>{formatMoney(currentReview.differenceFromBaseWon, true)}</dd></div>
           </dl>
-          <p className="lv-note">BASE는 현재 연면적·기본 단가·지하층 배율의 산술값입니다. 미확정·불일치가 있는 견적의 차액은 미산정입니다. 대사된 차액도 실제 전체 견적의 완결성이나 사업성 반영액을 뜻하지 않습니다.</p>
+          <p className="lv-note">BASE는 현재 연면적·기본 단가·지하층 배율의 산술값입니다. 기본단가만 비교한 차액은 재료비·추가 세대·상세 수량 원가 증감을 제외한 참고값이며 절감액·사업비 반영액을 뜻하지 않습니다. 미확정·불일치가 있는 견적의 차액은 미산정입니다.</p>
+          {currentQuoteReview && <ConstructionQuoteCostComparison comparison={currentQuoteReview.comparison} />}
           <div className="lv-table-wrap"><table><caption>모델 예비 수량과 견적 수량 대사</caption>
             <thead><tr><th scope="col">수량 항목</th><th scope="col">단위</th><th scope="col">모델 예비 수량</th><th scope="col">견적 수량</th><th scope="col">입력 대사</th></tr></thead>
             <tbody>{currentReview.quantities.map(item => <tr key={item.id}>

@@ -11,6 +11,11 @@ node_modules
 .pnpm-home
 .xdg-data
 coverage
+artifacts
+output
+tmp
+__pycache__
+*.py[cod]
 *.tsbuildinfo
 *.log
 .DS_Store
