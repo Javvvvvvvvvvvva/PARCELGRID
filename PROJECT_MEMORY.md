@@ -4,6 +4,10 @@
 
 ## 현재 실행: 프로젝트 인계 검증 완료·서버 가격 입력 보강
 
+- 공유 가격 입력 최종검증: 신규16 포함 전체3900+opt-inDB2제외/lint·타입·build `8D4Xn3xl-Z11OpSM25XPz` 통과. 독립검토 추가발견0(공유스키마범위). 실제PG/Chrome1440·native390 각8종 API422·DB불변과28흐름, 가격화면320~1440검수,6프로젝트24workspace/24audit 재시작·백업복원 동일. 임시자원/frozen copy정리 완료. `WORKSPACE-PRICE-INPUTS-2026.1.md` 참조. 별도 가격검토 흐름 감사에서 재검토 전환 뒤 기존파생근거잔존(P1), 초기화의 독립근거제거(P1), 읽기전용계정 로컬변경(P2)을 확인해 다음 수정 대상으로 정했다. 아래 진행 중 기록은 이전 경과다.
+
+- 인계 완료 `0712f35` 원격master 게시. 공유 가격 계약 보강은 미커밋 진행 중: nested 비교사례/소비필드, 가격초안 strict형식/중복/256개 상한을 Workspace와 인계가 같은 스키마로 검사한다. 원문 객체/해시·미완성초안·0원은 보존하며 승인 판정은 아니다. 가격검토 고정380px열의 모바일적층도 연결했다. `docs/WORKSPACE-PRICE-INPUTS-2026.1.md`; 새로운 전체검증·실제DB/Chrome 성공은 아직 미기록이다.
+
 - 인계 최종검증(2026-11-11): 전체3884통과+opt-inDB2제외/lint·타입·build `00nc6H-pHgdkhbglPS473`, 신규137회귀와 독립검토3수정 재검증 통과. 실제PG18.6/Chrome1440·native390 각27동작+같은ID2프로젝트행렬,320~1440 화면 검수, 6프로젝트의24workspace/24audit 이력 재시작·dump/restore 해시 일치. 소스/빌드/런타임 불변·검증자원/frozen copy 정리 완료. `docs/PROJECT-TRANSFER-SAFETY-2026.1.md`, `artifacts/project-transfer-production-2026-11-11/attempt-1/` 참조. 아래 인계 진행 중 기록은 이전 경과다. 다음은 서버 Workspace 경로가 잘못된 nested 가격사례와 중복/null 가격초안을 허용하는 재현 결함을 공통 계약으로 차단하는 작업이다. 실제자료·외부전문가·공식/운영/최종 인수는 계속 미확정이다.
 
 - 운영비 완료 체크포인트 `430d24c`를 원격 master에 게시했다. 현재 프로젝트 인계 v2 안전성/초안 확장을 개발 중이며 `docs/PROJECT-TRANSFER-SAFETY-2026.1.md` 참조. bounded파일·무변경미리보기·명시적적용, 세션/프로젝트/내용변경 가드, 같은ID 타프로젝트 보존·미소유 가정 충돌차단, 서버검토캐시 불변과 dynamic query 데이터 동기화를 연결했다. 공유 Workspace apply의 finance-only 가정 정리도 보완했다. 관련104회귀 통과, 전체검증/독립검토/실제DB·브라우저는 아직 미완료다. 외부전문가/실제자료/공식승인은 계속 미확정이다.

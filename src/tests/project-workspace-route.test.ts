@@ -11,6 +11,13 @@ import { GET as GET_INDEX } from "@/app/api/projects/route";
 import type { AccessPrincipal } from "@/lib/auth/roles";
 import { createSiteAccessToken, siteAccessCookie } from "@/lib/site-access";
 import { projectWorkspaceFixture } from "@/tests/helpers/project-workspace-fixture";
+import {
+  priceVerificationFixture,
+  revenuePricingFixture,
+  workspacePriceFixture,
+  workspaceStorageFiles,
+} from "@/tests/helpers/workspace-price-fixture";
+import { hashProjectWorkspacePayload } from "@/lib/workspace/project-workspace";
 
 const PROJECT_ID = "workspace-route-project";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
@@ -88,6 +95,74 @@ describe("project workspace API", () => {
       },
     );
   }
+
+  it("rejects malformed price data with 422 before creating workspace or audit files", async () => {
+    const analyst = actor("11111111-1111-4111-8111-111111111111", "analyst");
+    const invalid = { ...workspacePriceFixture(PROJECT_ID), priceVerifications: {
+      acquisition: { ...priceVerificationFixture(PROJECT_ID), selectedComps: [null] },
+    } };
+    const response = await PUT(await request(analyst, "PUT", { baseRevision: 0, payload: invalid }), context);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: "INVALID_PROJECT_WORKSPACE" });
+    expect(await workspaceStorageFiles(directory)).toEqual({});
+    expect((await GET(await request(analyst, "GET"), context)).status).toBe(404);
+  });
+
+  it("preserves exact saved revisions and audit bytes after rejected prices and round-trips incomplete drafts", async () => {
+    const analyst = actor("11111111-1111-4111-8111-111111111111", "analyst");
+    const input = workspacePriceFixture(PROJECT_ID);
+    const sale = { ...input.priceVerifications.sale!, historicalEvidence: { reference: "keep exactly" } };
+    input.priceVerifications.sale = sale;
+    const created = await PUT(await request(analyst, "PUT", { baseRevision: 0, payload: input }), context);
+    expect(created.status).toBe(201);
+    const saved = await created.json();
+    expect(saved).toMatchObject({ revision: 1, backend: "local-versioned", payload: input });
+    expect(saved.payload).toEqual(input);
+    expect(saved.payloadHash).toBe(await hashProjectWorkspacePayload(input));
+    const initialFetch = await GET(await request(analyst, "GET"), context);
+    expect(initialFetch.status).toBe(200);
+    const publicSaved = await initialFetch.json();
+    expect(publicSaved.payload).toEqual(input);
+    expect(saved).toMatchObject(publicSaved);
+    const files = await workspaceStorageFiles(directory);
+    expect(Object.keys(files)).toHaveLength(2);
+    const draft = revenuePricingFixture(PROJECT_ID);
+    for (const patch of [
+      { priceVerifications: { acquisition: { ...priceVerificationFixture(PROJECT_ID), selectedComps: [null] } } },
+      { priceVerifications: { acquisition: { ...priceVerificationFixture(PROJECT_ID), reviewer: undefined } } },
+      { revenuePricingDrafts: [{ ...draft, pools: { residentialLease: { baseUnitPriceWon: null } } }] },
+      { revenuePricingDrafts: [{ ...draft, pools: { residentialLease: { adjustments: null } } }] },
+      { revenuePricingDrafts: [draft, structuredClone(draft)] },
+    ]) {
+      const rejected = await PUT(await request(analyst, "PUT", {
+        baseRevision: 1, payload: { ...input, ...patch },
+      }), context);
+      expect(rejected.status, JSON.stringify(patch)).toBe(422);
+      expect(await rejected.json()).toMatchObject({ code: "INVALID_PROJECT_WORKSPACE" });
+      expect(await workspaceStorageFiles(directory)).toEqual(files);
+      const fetched = await GET(await request(analyst, "GET"), context);
+      expect(fetched.status).toBe(200);
+      expect(fetched.headers.get("x-workspace-revision")).toBe("1");
+      expect(fetched.headers.get("etag")).toBe(`"${saved.payloadHash}"`);
+      expect(await fetched.json()).toEqual(publicSaved);
+    }
+
+    input.priceVerifications.acquisition!.sourceModelVersion = null;
+    input.revenuePricingDrafts[0].pools = { residentialLease: {} };
+    const updated = await PUT(await request(analyst, "PUT", { baseRevision: 1, payload: input }), context);
+    expect(updated.status).toBe(200);
+    const updatedBody = await updated.json();
+    expect(updatedBody.revision).toBe(2);
+    expect(updatedBody.payload).toEqual(input);
+    expect(updatedBody.payload.financialSources).toEqual({});
+    expect(updatedBody.payload.draftAcquisitionPrice).toBeNull();
+    const fetched = await GET(await request(analyst, "GET"), context);
+    expect(fetched.status).toBe(200);
+    expect(fetched.headers.get("x-workspace-revision")).toBe("2");
+    const fetchedBody = await fetched.json();
+    expect(fetchedBody.payload).toEqual(input);
+    expect(updatedBody).toMatchObject(fetchedBody);
+  });
 
   it("enforces roles, tenant scope and optimistic revisions", async () => {
     const analyst = actor(

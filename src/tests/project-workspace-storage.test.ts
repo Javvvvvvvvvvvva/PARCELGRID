@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AccessPrincipal } from "@/lib/auth/roles";
+import { appendAuditEvent, readAuditLedger } from "@/lib/audit/audit-ledger";
+import { canonicalProjectWorkspaceJson } from "@/lib/workspace/project-workspace";
 import { projectWorkspaceFixture } from "@/tests/helpers/project-workspace-fixture";
+import { workspacePriceFixture, workspaceStorageFiles } from "@/tests/helpers/workspace-price-fixture";
 import {
   listProjectWorkspaces,
   ProjectWorkspaceConflictError,
@@ -165,5 +168,36 @@ describe("versioned project workspace storage", () => {
     await expect(
       readProjectWorkspace({ orgId: principal.orgId, projectId: PROJECT_ID }),
     ).rejects.toThrow("파일명과 revision");
+  });
+
+  it("rejects a historical malformed price with valid SHA and audit linkage without repair or fallback", async () => {
+    const saved = await saveProjectWorkspace({
+      principal, projectId: PROJECT_ID, baseRevision: 0, payload: workspacePriceFixture(PROJECT_ID),
+    });
+    const directoryName = path.join(workspaceDirectory, digest(principal.orgId), digest(PROJECT_ID));
+    const original = path.join(directoryName, `0000000001-${saved.payloadHash}.json`);
+    const historical = JSON.parse(await readFile(original, "utf8"));
+    historical.revision = 2;
+    historical.payload.priceVerifications.acquisition.selectedComps = [null];
+    historical.payloadHash = digest(canonicalProjectWorkspaceJson(historical.payload));
+    const event = await appendAuditEvent({
+      principal, action: "project.workspace_saved", resourceType: "project-workspace", resourceId: PROJECT_ID,
+      payload: { version: historical.version, projectId: PROJECT_ID, revision: 2, payloadHash: historical.payloadHash },
+    });
+    historical.auditHash = event.entryHash;
+    historical.savedAt = event.occurredAt;
+    const pathname = path.join(directoryName, `0000000002-${historical.payloadHash}.json`);
+    await writeFile(pathname, JSON.stringify(historical));
+    const files = await workspaceStorageFiles(directory);
+    const ledger = await readAuditLedger({ orgId: principal.orgId });
+    expect(ledger.events.at(-1)?.entryHash).toBe(historical.auditHash);
+
+    const read = () => readProjectWorkspace({ orgId: principal.orgId, projectId: PROJECT_ID });
+    await expect(read()).rejects.toBeInstanceOf(ProjectWorkspaceIntegrityError);
+    await expect(read()).rejects.toThrow("가격 검증");
+    await expect(listProjectWorkspaces({ orgId: principal.orgId }))
+      .rejects.toBeInstanceOf(ProjectWorkspaceIntegrityError);
+    expect(await workspaceStorageFiles(directory)).toEqual(files);
+    expect(await readAuditLedger({ orgId: principal.orgId })).toEqual(ledger);
   });
 });

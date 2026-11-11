@@ -28,12 +28,9 @@ import type {
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { ProjectComputed } from "@/lib/services/compute-project";
-import {
-  FINANCIAL_REVENUE_POOL_KEYS,
-  REVENUE_PRICE_ADJUSTMENT_DIMENSIONS,
-  REVENUE_PRICING_INPUT_VERSION,
-  type RevenuePricingDraftContract,
-} from "@/lib/finance/revenue-contract";
+import type { RevenuePricingDraftContract } from "@/lib/finance/revenue-contract";
+import { revenuePricingDraftSchema } from "@/lib/finance/revenue-pricing-schema";
+import { priceVerificationRecordSchema } from "@/lib/finance/price-verification-schema";
 import type {
   EnvelopePlan,
   PendingOverride,
@@ -459,51 +456,27 @@ export function validateProjectWorkspacePayload(
   }
   if (!Array.isArray(value.revenuePricingDrafts)) {
     errors.push("수익 풀 단가 초안 목록이 올바르지 않습니다.");
-  } else if (
-    value.revenuePricingDrafts.some((draft) => {
+  } else if (value.revenuePricingDrafts.length > 256) {
+    errors.push("수익 풀 단가 초안 목록은 256개 이하여야 합니다.");
+  } else {
+    const scenarioIds = new Set<string>();
+    for (const draft of value.revenuePricingDrafts) {
       if (
         !isRecord(draft) ||
-        draft.version !== REVENUE_PRICING_INPUT_VERSION ||
+        !revenuePricingDraftSchema.safeParse(draft).success ||
         draft.projectId !== value.projectId ||
-        !financeScenarioIds.has(String(draft.scenarioId)) ||
-        !isRecord(draft.pools) ||
-        !isTimestamp(draft.updatedAt)
+        typeof draft.scenarioId !== "string" ||
+        !financeScenarioIds.has(draft.scenarioId)
       ) {
-        return true;
+        errors.push("수익 풀 단가 초안의 프로젝트·계획안 또는 값이 올바르지 않습니다.");
+        break;
       }
-      return Object.entries(draft.pools).some(([pool, poolDraft]) => {
-        if (
-          !FINANCIAL_REVENUE_POOL_KEYS.includes(
-            pool as (typeof FINANCIAL_REVENUE_POOL_KEYS)[number],
-          ) ||
-          !isRecord(poolDraft)
-        ) {
-          return true;
-        }
-        if (
-          poolDraft.baseUnitPriceWon != null &&
-          (!isFiniteNumber(poolDraft.baseUnitPriceWon) ||
-            poolDraft.baseUnitPriceWon < 0)
-        ) {
-          return true;
-        }
-        return (
-          poolDraft.adjustments != null &&
-          (!isRecord(poolDraft.adjustments) ||
-            Object.entries(poolDraft.adjustments).some(
-              ([dimension, factor]) =>
-                !REVENUE_PRICE_ADJUSTMENT_DIMENSIONS.includes(
-                  dimension as (typeof REVENUE_PRICE_ADJUSTMENT_DIMENSIONS)[number],
-                ) ||
-                !isFiniteNumber(factor) ||
-                factor <= 0 ||
-                factor > 10,
-            ))
-        );
-      });
-    })
-  ) {
-    errors.push("수익 풀 단가 초안의 프로젝트·계획안 또는 값이 올바르지 않습니다.");
+      if (scenarioIds.has(draft.scenarioId)) {
+        errors.push("동일 계획안의 수익 풀 단가 초안이 중복됩니다.");
+        break;
+      }
+      scenarioIds.add(draft.scenarioId);
+    }
   }
   if (value.leaseRollDrafts !== undefined) {
     if (!Array.isArray(value.leaseRollDrafts) || value.leaseRollDrafts.length > 256) {
@@ -593,13 +566,9 @@ export function validateProjectWorkspacePayload(
       ([target, verification]) =>
         !["acquisition", "sale"].includes(target) ||
         !isRecord(verification) ||
+        !priceVerificationRecordSchema.safeParse(verification).success ||
         verification.projectId !== value.projectId ||
-        verification.target !== target ||
-        !["draft", "review-requested", "verified", "rejected"].includes(
-          String(verification.status),
-        ) ||
-        !Array.isArray(verification.selectedComps) ||
-        !isTimestamp(verification.updatedAt),
+        verification.target !== target,
     )
   ) {
     errors.push("가격 검증 항목의 프로젝트·대상 또는 필수 필드가 올바르지 않습니다.");

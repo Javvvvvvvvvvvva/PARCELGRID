@@ -6,12 +6,9 @@ import type { ExpertTaxInputContract } from "@/lib/finance/after-tax-ledger";
 import { ASSUMPTION_VALUE_RULES, validateAssumptionValue } from "@/lib/finance/assumption-validation";
 import { leaseRollDraftSchema, type LeaseRollDraft } from "@/lib/finance/lease-roll-contract";
 import { operatingBudgetDraftSchema, type OperatingBudgetDraft } from "@/lib/finance/operating-budget-contract";
-import {
-  FINANCIAL_REVENUE_POOL_KEYS,
-  REVENUE_PRICE_ADJUSTMENT_DIMENSIONS,
-  REVENUE_PRICING_INPUT_VERSION,
-  type RevenuePricingDraftContract,
-} from "@/lib/finance/revenue-contract";
+import type { RevenuePricingDraftContract } from "@/lib/finance/revenue-contract";
+import { revenuePricingDraftSchema } from "@/lib/finance/revenue-pricing-schema";
+import { priceVerificationRecordSchema } from "@/lib/finance/price-verification-schema";
 import type {
   PriceVerificationRecord,
   PriceVerificationTarget,
@@ -96,43 +93,6 @@ export interface ProjectTransferWorkspaceValidation {
 }
 
 const transferId = z.string().min(1).max(300).refine(value => value === value.trim());
-const priceComparableSchema = z.object({
-  id: z.string(),
-  address: z.string(),
-  date: z.string(),
-  type: z.string(),
-  lotAreaSqm: z.number().finite(),
-  pricePerPyeongManwon: z.number().finite(),
-});
-// Validate consumer-safe shape, not approval readiness; incomplete drafts remain transferable.
-const priceVerificationSchema = z.object({
-  projectId: z.string(),
-  target: z.enum(["acquisition", "sale"]),
-  status: z.enum(["draft", "review-requested", "verified", "rejected"]),
-  selectedComps: z.array(priceComparableSchema).max(10_000),
-  medianPricePerPyeongManwon: z.number().finite(),
-  adjustmentPct: z.number().finite(),
-  verifiedPricePerPyeongManwon: z.number().finite(),
-  verifiedTotalManwon: z.number().finite(),
-  verifiedPricePerSqmWon: z.number().finite(),
-  reviewer: z.string(),
-  organization: z.string(),
-  rationale: z.string(),
-  sourceModelVersion: z.string().nullable().optional(),
-  verifiedAt: z.string(),
-  updatedAt: z.string().refine(value => Number.isFinite(Date.parse(value))),
-});
-const pricingDraftSchema = z.object({
-  version: z.literal(REVENUE_PRICING_INPUT_VERSION),
-  projectId: transferId,
-  scenarioId: transferId,
-  pools: z.partialRecord(z.enum(FINANCIAL_REVENUE_POOL_KEYS), z.object({
-    baseUnitPriceWon: z.number().finite().nonnegative().optional(),
-    adjustments: z.partialRecord(z.enum(REVENUE_PRICE_ADJUSTMENT_DIMENSIONS),
-      z.number().finite().positive().max(10)).optional(),
-  }).strict()),
-  updatedAt: z.iso.datetime(),
-}).strict();
 const pendingOverrideSchema = z.object({
   scenarioId: transferId,
   field: z.string().refine(value => Object.hasOwn(ASSUMPTION_VALUE_RULES, value)),
@@ -214,7 +174,7 @@ function validateOptionalDrafts(
   const collections = [
     ["leaseRollDrafts", leaseRollDraftSchema, allIds],
     ["operatingBudgetDrafts", operatingBudgetDraftSchema, allIds],
-    ["revenuePricingDrafts", pricingDraftSchema, financeIds],
+    ["revenuePricingDrafts", revenuePricingDraftSchema, financeIds],
   ] as const;
   for (const [field, schema, ids] of collections) {
     const drafts = payload[field];
@@ -407,7 +367,7 @@ function validateTransferBundle(parsed: unknown, expectedProjectId?: string): Pr
   if (errors.length) return { valid: false, errors, bundle: null };
 
   for (const [target, verification] of Object.entries(bundle.payload.priceVerifications)) {
-    if (!priceVerificationSchema.safeParse(verification).success ||
+    if (!priceVerificationRecordSchema.safeParse(verification).success ||
         verification.projectId !== bundle.projectId || verification.target !== target) {
       errors.push("가격 검증 항목의 형식·소유권·대상 또는 비교 사례가 올바르지 않습니다.");
       break;

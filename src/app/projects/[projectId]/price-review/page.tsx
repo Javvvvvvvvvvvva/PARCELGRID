@@ -14,6 +14,7 @@ import {
 import { useProjectStore } from "@/lib/stores/project-store";
 import { useReviewStore } from "@/lib/stores/review-store";
 import { num } from "@/lib/utils/format";
+import styles from "./price-review.module.css";
 
 const TARGET_LABEL: Record<PriceVerificationTarget, string> = {
   acquisition: "부동산 총 취득대금",
@@ -182,7 +183,7 @@ export default function PriceReviewPage({
   ).length;
 
   return (
-    <div style={{ maxWidth: 1320, margin: "0 auto", padding: "28px 30px 52px" }}>
+    <div className={styles.workspace} data-price-review>
       <nav style={navStyle}>
         <Link href={`/projects/${projectId}`} style={navLinkStyle}>Stage 3 사업성</Link>
         <span>→</span>
@@ -201,11 +202,12 @@ export default function PriceReviewPage({
         </p>
       </header>
 
-      <section style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      <section style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
         {(["acquisition", "sale"] as PriceVerificationTarget[]).map((item) => (
           <button
             type="button"
             key={item}
+            aria-pressed={target === item}
             onClick={() => setTarget(item)}
             style={{
               ...tabStyle,
@@ -219,7 +221,7 @@ export default function PriceReviewPage({
         ))}
       </section>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 380px", gap: 16, alignItems: "start" }}>
+      <div className={styles.columns}>
         <section style={panelStyle}>
           <div style={{ padding: "15px 16px", borderBottom: "1px solid var(--border)" }}>
             <strong>비교 사례 선택</strong>
@@ -231,7 +233,7 @@ export default function PriceReviewPage({
             {candidates.map((comp) => {
               const checked = selectedIds.includes(comp._key);
               return (
-                <label key={comp._key} style={{ display: "grid", gridTemplateColumns: "24px 1fr auto", gap: 10, alignItems: "center", padding: "12px 15px", borderBottom: "1px solid var(--border-faint)", background: checked ? "var(--bg-active)" : "transparent", cursor: "pointer" }}>
+                <label key={comp._key} className={styles.comparable} style={{ background: checked ? "var(--bg-active)" : "transparent" }}>
                   <input type="checkbox" checked={checked} onChange={() => toggleComparable(comp._key)} />
                   <span style={{ minWidth: 0 }}>
                     <b style={{ display: "block", fontSize: 11 }}>{comp.address}</b>
@@ -245,11 +247,11 @@ export default function PriceReviewPage({
           </div>
         </section>
 
-        <aside style={{ ...panelStyle, position: "sticky", top: 16, padding: 16 }}>
+        <aside className={styles.review} style={{ ...panelStyle, padding: 16 }}>
           <div style={eyebrowStyle}>REVIEW LEDGER</div>
           <h2 style={{ margin: "6px 0 12px", fontSize: 18 }}>{TARGET_LABEL[target]} 검토</h2>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, marginBottom: 14 }}>
             <Metric label="선택 사례" value={`${selectedComps.length}건`} />
             <Metric label="같은 동" value={`${sameDongCount}건`} />
             <Metric label="선택 중앙값" value={calculation ? `${num(calculation.medianPricePerPyeongManwon)}만/평` : "—"} />
@@ -298,13 +300,13 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div style={{ padding: 9, border: "1px solid var(--border-faint)", borderRadius: 8 }}><small style={{ display: "block", color: "var(--fg-muted)", fontSize: 8.5 }}>{label}</small><strong style={{ display: "block", marginTop: 4, fontSize: 12 }}>{value}</strong></div>;
 }
 
-const panelStyle: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-elev)", overflow: "hidden" };
-const navStyle: React.CSSProperties = { display: "flex", gap: 8, marginBottom: 20, fontSize: 11, color: "var(--fg-muted)" };
+const panelStyle: React.CSSProperties = { minWidth: 0, border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-elev)", overflow: "hidden" };
+const navStyle: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20, fontSize: 11, color: "var(--fg-muted)" };
 const navLinkStyle: React.CSSProperties = { color: "inherit", textDecoration: "none" };
-const eyebrowStyle: React.CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: "0.2em", color: "var(--fg-muted)" };
+const eyebrowStyle: React.CSSProperties = { fontSize: 10, fontWeight: 800, letterSpacing: 0, color: "var(--fg-muted)" };
 const tabStyle: React.CSSProperties = { minHeight: 34, padding: "0 14px", border: "1px solid var(--border)", borderRadius: 8, fontSize: 10.5, fontWeight: 700, cursor: "pointer" };
 const labelStyle: React.CSSProperties = { display: "grid", gap: 5, marginBottom: 10, color: "var(--fg-muted)", fontSize: 9.5, fontWeight: 700 };
-const inputStyle: React.CSSProperties = { width: "100%", minHeight: 36, boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", padding: "0 9px", font: "inherit", fontSize: 10.5 };
+const inputStyle: React.CSSProperties = { width: "100%", minWidth: 0, minHeight: 36, boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", padding: "0 9px", font: "inherit", fontSize: 10.5 };
 const primaryButtonStyle: React.CSSProperties = { minHeight: 38, border: "1px solid var(--fg)", borderRadius: 8, background: "var(--fg)", color: "var(--bg)", fontSize: 10.5, fontWeight: 800, cursor: "pointer" };
 const secondaryButtonStyle: React.CSSProperties = { ...primaryButtonStyle, background: "transparent", color: "var(--fg)" };
 const textButtonStyle: React.CSSProperties = { border: 0, background: "transparent", color: "var(--fg-muted)", fontSize: 9.5, cursor: "pointer", padding: 6 };
