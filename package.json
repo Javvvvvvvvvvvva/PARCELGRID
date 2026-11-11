@@ -60,8 +60,8 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.3.1",
-    "@types/busboy": "1.5.4",
+    "@eslint/eslintrc": "^3.3.7",
+    "@types/busboy": "1.5.5",
     "@types/geojson": "^7946.0.16",
     "@types/node": "^24.13.3",
     "@types/papaparse": "^5.5.2",
@@ -69,12 +69,12 @@
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.184.1",
     "autoprefixer": "^10.4.20",
-    "drizzle-kit": "^0.31.10",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9.0.0",
     "eslint-config-next": "15.5.28",
-    "fake-indexeddb": "6.2.5",
+    "fake-indexeddb": "6.2.7",
     "playwright": "1.62.1",
-    "tailwindcss": "^4.0.0-alpha.30",
+    "tailwindcss": "^4.3.5",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   }
