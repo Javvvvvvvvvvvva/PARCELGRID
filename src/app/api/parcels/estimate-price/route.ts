@@ -13,14 +13,17 @@
  *   jimokCategory: "buildable" | "farmland" | "forest" | "other"
  */
 
+import { transactionEvidenceMessage } from "@/lib/integrations/molit-evidence";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { estimateMarketPrice } from "@/lib/finance/estimate-price";
-import { fetchMolitRange } from "@/lib/integrations/molit";
+import { fetchMolitRangeWithEvidence } from "@/lib/integrations/molit";
 import {
   jimokToCategory,
   type JimokCategory,
 } from "@/lib/integrations/vworld";
+import { requireApiCapability } from "@/lib/auth/request";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 
 export const runtime = "nodejs";
 
@@ -43,14 +46,11 @@ function recentYearMonth(monthsAgo: number): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const parsed = requestSchema.safeParse(body);
+  const authorization = await requireApiCapability(req, "analysis.run");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.calculation });
+  if (!input.ok) return input.response;
+  const parsed = requestSchema.safeParse(input.value);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "입력값을 확인하세요.", issues: parsed.error.issues },
@@ -65,27 +65,26 @@ export async function POST(req: NextRequest) {
     // (land / house 두 범위를 동시에 — 내부 월별 호출도 병렬, 동시성은 전역 세마포어가 제한)
     const start = recentYearMonth(12);
     const end = recentYearMonth(0);
-    const [landTransactions, houseTransactionsRaw] = await Promise.all([
-      fetchMolitRange({
+    const [landResult, houseResult] = await Promise.all([
+      fetchMolitRangeWithEvidence({
         lawdCd,
         type: "land",
         startYearMonth: start,
         endYearMonth: end,
-      }).catch((err) => {
-        console.warn("MOLIT 토지 실거래 조회 실패:", err);
-        return [];
+        signal: req.signal,
       }),
       // 구축 단독/다가구 (토지 proxy — 인수가 추정 C)
-      fetchMolitRange({
+      fetchMolitRangeWithEvidence({
         lawdCd,
         type: "house",
         startYearMonth: start,
         endYearMonth: end,
-      }).catch((err) => {
-        console.warn("MOLIT 단독/다가구 실거래 조회 실패:", err);
-        return [];
+        signal: req.signal,
       }),
     ]);
+    const landTransactions = landResult.transactions;
+    const transactionEvidence = [landResult.evidence, houseResult.evidence];
+    const houseTransactionsRaw = houseResult.evidence.status === "complete" ? houseResult.transactions : [];
     const houseTransactions = houseTransactionsRaw.map((t) => ({
       type: t.type,
       priceManwon: t.priceManwon,
@@ -100,7 +99,7 @@ export async function POST(req: NextRequest) {
     const result = estimateMarketPrice({
       publicLandValueManwon: landPrice / WON_TO_MANWON,
       lotAreaSqm: lotArea,
-      landTransactions,
+      landTransactions: landResult.evidence.status === "complete" ? landTransactions : [],
       houseTransactions,
       jimokCategory: jimokCategory ?? "buildable",
       address,
@@ -114,6 +113,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ...result,
+      transactionEvidence,
+      warnings: [...result.warnings, transactionEvidenceMessage(transactionEvidence)],
       transactionCount: landTransactions.length,
       // 대상 지목 카테고리와 일치하는 거래만 지도·분포 표본으로 반환
       transactions: (() => {

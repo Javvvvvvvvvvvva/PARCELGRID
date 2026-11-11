@@ -351,6 +351,14 @@ export function FloorProgramEditor({
                                       unitCount: nextCountable
                                         ? Math.max(1, zone.unitCount)
                                         : 0,
+                                      parkingExclusiveAreaSqm:
+                                        useType === "residential"
+                                          ? zone.parkingExclusiveAreaSqm
+                                          : undefined,
+                                      parkingExclusiveAreaStatus:
+                                        useType === "residential"
+                                          ? zone.parkingExclusiveAreaStatus
+                                          : undefined,
                                     }
                                   )
                                 );
@@ -428,6 +436,51 @@ export function FloorProgramEditor({
                                 opacity: countable ? 1 : 0.45,
                               }}
                             />
+                          </label>
+
+                          <label>
+                            <span>주차 전용면적</span>
+                            <div style={{ position: "relative" }}>
+                              <input
+                                type="number"
+                                min={0}
+                                max={zone.areaSqm}
+                                step={0.1}
+                                disabled={zone.useType !== "residential"}
+                                value={zone.parkingExclusiveAreaSqm ?? ""}
+                                placeholder={
+                                  zone.useType === "residential" ? "미확인" : "해당 없음"
+                                }
+                                onChange={(event) => {
+                                  const empty = event.target.value === "";
+                                  setFloors(
+                                    updateFloorZone(
+                                      scenario.floorPrograms,
+                                      floor.id,
+                                      zone.id,
+                                      {
+                                        parkingExclusiveAreaSqm: empty
+                                          ? undefined
+                                          : Math.max(
+                                              0,
+                                              safeNumber(event.target.value)
+                                            ),
+                                        parkingExclusiveAreaStatus: empty
+                                          ? undefined
+                                          : "user-entered",
+                                      }
+                                    )
+                                  );
+                                }}
+                                style={{
+                                  ...fieldStyle,
+                                  paddingRight: 28,
+                                  opacity:
+                                    zone.useType === "residential" ? 1 : 0.45,
+                                }}
+                              />
+                              <span style={suffixStyle}>㎡</span>
+                            </div>
                           </label>
 
                           <label>
@@ -754,7 +807,7 @@ export function FloorProgramEditor({
         }
         .zone-edit-row {
           display: grid;
-          grid-template-columns: minmax(105px, 1.15fr) minmax(90px, 0.9fr) minmax(76px, 0.7fr) minmax(100px, 0.95fr) auto;
+          grid-template-columns: minmax(100px, 1.05fr) minmax(82px, 0.8fr) minmax(70px, 0.62fr) minmax(96px, 0.85fr) minmax(96px, 0.9fr) auto;
           gap: 7px;
           align-items: end;
           padding: 9px;

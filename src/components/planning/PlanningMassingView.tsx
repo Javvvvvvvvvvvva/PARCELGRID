@@ -2,27 +2,24 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { Bounds, OrbitControls } from "@react-three/drei";
+import { SceneText as Text } from "@/components/ui/SceneText";
 import * as THREE from "three";
 import "@/lib/three/guard-empty-paths";
+import type { LngLat } from "@/lib/finance/buildable-area";
+import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { hasParcelBoundary, type LocalParcelPolygon, type Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { contextFlatGeometry } from "@/lib/planning/context-three-geometry";
+import type { SunlightRegulationResult } from "@/lib/regulatory/sunlight-rules";
 import {
-  calcBuildableArea,
-  type LngLat,
-} from "@/lib/finance/buildable-area";
-import {
-  analyzeFrontage,
-  legalEdgeSetbacksFromFrontage,
-} from "@/lib/geo/road-frontage";
-import {
-  buildPlanningMassModel,
   polygonAreaSqm,
   type LocalPlanPoint,
-  type PlanningEnvelopeStep,
   type PlanningFloorMass,
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
 import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
 import type { PlanningParkingGeometrySnapshot } from "@/lib/planning/planning-parking-geometry";
+import { parkingGeometryParts } from "@/lib/planning/parking-geometry-parts";
 import {
   planningMaterialAppearance,
   type PlanningMaterialAppearance,
@@ -60,32 +57,6 @@ const USE_COLOR: Record<FloorUseType | "mixed", string> = {
   mixed: "#0f766e",
 };
 
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length < 2) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function ringCentroid(ring: LngLat[]): LngLat {
-  const points = openRing(ring);
-  if (points.length === 0) return [0, 0];
-  return [
-    points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    points.reduce((sum, point) => sum + point[1], 0) / points.length,
-  ];
-}
-
-function ringToLocalMeters(ring: LngLat[], origin: LngLat): LocalPlanPoint[] {
-  const [originLng, originLat] = origin;
-  const longitudeScale = Math.cos((originLat * Math.PI) / 180);
-  return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - originLng) * 111_000 * longitudeScale,
-    z: -(lat - originLat) * 111_000,
-  }));
-}
 
 function floorUseSummary(mass: PlanningFloorMass): string {
   const uses = [
@@ -261,32 +232,14 @@ function FloorMassMesh({
         anchorY="middle"
         maxWidth={extent * 1.1}
       >
-        {`${mass.label} · ${floorUseSummary(mass)}${
-          unsupported
-            ? " · 하부 지지면 부족"
-            : overCapacity
-              ? " · 면적 초과"
-              : ""
-        }`}
+        {mass.label}
       </Text>
     </group>
   );
 }
 
-function ParcelPlate({ shape }: { shape: LocalPlanPoint[] }) {
-  const geometry = useMemo(() => {
-    if (!hasRenderableShape(shape)) return new THREE.BufferGeometry();
-    const parcelShape = new THREE.Shape();
-    shape.forEach((point, index) => {
-      const shapePoint = planningPointToThreeShape(point);
-      if (index === 0) parcelShape.moveTo(shapePoint.x, shapePoint.y);
-      else parcelShape.lineTo(shapePoint.x, shapePoint.y);
-    });
-    parcelShape.closePath();
-    const result = new THREE.ShapeGeometry(parcelShape);
-    result.rotateX(-Math.PI / 2);
-    return result;
-  }, [shape]);
+function ParcelPlate({ polygon }: { polygon: LocalParcelPolygon }) {
+  const geometry = useMemo(() => contextFlatGeometry(polygon), [polygon]);
 
   return (
     <group>
@@ -365,15 +318,17 @@ function ParkingGeometryLayer({
 }: {
   parking: PlanningParkingGeometrySnapshot;
 }) {
+  const columnWidthM = parking.circulation.profile?.columnWidthM ?? 0.4;
   return (
     <group>
+      {parkingGeometryParts(parking.layout).map(part => <group key={part.id}>
       <ParkingPolygon
-        points={parking.layout.aisleShape}
+        points={part.aisleShape}
         color="#64748b"
         bottomY={0.01}
         opacity={0.42}
       />
-      {parking.layout.stalls.map((stall) => (
+      {part.stalls.map((stall) => (
         <ParkingPolygon
           key={stall.id}
           points={stall.corners}
@@ -383,18 +338,18 @@ function ParkingGeometryLayer({
         />
       ))}
       <ParkingPolygon
-        points={parking.layout.coreShape}
+        points={part.coreShape}
         color="#ef4444"
         bottomY={0.065}
         opacity={0.62}
       />
-      {parking.layout.columns.map((column, index) => (
+      {part.columns.map((column, index) => (
         <mesh
           key={`parking-column-${index}`}
           position={[column.x, 0.12, column.z]}
           renderOrder={11}
         >
-          <cylinderGeometry args={[0.18, 0.18, 0.2, 12]} />
+          <boxGeometry args={[columnWidthM, 0.2, columnWidthM]} />
           <meshStandardMaterial
             color="#334155"
             transparent
@@ -403,7 +358,8 @@ function ParkingGeometryLayer({
           />
         </mesh>
       ))}
-      <ParkingAccessLine points={parking.layout.entryPath} />
+      {part.entryPaths.map((path, index) => <ParkingAccessLine key={path.stallId ?? index} points={path.points} />)}
+      </group>)}
     </group>
   );
 }
@@ -425,7 +381,7 @@ function NorthArrow({ extent }: { extent: number }) {
 }
 
 function PlanningScene({
-  groundShape,
+  groundPolygons,
   model,
   extent,
   showBasements,
@@ -437,7 +393,7 @@ function PlanningScene({
   onSelect,
   onHover,
 }: {
-  groundShape: LocalPlanPoint[];
+  groundPolygons: LocalParcelPolygon[];
   model: PlanningMassModel;
   extent: number;
   showBasements: boolean;
@@ -464,7 +420,7 @@ function PlanningScene({
         position={[-extent, extent, -extent]}
         intensity={0.35}
       />
-      <ParcelPlate shape={groundShape} />
+      {groundPolygons.map((polygon, index) => <ParcelPlate key={index} polygon={polygon} />)}
       {showParking && parkingGeometry && (
         <ParkingGeometryLayer parking={parkingGeometry} />
       )}
@@ -492,112 +448,6 @@ function PlanningScene({
       />
     </>
   );
-}
-
-function createPlanningMassData(
-  boundary: LngLat[],
-  zoning: string,
-  scenario: PlanningScenario,
-  roads?: RoadLine[],
-  setback?: SetbackSpec
-): {
-  groundShape: LocalPlanPoint[];
-  model: PlanningMassModel;
-  extent: number;
-  warnings: string[];
-} {
-  // 화면 여유 이격은 법적 매스 외곽을 자동 변경하지 않는다.
-  void setback;
-  const origin = ringCentroid(boundary);
-  const groundShape = ringToLocalMeters(boundary, origin);
-  const groundFloors = scenario.floorPrograms.filter((floor) => floor.level > 0);
-  const maxFloor = Math.max(1, ...groundFloors.map((floor) => floor.level));
-  const averageFloorHeight =
-    groundFloors.length > 0
-      ? groundFloors.reduce(
-          (sum, floor) => sum + Math.max(2, floor.floorHeightM),
-          0
-        ) / groundFloors.length
-      : 3;
-  const frontage =
-    roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
-  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
-
-  const buildable = calcBuildableArea(
-    boundary,
-    0.5,
-    maxFloor,
-    averageFloorHeight,
-    /주거/.test(zoning),
-    edgeSetbacks
-  );
-  const basementBuildable = calcBuildableArea(
-    boundary,
-    0.5,
-    1,
-    3,
-    false,
-    edgeSetbacks
-  );
-
-  const fallbackRing = buildable.buildable2DRing ?? boundary;
-  const firstStep = buildable.stepped3D.find((step) => step.ringLngLat);
-  const basementRing = basementBuildable.buildable2DRing ?? boundary;
-
-  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map(
-    (floor) => {
-      const step =
-        floor.level > 0
-          ? buildable.stepped3D.find(
-              (candidate) => candidate.floor === floor.level
-            )
-          : undefined;
-      const ring =
-        floor.level < 0
-          ? basementRing
-          : step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
-      const shape = ringToLocalMeters(ring, origin);
-      return {
-        level: floor.level,
-        shape,
-        envelopeAreaSqm:
-          floor.level < 0
-            ? polygonAreaSqm(shape)
-            : step?.floorPlateSqm ?? polygonAreaSqm(shape),
-        requiredSetbackM:
-          floor.level < 0 ? 0 : step?.requiredSetbackM ?? 0,
-        envelopeAvailable:
-          floor.level < 0
-            ? Boolean(basementBuildable.buildable2DRing)
-            : Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
-      };
-    }
-  );
-
-  const model = buildPlanningMassModel(
-    scenario.floorPrograms,
-    envelopeSteps,
-    scenario.placement
-  );
-
-  let extent = 10;
-  [...groundShape, ...model.floors.flatMap((floor) => floor.shape)].forEach(
-    (point) => {
-      extent = Math.max(extent, Math.abs(point.x), Math.abs(point.z));
-    }
-  );
-  extent = Math.max(
-    extent,
-    model.totalHeightM * 0.7,
-    model.basementDepthM * 0.7
-  );
-
-  return {
-    groundShape,
-    model,
-    extent,
-    warnings: buildable.warnings,
-  };
 }
 
 function areaDifferenceLabel(mass: PlanningFloorMass): string {
@@ -657,18 +507,26 @@ function CapacityNotice({ model }: { model: PlanningMassModel }) {
 
 export function PlanningMassingView({
   boundary,
+  boundaryPolygons,
   zoning,
   scenario,
   roads,
   setback,
+  lotAreaSqm = 0,
+  sunlight,
+  roofAllowanceM,
   parkingGeometry = null,
   height = 430,
 }: {
   boundary?: LngLat[];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   zoning: string;
   scenario: PlanningScenario;
   roads?: RoadLine[];
   setback?: SetbackSpec;
+  lotAreaSqm?: number;
+  sunlight?: SunlightRegulationResult;
+  roofAllowanceM?: number;
   parkingGeometry?: PlanningParkingGeometrySnapshot | null;
   height?: number;
 }) {
@@ -679,10 +537,11 @@ export function PlanningMassingView({
 
   const data = useMemo(
     () =>
-      boundary && boundary.length >= 3
-        ? createPlanningMassData(boundary, zoning, scenario, roads, setback)
+      hasParcelBoundary({ boundary, boundaryPolygons })
+        ? buildPlanningGeometry({ projectId: scenario.projectId ?? "preview", scenario, boundary, boundaryPolygons,
+          lotAreaSqm, zoning, roads, setback, sunlight, roofAllowanceM })
         : null,
-    [boundary, zoning, scenario, roads, setback]
+    [boundary, boundaryPolygons, zoning, scenario, roads, setback, lotAreaSqm, sunlight, roofAllowanceM]
   );
   const appearance = useMemo(
     () => planningMaterialAppearance(scenario.materials),
@@ -739,7 +598,7 @@ export function PlanningMassingView({
           }}
         >
           <strong>
-            실제 주차 배치 {parkingGeometry.layout.capacityCars}대 / 요구{" "}
+            2D 주차 배치 {parkingGeometry.layout.capacityCars}대 / 요구{" "}
             {parkingGeometry.layout.requiredCars}대
           </strong>
           <span style={{ marginLeft: 7 }}>
@@ -831,8 +690,10 @@ export function PlanningMassingView({
             onPointerMissed={() => setSelectedFloorId(null)}
           >
             <Suspense fallback={null}>
+              <Bounds fit clip observe margin={1.25} maxDuration={0}
+                key={JSON.stringify([showBasements, data.model.floors.map((floor) => [floor.id, floor.baseHeightM, floor.topHeightM, floor.shape])])}>
               <PlanningScene
-                groundShape={data.groundShape}
+                groundPolygons={data.groundPolygons}
                 model={data.model}
                 extent={data.extent}
                 showBasements={showBasements}
@@ -848,6 +709,7 @@ export function PlanningMassingView({
                 }
                 onHover={setHoveredFloorId}
               />
+              </Bounds>
             </Suspense>
           </Canvas>
         </div>

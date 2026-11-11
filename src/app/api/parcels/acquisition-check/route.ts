@@ -9,12 +9,27 @@
  * 본인 도구의 checkAcquisition() 호출.
  */
 
+import { transactionEvidenceMessage } from "@/lib/integrations/molit-evidence";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 import { checkAcquisition } from "@/lib/finance/acquisition-check";
-import { fetchMolitRange } from "@/lib/integrations/molit";
-import type { JimokCategory } from "@/lib/integrations/vworld";
+import { fetchMolitRangeWithEvidence } from "@/lib/integrations/molit";
+import { requireApiCapability } from "@/lib/auth/request";
 
 export const runtime = "nodejs";
+
+const requestSchema = z.object({
+  parcel: z.object({ lotAreaSqm: z.number().positive().max(10_000_000),
+    landPriceWonPerSqm: z.number().nonnegative().max(10_000_000_000),
+    lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
+    jimokCategory: z.enum(["buildable", "farmland", "forest", "other"]).optional() }),
+  acquisitionPriceManwon: z.number().positive().max(1_000_000_000_000),
+  acquisitionDate: z.iso.date(), lawdCd: z.string().regex(/^\d{5}$/),
+  scope: z.enum(["dong", "sigungu", "radius"]).default("dong"),
+  radiusKm: z.number().positive().max(100).optional(), targetDong: z.string().trim().max(40).optional(),
+  jimokFilter: z.enum(["match-parcel", "buildable-only", "all"]).default("match-parcel"),
+});
 
 function recentYearMonth(monthsAgo: number): string {
   const d = new Date();
@@ -23,26 +38,13 @@ function recentYearMonth(monthsAgo: number): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: {
-    parcel?: {
-      lotAreaSqm: number;
-      landPriceWonPerSqm: number;
-      lat: number;
-      lng: number;
-      jimokCategory?: JimokCategory;
-    };
-    acquisitionPriceManwon?: number;
-    acquisitionDate?: string;
-    lawdCd?: string;
-    scope?: "dong" | "sigungu" | "radius";
-    radiusKm?: number;
-    targetDong?: string;
-    jimokFilter?: "match-parcel" | "buildable-only" | "all";
-  };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  const authorization = await requireApiCapability(req, "analysis.run");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.calculation });
+  if (!input.ok) return input.response;
+  const parsed = requestSchema.safeParse(input.value);
+  if (!parsed.success) {
+    return NextResponse.json({ code: "INVALID_ACQUISITION_INPUT", error: "부지·인수가·기준일·지역 입력을 확인하세요." }, { status: 422 });
   }
 
   const {
@@ -54,14 +56,7 @@ export async function POST(req: NextRequest) {
     radiusKm,
     targetDong,
     jimokFilter = "match-parcel",
-  } = body;
-
-  if (!parcel || !acquisitionPriceManwon || !acquisitionDate || !lawdCd) {
-    return NextResponse.json(
-      { error: "parcel, acquisitionPriceManwon, acquisitionDate, lawdCd 필수" },
-      { status: 400 }
-    );
-  }
+  } = parsed.data;
 
   if (scope === "radius") {
     return NextResponse.json(
@@ -78,28 +73,26 @@ export async function POST(req: NextRequest) {
     // 최근 12개월 토지 실거래
     const start = recentYearMonth(12);
     const end = recentYearMonth(0);
-    const landTransactions = await fetchMolitRange({
+    const landResult = await fetchMolitRangeWithEvidence({
       lawdCd,
       type: "land",
       startYearMonth: start,
       endYearMonth: end,
-    }).catch((err) => {
-      console.warn("MOLIT 토지 실거래 조회 실패:", err);
-      return [];
+      signal: req.signal,
     });
 
     const result = checkAcquisition({
       parcel,
       acquisitionPriceManwon,
       acquisitionDate,
-      landTransactions,
+      landTransactions: landResult.evidence.status === "complete" ? landResult.transactions : [],
       scope,
       radiusKm,
       targetDong,
       jimokFilter,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({ ...result, transactionEvidence: [landResult.evidence], warnings: [...result.warnings, transactionEvidenceMessage([landResult.evidence])] });
   } catch (err) {
     console.error("acquisition-check 실패:", err);
     return NextResponse.json(

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildProjectLedger } from "@/lib/finance/project-ledger";
 import { defaultAssumptions, defaultProgram } from "@/lib/finance/scenario";
-import type { Parcel, Scenario } from "@/lib/finance/types";
+import type {
+  FinancialRevenuePoolAmounts,
+  Parcel,
+  Scenario,
+} from "@/lib/finance/types";
 
 const parcel: Parcel = {
   id: "ledger-test",
@@ -49,6 +53,20 @@ function build(interestRate = 6, scenario = scenarioAtRate(interestRate)) {
   });
 }
 
+function revenuePools(
+  overrides: Partial<FinancialRevenuePoolAmounts>,
+): FinancialRevenuePoolAmounts {
+  return {
+    residentialSale: 0,
+    retailSale: 0,
+    officeSale: 0,
+    residentialLease: 0,
+    retailLease: 0,
+    officeLease: 0,
+    ...overrides,
+  };
+}
+
 describe("auditable project ledger", () => {
   it("allocates 100% of every project cost", () => {
     const ledger = build();
@@ -90,6 +108,119 @@ describe("auditable project ledger", () => {
       ledger.rows.slice(0, -1).some((row) => row.revenueInflow > 0)
     ).toBe(true);
     expect(ledger.totalRevenue).toBeCloseTo(130_000, 8);
+  });
+
+  it("retains early presale surplus inside the project until exit", () => {
+    const presaleScenario = scenarioAtRate(6);
+    presaleScenario.program = {
+      ...presaleScenario.program,
+      type: "officetel",
+    };
+    const ledger = buildProjectLedger({
+      parcel,
+      scenario: presaleScenario,
+      revenueByPool: revenuePools({ residentialSale: 1_000_000 }),
+      hardCost: 40_000,
+      softCost: 4_800,
+      contingency: 2_240,
+    });
+
+    expect(
+      ledger.rows.slice(0, -1).every((row) => row.equityDistribution === 0),
+    ).toBe(true);
+    expect(
+      ledger.rows.slice(0, -1).some((row) => row.cashReserveBalance > 0),
+    ).toBe(true);
+    expect(ledger.rows.at(-1)!.equityDistribution).toBeGreaterThan(0);
+    expect(ledger.rows.at(-1)!.cashReserveBalance).toBeCloseTo(0, 8);
+  });
+
+  it("keeps commercial sale proceeds out of the residential presale schedule", () => {
+    const presaleScenario = scenarioAtRate(6);
+    presaleScenario.program = {
+      ...presaleScenario.program,
+      type: "mixed",
+    };
+    const ledger = buildProjectLedger({
+      parcel,
+      scenario: presaleScenario,
+      revenueByPool: revenuePools({
+        residentialSale: 90_000,
+        retailSale: 40_000,
+      }),
+      hardCost: 40_000,
+      softCost: 4_800,
+      contingency: 2_240,
+    });
+    const residentialOnly = buildProjectLedger({
+      parcel,
+      scenario: presaleScenario,
+      revenueByPool: revenuePools({ residentialSale: 90_000 }),
+      hardCost: 40_000,
+      softCost: 4_800,
+      contingency: 2_240,
+    });
+    const finalMonth = ledger.rows.at(-1)!.month;
+
+    expect(ledger.revenueCollectionPolicy).toBe("mixed");
+    expect(ledger.revenueStreamPolicies).toMatchObject({
+      residentialSale: "presale-10-60-30",
+      retailSale: "bulk-exit",
+    });
+    expect(
+      ledger.rows
+        .filter((row) => row.month < finalMonth)
+        .map((row) => row.revenueInflow),
+    ).toEqual(
+      residentialOnly.rows
+        .filter((row) => row.month < finalMonth)
+        .map((row) => row.revenueInflow),
+    );
+    expect(
+      ledger.rows.at(-1)!.revenueInflow -
+        residentialOnly.rows.at(-1)!.revenueInflow,
+    ).toBeCloseTo(40_000, 8);
+  });
+
+  it("sizes retained-lease refinancing after sale cash and reserves reduce PF", () => {
+    const mixedScenario = scenarioAtRate(6);
+    mixedScenario.program = {
+      ...mixedScenario.program,
+      type: "mixed",
+    };
+    mixedScenario.assumptions.leaseUpMonths = 2;
+    mixedScenario.assumptions.saleOutMonths = 8;
+    const leaseValue = 130_000;
+    const ledger = buildProjectLedger({
+      parcel,
+      scenario: mixedScenario,
+      revenueByPool: revenuePools({
+        residentialSale: 30_000,
+        retailLease: leaseValue,
+      }),
+      hardCost: 40_000,
+      softCost: 4_800,
+      contingency: 2_240,
+    });
+    const finalRow = ledger.rows.at(-1)!;
+    const priorReserve = ledger.rows.at(-2)?.cashReserveBalance ?? 0;
+    const finalSaleRevenue = Math.max(
+      0,
+      finalRow.revenueInflow - leaseValue,
+    );
+    const expectedResidualPf = Math.max(
+      0,
+      finalRow.pfBalanceBeforeRepayment - priorReserve - finalSaleRevenue,
+    );
+
+    expect(ledger.revenueCollectionPolicy).toBe("mixed");
+    expect(ledger.pfBalanceAtRetainedLeaseRefinance).toBeCloseTo(
+      expectedResidualPf,
+      8,
+    );
+    expect(ledger.pfBalanceAtRetainedLeaseRefinance).toBeLessThanOrEqual(
+      finalRow.pfBalanceBeforeRepayment,
+    );
   });
 
   it("repays PF completely by the final month", () => {
@@ -169,6 +300,109 @@ describe("auditable project ledger", () => {
     expect(slowLedger.rows).toHaveLength(4 + 12 + 18 + 1);
     expect(slowLedger.financingCost).toBeGreaterThan(
       fastLedger.financingCost,
+    );
+    const stabilizationRow = fastLedger.rows.find(
+      (row) => row.month === fastLedger.leaseStabilizationMonth,
+    );
+    expect(fastLedger.leaseStabilizationMonth).toBe(20);
+    expect(stabilizationRow?.pfBalanceBeforeRepayment).toBeGreaterThan(0);
+    expect(fastLedger.pfBalanceAtLeaseStabilization).toBeCloseTo(
+      stabilizationRow?.pfBalanceBeforeRepayment ?? 0,
+      8,
+    );
+    expect(stabilizationRow?.pfBalance).toBeCloseTo(0, 8);
+  });
+
+  it("ignores the sale-out duration when an all-lease case has no sale proceeds", () => {
+    const leaseScenario = scenarioAtRate(6);
+    leaseScenario.program = {
+      ...leaseScenario.program,
+      type: "retail",
+      mix: { residentialSale: 0, residentialLease: 0, retail: 1 },
+    };
+    leaseScenario.assumptions.saleOutMonths = 24;
+    leaseScenario.assumptions.leaseUpMonths = 4;
+
+    const ledger = buildProjectLedger({
+      parcel,
+      scenario: leaseScenario,
+      revenueByPool: revenuePools({ retailLease: 130_000 }),
+      hardCost: 40_000,
+      softCost: 4_800,
+      contingency: 2_240,
+    });
+
+    expect(ledger.leaseStabilizationMonth).toBe(20);
+    expect(ledger.rows).toHaveLength(21);
+    expect(ledger.rows.at(-1)?.revenueInflow).toBeCloseTo(130_000, 8);
+  });
+
+  it("allocates explicit acquisition, relocation, PF and trust costs without dropping them", () => {
+    const inputScenario = scenarioAtRate(6);
+    inputScenario.assumptions = {
+      ...inputScenario.assumptions,
+      acquisitionTaxManwon: 1_000,
+      acquisitionOtherCostManwon: 500,
+      tenantRelocationCostManwon: 750,
+      pfUpfrontFeeRate: 2,
+      trustFeeManwon: 400,
+    };
+    const ledger = build(6, inputScenario);
+    const sum = (field: keyof (typeof ledger.rows)[number]) =>
+      ledger.rows.reduce((total, row) => {
+        const value = row[field];
+        return total + (typeof value === "number" ? value : 0);
+      }, 0);
+    const expectedPfFee = (40_000 + 4_800 + 2_240) * 0.7 * 0.02;
+
+    expect(sum("acquisitionTax")).toBeCloseTo(1_000, 8);
+    expect(sum("acquisitionOtherCost")).toBeCloseTo(500, 8);
+    expect(sum("tenantRelocationCost")).toBeCloseTo(750, 8);
+    expect(sum("pfFee")).toBeCloseTo(expectedPfFee, 8);
+    expect(sum("trustFee")).toBeCloseTo(400, 8);
+    expect(ledger.additionalCosts).toMatchObject({
+      acquisitionTax: 1_000,
+      acquisitionOtherCost: 500,
+      tenantRelocationCost: 750,
+      trustFee: 400,
+    });
+    expect(ledger.additionalCosts.pfFee).toBeCloseTo(expectedPfFee, 8);
+    expect(ledger.totalProjectOutflow).toBeCloseTo(
+      50_000 +
+        2_000 +
+        40_000 +
+        4_800 +
+        2_240 +
+        1_000 +
+        500 +
+        750 +
+        expectedPfFee +
+        400 +
+        ledger.interestCost,
+      8,
+    );
+  });
+
+  it("reports unverified, sufficient and breached equity commitments explicitly", () => {
+    const unverified = build();
+    expect(unverified.funding.status).toBe("unverified");
+    expect(unverified.funding.equityCommitmentManwon).toBeNull();
+
+    const lowCommitment = scenarioAtRate(6);
+    lowCommitment.assumptions.equityCommitmentManwon = 10_000;
+    const breached = build(6, lowCommitment);
+    expect(breached.funding.status).toBe("shortfall");
+    expect(breached.funding.shortfallManwon).toBeGreaterThan(0);
+    expect(breached.funding.firstShortfallMonth).not.toBeNull();
+
+    const highCommitment = scenarioAtRate(6);
+    highCommitment.assumptions.equityCommitmentManwon = 200_000;
+    const funded = build(6, highCommitment);
+    expect(funded.funding.status).toBe("funded");
+    expect(funded.funding.shortfallManwon).toBe(0);
+    expect(funded.funding.requiredEquityManwon).toBeCloseTo(
+      unverified.equityInvested,
+      8,
     );
   });
 

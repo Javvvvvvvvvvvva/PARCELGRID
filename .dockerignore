@@ -1,0 +1,16 @@
+# Keep credentials, local user data and development output out of image layers.
+.git
+node_modules
+.next
+.env
+.env.*
+!.env.example
+.parcelgrid-data
+.vercel
+.pnpm-store
+.pnpm-home
+.xdg-data
+coverage
+*.tsbuildinfo
+*.log
+.DS_Store

@@ -4,10 +4,13 @@ import { useRef, useState } from "react";
 import {
   createProjectTransferBundle,
   detachTransferredSourceDocuments,
+  detachTransferredTaxDocuments,
   parseProjectTransferBundle,
   serializeProjectTransferBundle,
 } from "@/lib/handoff/project-transfer";
+import { buildExpertTaxContractKey } from "@/lib/finance/after-tax-ledger";
 import { useProjectStore } from "@/lib/stores/project-store";
+import { buildRepresentativeParcelBasisHash } from "@/lib/planning/representative-basis";
 import { useReviewStore } from "@/lib/stores/review-store";
 
 type TransferState =
@@ -61,9 +64,13 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
         draftAcquisitionPrice:
           project.draftAcquisitionPrices[projectId] ?? null,
         financialSources: project.financialSources[projectId] ?? {},
+        expertTaxContracts: Object.values(project.expertTaxContracts).filter(
+          (contract) => contract.projectId === projectId
+        ),
         stage3Snapshot: project.stage3FeasibilitySnapshots[projectId] ?? null,
         priceVerifications: review.priceVerifications[projectId] ?? {},
-        expertReviews: review.expertReviews[projectId] ?? {},
+        // Authoritative approvals stay in the organization audit ledger.
+        expertReviews: {},
       },
     });
 
@@ -139,6 +146,23 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
       delete nextStage3Snapshots[projectId];
     }
 
+    const nextExpertTaxContracts = Object.fromEntries(
+      Object.entries(currentProject.expertTaxContracts).filter(
+        ([, contract]) => contract.projectId !== projectId
+      )
+    );
+    for (const contract of detachTransferredTaxDocuments(
+      payload.expertTaxContracts
+    )) {
+      nextExpertTaxContracts[
+        buildExpertTaxContractKey(
+          contract.projectId,
+          contract.scenarioId,
+          contract.strategy
+        )
+      ] = contract;
+    }
+
     useProjectStore.setState({
       data: payload.projectData ?? currentProject.data,
       envelopePlan: payload.envelopePlan,
@@ -153,11 +177,16 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
       selectedPlanningScenarioId: payload.selectedScenarioId,
       representativePlanningScenarioId: payload.representativeScenarioId,
       representativeGeometrySnapshot: payload.representativeGeometry,
+      representativeParcelBasisHash:
+        payload.representativeScenarioId && payload.projectData
+          ? buildRepresentativeParcelBasisHash(payload.projectData.parcel)
+          : null,
       geometryValidationError: null,
       activeScenarioId: null,
       draftAssumptions: nextDraftAssumptions,
       draftAcquisitionPrices: nextDraftPrices,
       financialSources: nextFinancialSources,
+      expertTaxContracts: nextExpertTaxContracts,
       stage3FeasibilitySnapshots: nextStage3Snapshots,
     });
 
@@ -211,10 +240,9 @@ export function ProjectTransferPanel({ projectId }: { projectId: string }) {
               lineHeight: 1.55,
             }}
           >
-            계획안·검증 Geometry·사업성 저장본·가격 근거·전문가 승인을
-            체크섬 JSON으로 옮깁니다. 같은 프로젝트 ID에만 적용됩니다. AI 이미지와
-            원문 첨부 파일은 포함되지 않아, 가져온 뒤 원문을 다시 올리고 승인을
-            갱신해야 합니다.
+            계획안·검증 Geometry·사업성 저장본·가격 근거를 체크섬 JSON으로
+            옮깁니다. 같은 프로젝트 ID에만 적용됩니다. AI 이미지, 원문 첨부와
+            서버 승인 기록은 포함되지 않습니다.
           </p>
         </div>
         <div style={{ display: "flex", flexShrink: 0, gap: 8 }}>

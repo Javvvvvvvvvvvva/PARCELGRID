@@ -174,8 +174,11 @@ describe("Stage 2 → Stage 3 financial geometry contract", () => {
       rentableAreaSqm: 0,
       revenueAreas: {
         residentialSaleSqm: 56.6,
+        retailSaleSqm: 0,
+        officeSaleSqm: 0,
         residentialLeaseSqm: 0,
-        retailSqm: 0,
+        retailLeaseSqm: 0,
+        officeLeaseSqm: 0,
       },
       geometrySource: {
         mode: "reference-image",
@@ -248,5 +251,57 @@ describe("Stage 2 → Stage 3 financial geometry contract", () => {
     expect(() => calculateScenario({ parcel, scenario: staleScenario })).toThrow(
       "Stage 2/3 계획안 ID가 일치하지 않습니다"
     );
+  });
+
+  it("blocks a tampered pool value that no longer matches its locked area and price", () => {
+    const scenario = financeScenario();
+    const projection = scenario.program.areaContract!.revenueProjection!;
+    const tamperedScenario: Scenario = {
+      ...scenario,
+      program: {
+        ...scenario.program,
+        areaContract: {
+          ...scenario.program.areaContract!,
+          revenueProjection: {
+            ...projection,
+            valueByPoolManwon: {
+              ...projection.valueByPoolManwon,
+              residentialSale:
+                projection.valueByPoolManwon.residentialSale + 100,
+            },
+          },
+        },
+      },
+    };
+
+    expect(() =>
+      calculateScenario({ parcel, scenario: tamperedScenario })
+    ).toThrow("잠금 임대수입·운영비·NOI·매출이 계산 계약과 일치하지 않습니다");
+  });
+
+  it("blocks a tampered locked NOI intermediate", () => {
+    const scenario = financeScenario();
+    const projection = scenario.program.areaContract!.revenueProjection!;
+    const tamperedScenario: Scenario = {
+      ...scenario,
+      program: {
+        ...scenario.program,
+        areaContract: {
+          ...scenario.program.areaContract!,
+          revenueProjection: {
+            ...projection,
+            annualNoiByPoolManwon: {
+              ...projection.annualNoiByPoolManwon,
+              residentialLease:
+                projection.annualNoiByPoolManwon.residentialLease + 100,
+            },
+          },
+        },
+      },
+    };
+
+    expect(() =>
+      calculateScenario({ parcel, scenario: tamperedScenario })
+    ).toThrow("잠금 임대수입·운영비·NOI·매출이 계산 계약과 일치하지 않습니다");
   });
 });

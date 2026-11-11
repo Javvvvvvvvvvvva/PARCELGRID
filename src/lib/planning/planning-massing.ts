@@ -3,7 +3,19 @@ import type {
   FloorUseType,
   PlanningPlacement,
 } from "@/lib/planning/types";
-import { featureCollection, intersect, polygon } from "@turf/turf";
+import { difference, featureCollection, intersect, polygon, union } from "@turf/turf";
+import type { Feature, MultiPolygon, Polygon } from "geojson";
+import type { LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import { ringAreaSqm as polygonAreaSqm } from "@/lib/geo/planar-ring";
+import {
+  localParcelArea,
+  localParcelFeature,
+  localParcelIntersectionArea,
+  openParcelRing,
+  validateLocalParcelTopology,
+} from "@/lib/geo/parcel-topology-geometry";
+
+export { polygonAreaSqm };
 
 export interface LocalPlanPoint {
   x: number;
@@ -13,6 +25,8 @@ export interface LocalPlanPoint {
 export interface PlanningEnvelopeStep {
   level: number;
   shape: LocalPlanPoint[];
+  /** Authoritative when supplied, including an empty or invalid topology. */
+  polygons?: LocalParcelPolygon[];
   envelopeAreaSqm: number;
   requiredSetbackM: number;
   envelopeAvailable: boolean;
@@ -50,6 +64,8 @@ export interface PlanningFloorMass {
   commercialUnits: number;
   dominantUse: FloorUseType | "mixed";
   zones: PlanningMassZoneSummary[];
+  generationStatus?: "fitted" | "partial" | "no-candidate" | "empty-envelope" | "invalid-envelope" | "budget-exhausted";
+  generationReason?: string;
 }
 
 export interface PlanningMassCapacitySummary {
@@ -75,6 +91,55 @@ interface FittedFootprint {
 
 const EPSILON = 1e-7;
 const FULL_SUPPORT_OVERLAP_RATIO = 1 - 1e-6;
+const AREA_TOLERANCE_SQM = 1e-6;
+
+/** One cooperative budget covers validation, every floor, fitting and support. */
+export function createPlanningGeometryBudget(): () => void {
+  const deadline = performance.now() + 2_000;
+  let checks = 0;
+  return () => {
+    if (++checks > 20_000 || performance.now() >= deadline) {
+      const error = new Error("Planning geometry exceeded its bounded computation budget.");
+      error.name = "TimeoutError";
+      throw error;
+    }
+  };
+}
+
+export function planningEnvelopePolygons(envelope: PlanningEnvelopeStep): LocalParcelPolygon[] {
+  return envelope.polygons === undefined
+    ? [{ outer: envelope.shape, holes: [] }]
+    : Array.isArray(envelope.polygons) ? envelope.polygons : [];
+}
+
+function containsFootprint(
+  shape: LocalPlanPoint[],
+  polygons: LocalParcelPolygon[],
+  checkBudget: () => void
+): boolean {
+  checkBudget();
+  const area = polygonAreaSqm(shape);
+  if (!Number.isFinite(area) || area <= EPSILON) return false;
+  const overlap = localParcelIntersectionArea([{ outer: shape, holes: [] }], polygons);
+  checkBudget();
+  return Math.abs(area - overlap) <= AREA_TOLERANCE_SQM;
+}
+
+/** Clipping, not edge samples, determines containment (including enclosed holes). */
+export function planningEnvelopeContainsFootprint(
+  shape: LocalPlanPoint[],
+  envelope: PlanningEnvelopeStep,
+  checkBudget = createPlanningGeometryBudget()
+): boolean {
+  try {
+    const polygons = planningEnvelopePolygons(envelope);
+    if (!envelope.envelopeAvailable || !validateLocalParcelTopology(polygons, checkBudget)
+      || !validateLocalParcelTopology([{ outer: shape, holes: [] }], checkBudget)) return false;
+    return containsFootprint(shape, polygons, checkBudget);
+  } catch {
+    return false;
+  }
+}
 
 function nonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -82,17 +147,6 @@ function nonNegative(value: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-export function polygonAreaSqm(points: LocalPlanPoint[]): number {
-  if (points.length < 3) return 0;
-  let sum = 0;
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index];
-    const next = points[(index + 1) % points.length];
-    sum += current.x * next.z - next.x * current.z;
-  }
-  return Math.abs(sum) / 2;
 }
 
 export function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
@@ -141,6 +195,7 @@ function pointOnSegment(
   if (dot < -EPSILON) return false;
   const lengthSquared =
     (end.x - start.x) ** 2 + (end.z - start.z) ** 2;
+  if (lengthSquared <= EPSILON ** 2) return Math.hypot(point.x - start.x, point.z - start.z) <= EPSILON;
   return dot <= lengthSquared + EPSILON;
 }
 
@@ -167,29 +222,6 @@ function pointInPolygonInclusive(
     if (intersects) inside = !inside;
   }
   return inside;
-}
-
-function polygonInsidePolygon(
-  inner: LocalPlanPoint[],
-  outer: LocalPlanPoint[]
-): boolean {
-  if (inner.length < 3 || outer.length < 3) return false;
-  const samples: LocalPlanPoint[] = [...inner];
-  inner.forEach((point, index) => {
-    const next = inner[(index + 1) % inner.length];
-    samples.push(
-      { x: (point.x + next.x) / 2, z: (point.z + next.z) / 2 },
-      {
-        x: point.x * 0.75 + next.x * 0.25,
-        z: point.z * 0.75 + next.z * 0.25,
-      },
-      {
-        x: point.x * 0.25 + next.x * 0.75,
-        z: point.z * 0.25 + next.z * 0.75,
-      }
-    );
-  });
-  return samples.every((point) => pointInPolygonInclusive(point, outer));
 }
 
 function polygonBounds(points: LocalPlanPoint[]) {
@@ -272,7 +304,8 @@ function candidateAnchors(polygon: LocalPlanPoint[]): LocalPlanPoint[] {
 
 function fitScaledEnvelope(
   envelope: LocalPlanPoint[],
-  desiredAreaSqm: number
+  desiredAreaSqm: number,
+  checkBudget: () => void
 ): FittedFootprint {
   const envelopeAreaSqm = polygonAreaSqm(envelope);
   if (envelope.length < 3 || envelopeAreaSqm <= 0 || desiredAreaSqm <= 0) {
@@ -289,9 +322,10 @@ function fitScaledEnvelope(
   let bestScale = 0;
   let bestDistance = Number.POSITIVE_INFINITY;
 
-  for (const anchor of candidateAnchors(envelope)) {
+  for (const anchor of candidateAnchors(envelope).slice(0, 160)) {
+    checkBudget();
     const desiredShape = scaleShapeAround(envelope, anchor, desiredScale);
-    if (polygonInsidePolygon(desiredShape, envelope)) {
+    if (containsFootprint(desiredShape, [{ outer: envelope, holes: [] }], checkBudget)) {
       const desiredCenter = polygonCentroid(desiredShape);
       const distance = Math.hypot(
         desiredCenter.x - preferredCenter.x,
@@ -306,30 +340,8 @@ function fitScaledEnvelope(
         bestScale = desiredScale;
         bestDistance = distance;
       }
+      if (distance < EPSILON) break;
       continue;
-    }
-
-    let low = 0;
-    let high = desiredScale;
-    for (let iteration = 0; iteration < 28; iteration += 1) {
-      const middle = (low + high) / 2;
-      const candidate = scaleShapeAround(envelope, anchor, middle);
-      if (polygonInsidePolygon(candidate, envelope)) low = middle;
-      else high = middle;
-    }
-    const candidate = scaleShapeAround(envelope, anchor, low);
-    const candidateCenter = polygonCentroid(candidate);
-    const distance = Math.hypot(
-      candidateCenter.x - preferredCenter.x,
-      candidateCenter.z - preferredCenter.z
-    );
-    if (
-      low > bestScale + EPSILON ||
-      (Math.abs(low - bestScale) <= EPSILON && distance < bestDistance)
-    ) {
-      bestShape = candidate;
-      bestScale = low;
-      bestDistance = distance;
     }
   }
 
@@ -337,6 +349,100 @@ function fitScaledEnvelope(
     shape: bestShape,
     fitRatio: desiredScale > EPSILON ? bestScale / desiredScale : 0,
   };
+}
+
+function rectangle(minX: number, minZ: number, maxX: number, maxZ: number): LocalPlanPoint[] {
+  return [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }];
+}
+
+function simpleClippedShapes(feature: Feature<Polygon | MultiPolygon> | null): LocalPlanPoint[][] {
+  if (!feature) return [];
+  const parts = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates] : feature.geometry.coordinates;
+  // A floor cannot represent holes or multiple components. Never discard an interior ring.
+  return parts.filter(rings => rings.length === 1).map(rings =>
+    openParcelRing(rings[0].map(([x, z]) => ({ x, z }))))
+    .filter(shape => polygonAreaSqm(shape) > EPSILON);
+}
+
+function fitContiguousShape(seed: LocalPlanPoint[], desiredAreaSqm: number, checkBudget: () => void): LocalPlanPoint[] {
+  const seedArea = polygonAreaSqm(seed);
+  if (seedArea <= desiredAreaSqm) return seed;
+  const scaled = fitScaledEnvelope(seed, desiredAreaSqm, checkBudget);
+  if (scaled.shape.length) return scaled.shape;
+
+  // Half-plane cuts retain the original concavities. A cut that disconnects the
+  // shape contributes each real component, never a stitched outer boundary.
+  const bounds = polygonBounds(seed);
+  const source = polygon([closeRing(seed)]);
+  let best: LocalPlanPoint[] = [];
+  let bestArea = 0;
+  for (const axis of ["x", "z"] as const) for (const reversed of [false, true]) {
+    let low = 0, high = 1;
+    for (let iteration = 0; iteration < 36; iteration++) {
+      checkBudget();
+      const ratio = (low + high) / 2;
+      const x = bounds.minX + (bounds.maxX - bounds.minX) * (reversed ? 1 - ratio : ratio);
+      const z = bounds.minZ + (bounds.maxZ - bounds.minZ) * (reversed ? 1 - ratio : ratio);
+      const clip = axis === "x"
+        ? rectangle(reversed ? x : bounds.minX, bounds.minZ, reversed ? bounds.maxX : x, bounds.maxZ)
+        : rectangle(bounds.minX, reversed ? z : bounds.minZ, bounds.maxX, reversed ? bounds.maxZ : z);
+      const pieces = simpleClippedShapes(intersect(featureCollection([source, polygon([closeRing(clip)])])));
+      checkBudget();
+      let largestArea = 0;
+      for (const piece of pieces) {
+        const area = polygonAreaSqm(piece);
+        largestArea = Math.max(largestArea, area);
+        if (area <= desiredAreaSqm && area > bestArea) { best = piece; bestArea = area; }
+      }
+      if (desiredAreaSqm - bestArea <= AREA_TOLERANCE_SQM) return best;
+      if (largestArea < desiredAreaSqm) low = ratio; else high = ratio;
+    }
+  }
+  return best;
+}
+
+function* holeFreeCandidates(part: LocalParcelPolygon, checkBudget: () => void): Generator<LocalPlanPoint[]> {
+  if (!part.holes.length) { yield openParcelRing(part.outer); return; }
+  const bounds = polygonBounds(part.outer);
+  const source = localParcelFeature([part]);
+  // Opening each courtyard to an exterior edge creates bounded C/U-shaped
+  // candidates, not a claim of exhaustive architectural optimisation.
+  for (const direction of ["north", "south", "east", "west"] as const) {
+    checkBudget();
+    const cuts = part.holes.map(hole => {
+      const box = polygonBounds(hole);
+      const x = (box.minX + box.maxX) / 2, z = (box.minZ + box.maxZ) / 2;
+      const halfWidth = Math.min(0.125, (box.maxX - box.minX) / 4, (box.maxZ - box.minZ) / 4);
+      const ring = direction === "north" ? rectangle(x - halfWidth, box.minZ, x + halfWidth, bounds.maxZ + 1)
+        : direction === "south" ? rectangle(x - halfWidth, bounds.minZ - 1, x + halfWidth, box.maxZ)
+        : direction === "east" ? rectangle(box.minX, z - halfWidth, bounds.maxX + 1, z + halfWidth)
+        : rectangle(bounds.minX - 1, z - halfWidth, box.maxX, z + halfWidth);
+      return polygon([closeRing(ring)]);
+    });
+    const cut = cuts.length === 1 ? cuts[0] : union(featureCollection(cuts));
+    checkBudget();
+    if (!cut) continue;
+    const clipped = difference(featureCollection<Polygon | MultiPolygon>([source, cut]));
+    checkBudget();
+    yield* simpleClippedShapes(clipped).sort((a, b) => polygonAreaSqm(b) - polygonAreaSqm(a));
+  }
+}
+
+function fitEnvelopeTopology(polygons: LocalParcelPolygon[], desiredAreaSqm: number, checkBudget: () => void): FittedFootprint {
+  if (desiredAreaSqm <= EPSILON) return { shape: [], fitRatio: 0 };
+  let best: LocalPlanPoint[] = [], bestArea = 0;
+  const ranked = [...polygons].sort((a, b) => localParcelArea([b]) - localParcelArea([a]));
+  for (const part of ranked) for (const seed of holeFreeCandidates(part, checkBudget)) {
+    checkBudget();
+    if (polygonAreaSqm(seed) <= bestArea) continue;
+    const candidate = fitContiguousShape(seed, desiredAreaSqm, checkBudget);
+    const area = polygonAreaSqm(candidate);
+    if (area <= bestArea || !validateLocalParcelTopology([{ outer: candidate, holes: [] }], checkBudget)
+      || !containsFootprint(candidate, polygons, checkBudget)) continue;
+    best = candidate; bestArea = area;
+    if (desiredAreaSqm - bestArea <= AREA_TOLERANCE_SQM) return { shape: best, fitRatio: Math.sqrt(bestArea / desiredAreaSqm) };
+  }
+  return { shape: best, fitRatio: Math.sqrt(bestArea / desiredAreaSqm) };
 }
 
 function closeRing(points: LocalPlanPoint[]): [number, number][] {
@@ -374,19 +480,24 @@ function coordinatePolygonArea(rings: number[][][]): number {
  */
 export function calculateSupportOverlapRatio(
   upper: LocalPlanPoint[],
-  lower: LocalPlanPoint[]
+  lower: LocalPlanPoint[],
+  checkBudget = createPlanningGeometryBudget()
 ): number {
   if (upper.length < 3 || lower.length < 3) return 0;
   const upperArea = polygonAreaSqm(upper);
   if (upperArea <= EPSILON) return 0;
 
   try {
+    if (!validateLocalParcelTopology([{ outer: upper, holes: [] }], checkBudget)
+      || !validateLocalParcelTopology([{ outer: lower, holes: [] }], checkBudget)) return 0;
+    checkBudget();
     const overlap = intersect(
       featureCollection([
         polygon([closeRing(upper)]),
         polygon([closeRing(lower)]),
       ])
     );
+    checkBudget();
     if (!overlap) return 0;
     const overlapArea =
       overlap.geometry.type === "Polygon"
@@ -396,7 +507,8 @@ export function calculateSupportOverlapRatio(
             0
           );
     return clamp(overlapArea / upperArea, 0, 1);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") throw error;
     // Invalid or self-intersecting input must never be treated as supported.
     return 0;
   }
@@ -405,13 +517,18 @@ export function calculateSupportOverlapRatio(
 function alignFootprintToSupport(
   shape: LocalPlanPoint[],
   supportShape: LocalPlanPoint[] | undefined,
-  legalEnvelope: LocalPlanPoint[]
+  legalEnvelope: LocalParcelPolygon[],
+  checkBudget: () => void
 ): { shape: LocalPlanPoint[]; overlapRatio: number; fullySupported: boolean } {
-  if (!supportShape || supportShape.length < 3 || shape.length < 3) {
+  if (shape.length < 3 || !containsFootprint(shape, legalEnvelope, checkBudget)
+    || (supportShape && supportShape.length < 3)) {
+    return { shape, overlapRatio: 0, fullySupported: false };
+  }
+  if (!supportShape) {
     return { shape, overlapRatio: 1, fullySupported: true };
   }
 
-  const initialOverlap = calculateSupportOverlapRatio(shape, supportShape);
+  const initialOverlap = calculateSupportOverlapRatio(shape, supportShape, checkBudget);
   if (initialOverlap >= FULL_SUPPORT_OVERLAP_RATIO) {
     return { shape, overlapRatio: 1, fullySupported: true };
   }
@@ -426,8 +543,8 @@ function alignFootprintToSupport(
   for (let step = 1; step <= 80; step += 1) {
     const ratio = step / 80;
     const candidate = translateShape(shape, dx * ratio, dz * ratio);
-    if (!polygonInsidePolygon(candidate, legalEnvelope)) continue;
-    const overlap = calculateSupportOverlapRatio(candidate, supportShape);
+    if (!containsFootprint(candidate, legalEnvelope, checkBudget)) continue;
+    const overlap = calculateSupportOverlapRatio(candidate, supportShape, checkBudget);
     if (overlap > bestOverlap) {
       bestOverlap = overlap;
       bestShape = candidate;
@@ -534,37 +651,54 @@ function buildMass(
   rotationPivot: LocalPlanPoint,
   baseHeightM: number,
   topHeightM: number,
+  checkBudget: () => void,
   supportShape?: LocalPlanPoint[]
 ): PlanningFloorMass {
   const programAreaSqm = floorProgramArea(floor);
-  const measuredEnvelopeAreaSqm = polygonAreaSqm(envelope.shape);
-  const envelopeAreaSqm =
-    measuredEnvelopeAreaSqm > 0
-      ? measuredEnvelopeAreaSqm
-      : nonNegative(envelope.envelopeAreaSqm);
-  const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
+  let envelopeAreaSqm = 0;
+  let shape: LocalPlanPoint[] = [];
+  let insideLegalEnvelope = false;
+  let supported = { overlapRatio: 0, fullySupported: false };
+  let generationStatus: PlanningFloorMass["generationStatus"] = "invalid-envelope";
+  let generationReason = "법규 영역이 없거나 유효하지 않아 평면을 생성하지 않았습니다.";
   const manualScale = clamp(floor.footprintScalePct / 100, 0.1, 1);
+  try {
+    checkBudget();
+    const polygons = planningEnvelopePolygons(envelope);
+    if (envelope.envelopeAvailable && Array.isArray(envelope.polygons) && envelope.polygons.length === 0) {
+      generationStatus = "empty-envelope";
+      generationReason = "해당 층의 이격 후 영역이 비어 있습니다. 다른 층이나 대지 전체로 대체하지 않습니다.";
+    }
+    if (envelope.envelopeAvailable && validateLocalParcelTopology(polygons, checkBudget)) {
+      envelopeAreaSqm = localParcelArea(polygons);
+      const desiredAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm) * manualScale * manualScale;
+      const fitted = fitEnvelopeTopology(polygons, desiredAreaSqm, checkBudget);
+      generationStatus = fitted.shape.length ? (fitted.fitRatio >= 1 - EPSILON ? "fitted" : "partial") : "no-candidate";
+      generationReason = generationStatus === "fitted"
+        ? "유한 후보 탐색으로 연속 평면을 생성했습니다. 전역 최적해나 법정 적합 판정이 아닙니다."
+        : "유한 후보 탐색에서 요청 면적의 연속 평면을 확보하지 못했습니다. 배치 대안 검토가 필요합니다.";
+      const initialShape = applyPlacementTransform(fitted.shape, floor.northSetbackM, placement, rotationPivot);
+      if (validateLocalParcelTopology([{ outer: initialShape, holes: [] }], checkBudget)) {
+        const alignment = alignFootprintToSupport(initialShape, supportShape, polygons, checkBudget);
+        supported = alignment;
+        shape = alignment.shape;
+        insideLegalEnvelope = containsFootprint(shape, polygons, checkBudget);
+      } else if (fitted.shape.length) {
+        generationStatus = "no-candidate";
+        generationReason = "배치 변환 결과가 유효하지 않아 평면을 생성하지 않았습니다.";
+      }
+    }
+  } catch (error) {
+    shape = [];
+    supported = { overlapRatio: 0, fullySupported: false };
+    insideLegalEnvelope = false;
+    generationStatus = error instanceof Error && error.name === "TimeoutError" ? "budget-exhausted" : "no-candidate";
+    generationReason = generationStatus === "budget-exhausted"
+      ? "공유 계산 예산을 초과하여 생성·검증을 중단했습니다. 해당 층은 통과로 판정하지 않습니다."
+      : "기하 계산에 실패하여 해당 층의 평면을 생성하지 않았습니다.";
+  }
+  const targetAreaSqm = Math.min(programAreaSqm, envelopeAreaSqm);
   const desiredVisualAreaSqm = targetAreaSqm * manualScale * manualScale;
-
-  const fitted = fitScaledEnvelope(envelope.shape, desiredVisualAreaSqm);
-  const initialShape = applyPlacementTransform(
-    fitted.shape,
-    floor.northSetbackM,
-    placement,
-    rotationPivot
-  );
-  const placedLegalEnvelope = applyPlacementTransform(
-    envelope.shape,
-    floor.northSetbackM,
-    placement,
-    rotationPivot
-  );
-  const supported = alignFootprintToSupport(
-    initialShape,
-    supportShape,
-    placedLegalEnvelope
-  );
-  const shape = supported.shape;
   const visualAreaSqm = polygonAreaSqm(shape);
   const areaDifferencePct =
     programAreaSqm > 0
@@ -576,7 +710,6 @@ function buildMass(
   );
   const fitShortfall = Math.max(0, desiredVisualAreaSqm - visualAreaSqm);
   const capacityShortfallSqm = envelopeAreaShortfall + fitShortfall;
-  const insideLegalEnvelope = polygonInsidePolygon(shape, placedLegalEnvelope);
   const appliedScalePct =
     envelopeAreaSqm > 0
       ? Math.sqrt(Math.max(0, visualAreaSqm) / envelopeAreaSqm) * 100
@@ -601,7 +734,7 @@ function buildMass(
     footprintScalePct: floor.footprintScalePct,
     northSetbackM: nonNegative(floor.northSetbackM),
     requiredSetbackM: nonNegative(envelope.requiredSetbackM),
-    envelopeAvailable: envelope.envelopeAvailable,
+    envelopeAvailable: envelope.envelopeAvailable && generationStatus !== "invalid-envelope" && generationStatus !== "budget-exhausted" && generationStatus !== "no-candidate",
     supportOverlapRatio: supported.overlapRatio,
     supportedByLowerFloor: supported.fullySupported,
     residentialUnits: countUnits(floor, ["residential"]),
@@ -612,6 +745,8 @@ function buildMass(
       areaSqm: nonNegative(zone.areaSqm),
       unitCount: Math.max(0, Math.floor(zone.unitCount)),
     })),
+    generationStatus,
+    generationReason,
   };
 }
 
@@ -640,6 +775,8 @@ export function buildPlanningMassModel(
   envelopeSteps: PlanningEnvelopeStep[],
   placement: PlanningPlacement
 ): PlanningMassModel {
+  const checkBudget = createPlanningGeometryBudget();
+  const unavailableEnvelope = (level: number): PlanningEnvelopeStep => ({ level, shape: [], polygons: [], envelopeAreaSqm: 0, requiredSetbackM: 0, envelopeAvailable: false });
   const envelopeByLevel = new Map(
     envelopeSteps.map((step) => [step.level, step])
   );
@@ -664,7 +801,24 @@ export function buildPlanningMassModel(
     (groundPrograms.length > 0
       ? envelopeByLevel.get(groundPrograms[0].level)
       : undefined) ?? fallbackEnvelope;
-  const rotationPivot = polygonCentroid(pivotEnvelope.shape);
+  let rotationPivot = { x: 0, z: 0 };
+  try {
+    const polygons = planningEnvelopePolygons(pivotEnvelope);
+    if (validateLocalParcelTopology(polygons, checkBudget)) {
+      const totalArea = localParcelArea(polygons);
+      rotationPivot = polygons.reduce((sum, part) => {
+        for (const [index, ring] of [part.outer, ...part.holes].entries()) {
+          const area = polygonAreaSqm(ring) * (index ? -1 : 1);
+          const center = polygonCentroid(ring);
+          sum.x += center.x * area / totalArea;
+          sum.z += center.z * area / totalArea;
+        }
+        return sum;
+      }, { x: 0, z: 0 });
+    }
+  } catch {
+    // The same exhausted budget is checked by each floor, which then fails closed.
+  }
 
   let currentHeightM = 0;
   const aboveGroundFloors: PlanningFloorMass[] = [];
@@ -679,11 +833,12 @@ export function buildPlanningMassModel(
     aboveGroundFloors.push(
       buildMass(
         floor,
-        envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
+        envelopeByLevel.get(floor.level) ?? unavailableEnvelope(floor.level),
         placement,
         rotationPivot,
         base,
         currentHeightM,
+        checkBudget,
         supportShape
       )
     );
@@ -703,11 +858,12 @@ export function buildPlanningMassModel(
     basementFloors.push(
       buildMass(
         floor,
-        envelopeByLevel.get(floor.level) ?? fallbackEnvelope,
+        envelopeByLevel.get(floor.level) ?? unavailableEnvelope(floor.level),
         placement,
         rotationPivot,
         base,
         top,
+        checkBudget,
         supportShape
       )
     );

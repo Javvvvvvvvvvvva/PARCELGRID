@@ -5,7 +5,9 @@ import { generateScenariosForParcel } from "@/lib/services/generate-scenarios";
 import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
 
 const DEMO_ORIGIN: [number, number] = [127.025749, 37.650511];
-const DEMO_RETRIEVED_AT = "2026-08-26T00:00:00.000Z";
+const DEMO_RETRIEVED_AT = "2026-10-17T00:00:00.000Z";
+const SEOUL_CITY_PLANNING_ORDINANCE_URL =
+  "https://law.go.kr/ordinInfoP.do?ordinId=2000719";
 
 function localRingToLngLat(points: Array<[number, number]>): [number, number][] {
   const longitudeScale =
@@ -41,14 +43,24 @@ export const DEMO_PARCEL: Parcel = {
   ],
   zoning: "제2종일반주거지역",
   zoneCode: "UB20",
-  maxFAR: 250,
+  maxFAR: 200,
   maxBCR: 60,
-  heightLimit: 18,
+  heightLimit: 0,
   regulatoryConstraints: createRegulatoryReferenceSet({
-    farPct: 250,
+    farPct: 200,
     bcrPct: 60,
-    heightM: 18,
+    heightM: null,
     retrievedAt: DEMO_RETRIEVED_AT,
+    farReference: {
+      sourceName: "서울특별시 도시계획 조례 제48조",
+      sourceRef: SEOUL_CITY_PLANNING_ORDINANCE_URL,
+      note: "제2종일반주거지역의 일반 용적률 기준입니다. 이 데모 필지의 용도지역·지구단위계획·중첩 규제 적용 여부는 원문 확인 전입니다.",
+    },
+    bcrReference: {
+      sourceName: "서울특별시 도시계획 조례 제44조",
+      sourceRef: SEOUL_CITY_PLANNING_ORDINANCE_URL,
+      note: "제2종일반주거지역의 일반 건폐율 기준입니다. 이 데모 필지의 용도지역·지구단위계획·중첩 규제 적용 여부는 원문 확인 전입니다.",
+    },
   }),
   overlays: [],
   setback: { road: 0, side: 0, rear: 0 },

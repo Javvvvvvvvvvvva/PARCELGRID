@@ -21,6 +21,8 @@ function cloneZone(zone: FloorZone): FloorZone {
     ),
     saleableAreaSqm: zone.saleableAreaSqm,
     rentableAreaSqm: zone.rentableAreaSqm,
+    parkingExclusiveAreaSqm: zone.parkingExclusiveAreaSqm,
+    parkingExclusiveAreaStatus: zone.parkingExclusiveAreaStatus,
   };
 }
 

@@ -48,6 +48,14 @@ export interface RegulatoryReferenceInput {
   retrievedAt?: string;
   zoningSourceName?: string;
   zoningSourceRef?: string;
+  farReference?: RegulatoryReferenceSourceInput;
+  bcrReference?: RegulatoryReferenceSourceInput;
+}
+
+export interface RegulatoryReferenceSourceInput {
+  sourceName: string;
+  sourceRef: string;
+  note: string;
 }
 
 const NATIONAL_BCR_SOURCE = "국토계획법 시행령 제84조 전국 범위";
@@ -107,16 +115,18 @@ export function createRegulatoryReferenceSet(
     far: referenceEvidence(
       input.farPct,
       "%",
-      NATIONAL_FAR_SOURCE,
-      NATIONAL_FAR_SOURCE_URL,
-      "전국 시행령 범위의 상단 참고값입니다. 관할 조례·지구단위계획·중첩 규제로 달라질 수 있습니다."
+      input.farReference?.sourceName ?? NATIONAL_FAR_SOURCE,
+      input.farReference?.sourceRef ?? NATIONAL_FAR_SOURCE_URL,
+      input.farReference?.note ??
+        "전국 시행령 범위의 상단 참고값입니다. 관할 조례·지구단위계획·중첩 규제로 달라질 수 있습니다."
     ),
     bcr: referenceEvidence(
       input.bcrPct,
       "%",
-      NATIONAL_BCR_SOURCE,
-      NATIONAL_BCR_SOURCE_URL,
-      "전국 시행령 범위의 상단 참고값입니다. 관할 조례·지구단위계획·중첩 규제로 달라질 수 있습니다."
+      input.bcrReference?.sourceName ?? NATIONAL_BCR_SOURCE,
+      input.bcrReference?.sourceRef ?? NATIONAL_BCR_SOURCE_URL,
+      input.bcrReference?.note ??
+        "전국 시행령 범위의 상단 참고값입니다. 관할 조례·지구단위계획·중첩 규제로 달라질 수 있습니다."
     ),
     height: referenceEvidence(
       input.heightM,

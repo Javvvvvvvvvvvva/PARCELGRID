@@ -9,8 +9,11 @@
 
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
+import { SessionBoundary } from "@/components/auth/SessionBoundary";
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [queryClient] = useState(
     () =>
       new QueryClient({
@@ -25,6 +28,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      {pathname === "/access" ? children : <SessionBoundary>{children}</SessionBoundary>}
+    </QueryClientProvider>
   );
 }

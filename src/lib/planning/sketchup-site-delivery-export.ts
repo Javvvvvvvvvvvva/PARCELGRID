@@ -1,4 +1,5 @@
 import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
 import { buildCadastralLineworkPackage } from "@/lib/planning/cadastral-linework-export";
 import {
   buildSketchupDaeExport,
@@ -292,7 +293,8 @@ function deliveryReadme(input: {
 export function buildSketchupSiteDeliveryExport(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: Parameters<typeof buildCadastralLineworkPackage>[0]["sourceParcels"];
 }): SketchupSiteDeliveryExportResult {
   const legacy = buildSketchupSiteExport(input);
@@ -300,6 +302,7 @@ export function buildSketchupSiteDeliveryExport(input: {
   const linework = buildCadastralLineworkPackage({
     snapshot: input.cadastral,
     targetBoundary: input.targetBoundary,
+    targetBoundaryPolygons: input.targetBoundaryPolygons,
     sourceParcels: input.sourceParcels,
   });
   const audit = buildSiteDeliveryAudit({
@@ -394,7 +397,8 @@ export function buildSketchupSiteDeliveryExport(input: {
 export function downloadSketchupSiteDeliveryExport(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: Parameters<typeof buildCadastralLineworkPackage>[0]["sourceParcels"];
 }): SketchupSiteDeliveryExportResult {
   const result = buildSketchupSiteDeliveryExport(input);

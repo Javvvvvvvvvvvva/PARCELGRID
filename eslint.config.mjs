@@ -13,6 +13,21 @@ export default defineConfig([
       "@typescript-eslint/no-explicit-any": "warn",
     },
   },
+  {
+    files: ["src/app/**/*.tsx", "src/components/**/*.tsx", "src/lib/hooks/**/*.ts"],
+    ignores: ["src/app/access/page.tsx", "src/components/auth/SessionBoundary.tsx", "src/components/auth/SessionBadge.tsx"],
+    rules: {
+      "no-restricted-globals": ["error",
+        { name: "fetch", message: "Use sessionFetch for customer API requests." },
+        { name: "localStorage", message: "Use sessionLocalStorage for customer data." },
+        { name: "sessionStorage", message: "Use sessionDraftStorage for customer data." },
+      ],
+      "no-restricted-syntax": ["error", {
+        selector: "MemberExpression[object.name=/^(window|globalThis)$/][property.name=/^(fetch|localStorage|sessionStorage)$/]",
+        message: "Use the verified client-session request/storage boundary for customer data.",
+      }],
+    },
+  },
   globalIgnores([
     ".next/**",
     "coverage/**",

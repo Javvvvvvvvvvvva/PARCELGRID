@@ -116,7 +116,7 @@ describe("Stage 2 planning massing", () => {
     );
     floor.footprintScalePct = 100;
 
-    const model = buildPlanningMassModel([floor], envelopeSteps, placement);
+    const model = buildPlanningMassModel([floor], envelopeSteps, { ...placement, offsetXM: 0, offsetZM: 0 });
     const mass = model.aboveGroundFloors[0];
 
     expect(mass.programAreaSqm).toBe(50);

@@ -1,4 +1,5 @@
 import {
+  createPlanningGeometryBudget,
   polygonAreaSqm,
   polygonCentroid,
   type LocalPlanPoint,
@@ -8,6 +9,11 @@ import type {
   ParkingStrategy,
   PlanningParking,
 } from "@/lib/planning/types";
+import type { LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import {
+  localParcelArea, localParcelCoveredArea, localParcelIntersectionArea, openParcelRing, validateLocalParcelTopology,
+} from "@/lib/geo/parcel-topology-geometry";
+import { GEOMETRY_EPS, planContains, planIntersectionArea, planRectangle } from "./layout-geometry";
 
 const EPSILON = 1e-7;
 
@@ -19,11 +25,23 @@ export interface ParkingStallLayout {
   depthM: number;
   angleDeg: number;
   source: "surface" | "piloti";
+  componentId?: string;
+  polygonIndex?: number;
+}
+
+export interface ParkingFrontage {
+  polygonIndex: number;
+  ringIndex: number;
+  edgeIndex: number;
+  edge: [LocalPlanPoint, LocalPlanPoint];
 }
 
 export interface ParkingLayoutInput {
   strategy: ParkingStrategy;
-  parcelShape: LocalPlanPoint[];
+  parcelShape?: LocalPlanPoint[];
+  /** Authoritative when supplied, including empty or invalid topology. */
+  parcelPolygons?: LocalParcelPolygon[];
+  frontages?: ParkingFrontage[];
   buildingShape?: LocalPlanPoint[];
   pilotiShape?: LocalPlanPoint[];
   pilotiEnabled?: boolean;
@@ -33,6 +51,10 @@ export interface ParkingLayoutInput {
 }
 
 export interface ParkingLayoutResult {
+  generationStatus: "complete" | "invalid-input" | "budget-exhausted";
+  approvalStatus: "unverified";
+  /** Singular geometry fields are populated only for one layout component. */
+  components: ParkingComponentLayout[];
   supportedStrategy: boolean;
   source: "none" | "surface" | "piloti" | "mixed";
   requiredCars: number;
@@ -53,6 +75,39 @@ export interface ParkingLayoutResult {
   entryPath: LocalPlanPoint[];
   accessDistanceM: number;
   warnings: string[];
+}
+
+export interface ParkingComponentLayout extends Omit<ParkingLayoutResult, "components"> {
+  id: string;
+  polygonIndex: number;
+  parcelPolygon: LocalParcelPolygon;
+  frontage: ParkingFrontage | null;
+  accessStatus: "candidate" | "missing" | "no-fit";
+  entryPaths: Array<{ stallId?: string; points: LocalPlanPoint[] }>;
+  obstacles: Array<{ id: string; shape: LocalPlanPoint[] }>;
+}
+
+interface LayoutContext {
+  polygon: LocalParcelPolygon;
+  checkBudget: () => void;
+  strictAccess: boolean;
+  additionalExclusions: LocalPlanPoint[][];
+  entryPaths: Map<CandidateLayout, ParkingComponentLayout["entryPaths"]>;
+  selectedEntryPaths: ParkingComponentLayout["entryPaths"];
+  geometry: WeakMap<LocalPlanPoint[], PreparedShape>;
+}
+
+interface PreparedShape {
+  points: LocalPlanPoint[];
+  edges: Array<{ start: LocalPlanPoint; dx: number; dz: number }>;
+  winding: number;
+  convex: boolean;
+  area: number;
+  snappedArea: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
 }
 
 interface ParkingConfig {
@@ -145,65 +200,91 @@ function pointInPolygon(point: LocalPlanPoint, polygon: LocalPlanPoint[]): boole
   return inside;
 }
 
-function polygonInside(inner: LocalPlanPoint[], outer: LocalPlanPoint[]): boolean {
-  if (inner.length < 3 || outer.length < 3) return false;
-  return inner.every((point) => pointInPolygon(point, outer));
+function preparedShape(shape: LocalPlanPoint[], context: LayoutContext): PreparedShape {
+  const cached = context.geometry.get(shape);
+  if (cached) return cached;
+  // Use the same precision as Turf clipping. The cache lives for one calculation only.
+  const points = openParcelRing(shape).map(p => ({ x: Math.round(p.x * 1e8) / 1e8, z: Math.round(p.z * 1e8) / 1e8 }));
+  const edges = points.map((start, i) => ({ start, dx: points[(i + 1) % points.length].x - start.x,
+    dz: points[(i + 1) % points.length].z - start.z }));
+  let winding = 0;
+  // Sources are validated first and generated rectangles are simple. Strict equal-sign turns prove convexity.
+  // Collinear or numerically ambiguous turns fall back to Turf, including very shallow concavities.
+  const convex = edges.length >= 3 && edges.every((edge, i) => {
+    const next = edges[(i + 1) % edges.length], a = edge.dx * next.dz, b = edge.dz * next.dx;
+    const turn = a - b, roundoff = 16 * Number.EPSILON * (Math.abs(a) + Math.abs(b));
+    if (!Number.isFinite(turn) || Math.abs(turn) <= roundoff) return false;
+    if (!winding) winding = Math.sign(turn);
+    return Math.sign(turn) === winding;
+  });
+  const prepared = { points, edges, winding, convex, area: polygonAreaSqm(shape), snappedArea: polygonAreaSqm(points),
+    minX: Math.min(...points.map(p => p.x)), maxX: Math.max(...points.map(p => p.x)),
+    minZ: Math.min(...points.map(p => p.z)), maxZ: Math.max(...points.map(p => p.z)) };
+  context.geometry.set(shape, prepared);
+  return prepared;
 }
 
-function segmentsIntersect(
-  a: LocalPlanPoint,
-  b: LocalPlanPoint,
-  c: LocalPlanPoint,
-  d: LocalPlanPoint
-): boolean {
-  const signedArea = (
-    start: LocalPlanPoint,
-    end: LocalPlanPoint,
-    point: LocalPlanPoint
-  ) =>
-    (end.x - start.x) * (point.z - start.z) -
-    (end.z - start.z) * (point.x - start.x);
-  const abC = signedArea(a, b, c);
-  const abD = signedArea(a, b, d);
-  const cdA = signedArea(c, d, a);
-  const cdB = signedArea(c, d, b);
-  if (
-    ((abC > EPSILON && abD < -EPSILON) ||
-      (abC < -EPSILON && abD > EPSILON)) &&
-    ((cdA > EPSILON && cdB < -EPSILON) ||
-      (cdA < -EPSILON && cdB > EPSILON))
-  ) {
-    return true;
-  }
-  return (
-    (Math.abs(abC) <= EPSILON && pointOnSegment(c, a, b)) ||
-    (Math.abs(abD) <= EPSILON && pointOnSegment(d, a, b)) ||
-    (Math.abs(cdA) <= EPSILON && pointOnSegment(a, c, d)) ||
-    (Math.abs(cdB) <= EPSILON && pointOnSegment(b, c, d))
-  );
+/** A convex polygon is the intersection of its inward half-planes, so vertices prove full containment. */
+function convexContains(outer: PreparedShape, inner: PreparedShape): boolean {
+  return outer.convex && inner.minX >= outer.minX && inner.maxX <= outer.maxX &&
+    inner.minZ >= outer.minZ && inner.maxZ <= outer.maxZ && inner.points.every(point => outer.edges.every(edge =>
+      outer.winding * (edge.dx * (point.z - edge.start.z) - edge.dz * (point.x - edge.start.x)) >= 0));
 }
 
-function shapesOverlap(a: LocalPlanPoint[], b: LocalPlanPoint[]): boolean {
+function polygonInside(inner: LocalPlanPoint[], outer: LocalPlanPoint[], context: LayoutContext): boolean {
+  context.checkBudget();
+  const subject = preparedShape(inner, context), area = subject.area;
+  const parcel = preparedShape(context.polygon.outer, context);
+  const fastRegion = context.polygon.holes.length === 0 && Math.abs(area - subject.snappedArea) <= 1e-6 && convexContains(parcel, subject);
+  const inRegion = area > GEOMETRY_EPS && (fastRegion || Math.abs(area -
+    localParcelIntersectionArea([{ outer: inner, holes: [] }], [context.polygon])) <= 1e-6);
+  const contained = inRegion && (outer === context.polygon.outer ||
+    (Math.abs(area - subject.snappedArea) <= Math.max(GEOMETRY_EPS, area * 1e-7) && convexContains(preparedShape(outer, context), subject)) ||
+    planContains(outer, inner)) && context.additionalExclusions.every(shape => !shapesOverlap(shape, inner, context));
+  context.checkBudget();
+  return contained;
+}
+
+/** Frontages may be subsegments, but must belong to the indexed outer edge. */
+export function parkingFrontageMatchesPolygon(frontage: ParkingFrontage, polygons: LocalParcelPolygon[]): boolean {
+  if (!frontage || !Number.isInteger(frontage.polygonIndex) || !Number.isInteger(frontage.edgeIndex) ||
+      frontage.ringIndex !== 0 || !Array.isArray(frontage.edge) || frontage.edge.length !== 2 ||
+      frontage.edge.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.z))) return false;
+  const part = polygons[frontage.polygonIndex];
+  if (!part) return false;
+  const ring = openParcelRing(part.outer), index = frontage.edgeIndex;
+  return index >= 0 && index < ring.length && Math.hypot(frontage.edge[1].x - frontage.edge[0].x,
+    frontage.edge[1].z - frontage.edge[0].z) > EPSILON &&
+    frontage.edge.every(p => pointOnSegment(p, ring[index], ring[(index + 1) % ring.length]));
+}
+
+function edgeInwardNormal(shape: LocalPlanPoint[], edge: [LocalPlanPoint, LocalPlanPoint]): LocalPlanPoint | null {
+  const ring = openParcelRing(shape);
+  const index = ring.findIndex((p, i) => edge.every(point => pointOnSegment(point, p, ring[(i + 1) % ring.length])));
+  if (index < 0) return null;
+  const origin = ring[0];
+  const signedArea = ring.reduce((sum, p, i) => {
+    const next = ring[(i + 1) % ring.length];
+    return sum + (p.x - origin.x) * (next.z - origin.z) - (next.x - origin.x) * (p.z - origin.z);
+  }, 0);
+  const dx = edge[1].x - edge[0].x, dz = edge[1].z - edge[0].z, length = Math.hypot(dx, dz);
+  const a = ring[index], b = ring[(index + 1) % ring.length];
+  const side = Math.sign(signedArea) * Math.sign(dx * (b.x - a.x) + dz * (b.z - a.z));
+  return length > EPSILON && side ? { x: -dz / length * side, z: dx / length * side } : null;
+}
+
+/** Ring winding plus the actual edge order determines the interior, even for concave parcels. */
+export function parkingFrontageInwardNormal(frontage: ParkingFrontage, polygons: LocalParcelPolygon[]): LocalPlanPoint | null {
+  return parkingFrontageMatchesPolygon(frontage, polygons) ? edgeInwardNormal(polygons[frontage.polygonIndex].outer, frontage.edge) : null;
+}
+
+function shapesOverlap(a: LocalPlanPoint[], b: LocalPlanPoint[], context: LayoutContext): boolean {
   if (a.length < 3 || b.length < 3) return false;
-  if (a.some((point) => pointInPolygon(point, b))) return true;
-  if (b.some((point) => pointInPolygon(point, a))) return true;
-  for (let aIndex = 0; aIndex < a.length; aIndex += 1) {
-    for (let bIndex = 0; bIndex < b.length; bIndex += 1) {
-      if (
-        segmentsIntersect(
-          a[aIndex],
-          a[(aIndex + 1) % a.length],
-          b[bIndex],
-          b[(bIndex + 1) % b.length]
-        )
-      ) {
-        return true;
-      }
-    }
-  }
-  const centerA = polygonCentroid(a);
-  const centerB = polygonCentroid(b);
-  return pointInPolygon(centerA, b) || pointInPolygon(centerB, a);
+  const first = preparedShape(a, context), second = preparedShape(b, context);
+  if (first.maxX <= second.minX || second.maxX <= first.minX || first.maxZ <= second.minZ || second.maxZ <= first.minZ) return false;
+  if ((second.snappedArea > 2 * EPSILON && convexContains(first, second)) ||
+      (first.snappedArea > 2 * EPSILON && convexContains(second, first))) return true;
+  return planIntersectionArea(a, b) > EPSILON;
 }
 
 function toOriented(point: LocalPlanPoint, angleDeg: number): OrientedPoint {
@@ -300,16 +381,19 @@ function coreRectangle(
 function generateColumns(
   targetShape: LocalPlanPoint[],
   coreShape: LocalPlanPoint[],
-  angleDeg: number
+  angleDeg: number,
+  context: LayoutContext,
+  widthM: number
 ): LocalPlanPoint[] {
   if (targetShape.length < 3) return [];
   const bounds = orientedBounds(targetShape, angleDeg);
   const columns: LocalPlanPoint[] = [];
   for (let u = bounds.minU + 2.5; u < bounds.maxU; u += 5) {
     for (let v = bounds.minV + 2.5; v < bounds.maxV; v += 5) {
+      context.checkBudget();
       const point = fromOriented({ u, v }, angleDeg);
       if (
-        pointInPolygon(point, targetShape) &&
+        polygonInside(planRectangle(point, widthM, widthM), targetShape, context) &&
         (coreShape.length < 3 || !pointInPolygon(point, coreShape))
       ) {
         columns.push(point);
@@ -339,7 +423,8 @@ function generateCandidate(
   angleDeg: number,
   rows: 1 | 2,
   bandOffsetRatio: number,
-  config: ParkingConfig
+  config: ParkingConfig,
+  context: LayoutContext
 ): CandidateLayout | null {
   const bounds = orientedBounds(targetShape, angleDeg);
   const totalDepth =
@@ -369,11 +454,11 @@ function generateCandidate(
     config.aisleWidthM,
     angleDeg
   );
-  if (!polygonInside(aisleShape, targetShape)) return null;
-  if (exclusionShape.length >= 3 && shapesOverlap(aisleShape, exclusionShape)) {
+  if (!polygonInside(aisleShape, targetShape, context)) return null;
+  if (exclusionShape.length >= 3 && shapesOverlap(aisleShape, exclusionShape, context)) {
     return null;
   }
-  if (coreShape.length >= 3 && shapesOverlap(aisleShape, coreShape)) return null;
+  if (coreShape.length >= 3 && shapesOverlap(aisleShape, coreShape, context)) return null;
 
   const stalls: ParkingStallLayout[] = [];
   let index = 0;
@@ -382,6 +467,7 @@ function generateCandidate(
     centerU <= bounds.maxU - config.stallWidthM / 2 + EPSILON;
     centerU += config.stallWidthM
   ) {
+    context.checkBudget();
     rowCenters.forEach((centerV) => {
       const corners = rectangleInOrientedSpace(
         centerU,
@@ -390,11 +476,11 @@ function generateCandidate(
         config.stallDepthM,
         angleDeg
       );
-      if (!polygonInside(corners, targetShape)) return;
-      if (exclusionShape.length >= 3 && shapesOverlap(corners, exclusionShape)) {
+      if (!polygonInside(corners, targetShape, context)) return;
+      if (exclusionShape.length >= 3 && shapesOverlap(corners, exclusionShape, context)) {
         return;
       }
-      if (coreShape.length >= 3 && shapesOverlap(corners, coreShape)) return;
+      if (coreShape.length >= 3 && shapesOverlap(corners, coreShape, context)) return;
       stalls.push({
         id: `${source}-${angleDeg.toFixed(1)}-${rows}-${index++}`,
         corners,
@@ -472,7 +558,8 @@ function generateDirectFrontageCandidate(
   coreShape: LocalPlanPoint[],
   parkingEdge: [LocalPlanPoint, LocalPlanPoint],
   roadFrontEdge: [LocalPlanPoint, LocalPlanPoint],
-  config: ParkingConfig
+  config: ParkingConfig,
+  context: LayoutContext
 ): CandidateLayout | null {
   const [start, end] = parkingEdge;
   const dx = end.x - start.x;
@@ -484,25 +571,15 @@ function generateDirectFrontageCandidate(
   }
 
   const tangent = { x: dx / frontageLength, z: dz / frontageLength };
-  let inward = { x: -tangent.z, z: tangent.x };
-  const midpoint = {
-    x: (start.x + end.x) / 2,
-    z: (start.z + end.z) / 2,
-  };
-  const targetCenter = polygonCentroid(targetShape);
-  if (
-    (targetCenter.x - midpoint.x) * inward.x +
-      (targetCenter.z - midpoint.z) * inward.z <
-    0
-  ) {
-    inward = { x: -inward.x, z: -inward.z };
-  }
+  const inward = edgeInwardNormal(targetShape, parkingEdge);
+  if (!inward) return null;
 
   const maxSlots = Math.floor(
     (frontageLength - edgeMarginM * 2 + EPSILON) / config.stallWidthM
   );
   const stalls: ParkingStallLayout[] = [];
   for (let index = 0; index < maxSlots; index += 1) {
+    context.checkBudget();
     const offset = edgeMarginM + index * config.stallWidthM;
     const a = {
       x: start.x + tangent.x * offset,
@@ -524,9 +601,9 @@ function generateDirectFrontageCandidate(
         z: a.z + inward.z * config.stallDepthM,
       },
     ];
-    if (!polygonInside(corners, targetShape)) continue;
-    if (exclusionShape.length >= 3 && shapesOverlap(corners, exclusionShape)) continue;
-    if (coreShape.length >= 3 && shapesOverlap(corners, coreShape)) continue;
+    if (!polygonInside(corners, targetShape, context)) continue;
+    if (exclusionShape.length >= 3 && shapesOverlap(corners, exclusionShape, context)) continue;
+    if (coreShape.length >= 3 && shapesOverlap(corners, coreShape, context)) continue;
     stalls.push({
       id: `${source}-direct-${index}`,
       corners,
@@ -591,17 +668,94 @@ function candidateIsBetter(
   );
 }
 
+function projectToFrontage(point: LocalPlanPoint, edge: [LocalPlanPoint, LocalPlanPoint]): LocalPlanPoint {
+  const dx = edge[1].x - edge[0].x, dz = edge[1].z - edge[0].z;
+  const ratio = clamp(((point.x - edge[0].x) * dx + (point.z - edge[0].z) * dz) / (dx * dx + dz * dz), 0, 1);
+  return { x: edge[0].x + dx * ratio, z: edge[0].z + dz * ratio };
+}
+
+function connectCandidate(
+  candidate: CandidateLayout, input: ParkingLayoutInput, core: LocalPlanPoint[], exclusion: LocalPlanPoint[],
+  config: ParkingConfig, context: LayoutContext
+): boolean {
+  const edge = input.frontEdge;
+  if (!edge) return false;
+  const obstacles = [core, exclusion].filter(shape => shape.length >= 3);
+  const clear = (shape: LocalPlanPoint[]) => polygonInside(shape, context.polygon.outer, context) &&
+    obstacles.every(obstacle => !shapesOverlap(shape, obstacle, context));
+  const entries: ParkingComponentLayout["entryPaths"] = [];
+  if (candidate.accessMode === "direct-frontage") {
+    candidate.stalls = candidate.stalls.filter(stall => {
+      context.checkBudget();
+      const [a, b] = stall.corners, roadA = projectToFrontage(a, edge), roadB = projectToFrontage(b, edge);
+      if (Math.hypot(roadB.x - roadA.x, roadB.z - roadA.z) < config.stallWidthM * Math.cos(18 * Math.PI / 180) - 1e-6) return false;
+      const corridor = [roadA, roadB, b, a];
+      if (polygonAreaSqm(corridor) > EPSILON && (!clear(corridor) || candidate.stalls.some(other =>
+        other !== stall && shapesOverlap(corridor, other.corners, context)))) return false;
+      entries.push({ stallId: stall.id, points: [
+        { x: (roadA.x + roadB.x) / 2, z: (roadA.z + roadB.z) / 2 },
+        { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 },
+      ] });
+      return true;
+    });
+    if (context.strictAccess) {
+      // Several direct entries have no common path; retain their actual per-stall approaches instead.
+      candidate.entryPath = entries.length === 1 ? entries[0].points : [];
+      candidate.accessDistanceM = Math.max(0, ...entries.map(entry => Math.hypot(
+        entry.points[1].x - entry.points[0].x, entry.points[1].z - entry.points[0].z)));
+    }
+  } else {
+    const length = Math.hypot(edge[1].x - edge[0].x, edge[1].z - edge[0].z);
+    const ratios = input.parking.entryOffsetRatio === undefined ? [0.5, 0.15, 0.85] : [input.parking.entryOffsetRatio];
+    let best: { stalls: ParkingStallLayout[]; points: LocalPlanPoint[]; distance: number } | null = null;
+    for (const ratio of ratios) {
+      context.checkBudget();
+      if (length * Math.min(ratio, 1 - ratio) < config.entryWidthM / 2 - EPSILON) continue;
+      const gate = { x: edge[0].x + (edge[1].x - edge[0].x) * ratio, z: edge[0].z + (edge[1].z - edge[0].z) * ratio };
+      const bounds = orientedBounds(candidate.aisleShape, candidate.angleDeg), start = toOriented(gate, candidate.angleDeg);
+      const aisleV = (bounds.minV + bounds.maxV) / 2;
+      const end = fromOriented({ u: clamp(start.u, bounds.minU + config.entryWidthM / 2, bounds.maxU - config.entryWidthM / 2), v: aisleV }, candidate.angleDeg);
+      const side = fromOriented({ u: start.u, v: aisleV }, candidate.angleDeg);
+      const points = Math.hypot(side.x - end.x, side.z - end.z) > EPSILON ? [gate, side, end] : [gate, end];
+      let distance = 0;
+      const corridors = points.slice(1).flatMap((b, i) => {
+        const a = points[i], segmentLength = Math.hypot(b.x - a.x, b.z - a.z);
+        distance += segmentLength;
+        return segmentLength > EPSILON ? [planRectangle({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 }, segmentLength,
+          config.entryWidthM, Math.atan2(b.z - a.z, b.x - a.x) * 180 / Math.PI)] : [];
+      });
+      if (points.length === 3) corridors.push(planRectangle(side, config.entryWidthM, config.entryWidthM, candidate.angleDeg));
+      if (!corridors.every(clear)) continue;
+      // Legacy single-ring counts remain heuristic; explicit topology reserves the full approach width.
+      const stalls = context.strictAccess ? candidate.stalls.filter(stall => corridors.every(corridor => !shapesOverlap(stall.corners, corridor, context))) : candidate.stalls;
+      if (!best || stalls.length > best.stalls.length) best = { stalls, points, distance };
+    }
+    if (!best) return false;
+    candidate.stalls = best.stalls;
+    candidate.entryPath = best.points;
+    candidate.accessDistanceM = best.distance;
+    entries.push({ points: candidate.entryPath });
+  }
+  candidate.capacityCars = candidate.stalls.length;
+  context.entryPaths.set(candidate, entries);
+  return candidate.capacityCars > 0;
+}
+
 function emptyResult(
   input: ParkingLayoutInput,
   source: ParkingLayoutResult["source"],
   warnings: string[]
 ): ParkingLayoutResult {
+  const requiredCars = Number.isFinite(input.requiredCars) ? Math.max(0, Math.ceil(input.requiredCars)) : 0;
   return {
+    generationStatus: "complete",
+    approvalStatus: "unverified",
+    components: [],
     supportedStrategy: false,
     source,
-    requiredCars: Math.max(0, Math.ceil(input.requiredCars)),
+    requiredCars,
     capacityCars: 0,
-    shortfallCars: Math.max(0, Math.ceil(input.requiredCars)),
+    shortfallCars: requiredCars,
     rawCandidateCars: 0,
     usableAreaSqm: 0,
     targetShape: [],
@@ -622,14 +776,21 @@ function emptyResult(
 
 function calculateSingleLayout(
   input: ParkingLayoutInput,
-  source: "surface" | "piloti"
+  source: "surface" | "piloti",
+  context: LayoutContext
 ): ParkingLayoutResult {
   const config = configFromParking(input.parking);
   const targetShape =
-    source === "piloti" ? input.pilotiShape ?? [] : input.parcelShape;
+    source === "piloti" ? input.pilotiShape ?? [] : context.polygon.outer;
   const exclusionShape =
     source === "surface" ? input.buildingShape ?? [] : [];
   const warnings: string[] = [];
+  const usableArea = (core: LocalPlanPoint[] = []) => {
+    context.checkBudget();
+    const exclusions = [exclusionShape, ...context.additionalExclusions, core].filter(shape => shape.length >= 3);
+    return Math.max(0, localParcelIntersectionArea([{ outer: targetShape, holes: [] }], [context.polygon]) -
+      localParcelCoveredArea([context.polygon], exclusions.map(outer => [{ outer, holes: [] }])));
+  };
 
   if (source === "piloti" && !input.pilotiEnabled) {
     return emptyResult(input, source, [
@@ -653,10 +814,12 @@ function calculateSingleLayout(
   let bestCore: LocalPlanPoint[] = [];
 
   for (const angle of angles) {
+    context.checkBudget();
     const coreShape =
       source === "piloti"
         ? coreRectangle(targetShape, angle, config.coreAreaSqm)
         : [];
+    if (coreShape.length && !polygonInside(coreShape, targetShape, context)) continue;
     for (const rows of [1, 2] as const) {
       for (let offsetIndex = 0; offsetIndex <= 6; offsetIndex += 1) {
         const candidate = generateCandidate(
@@ -667,9 +830,10 @@ function calculateSingleLayout(
           angle,
           rows,
           offsetIndex / 6,
-          config
+          config,
+          context
         );
-        if (candidate && candidateIsBetter(candidate, best)) {
+        if (candidate && connectCandidate(candidate, input, coreShape, exclusionShape, config, context) && candidateIsBetter(candidate, best)) {
           best = candidate;
           bestCore = coreShape;
         }
@@ -694,16 +858,17 @@ function calculateSingleLayout(
       source === "piloti" && parkingEdge
         ? coreRectangle(targetShape, directAngle, config.coreAreaSqm)
         : [];
-    const direct = generateDirectFrontageCandidate(
+    const direct = directCore.length && !polygonInside(directCore, targetShape, context) ? null : generateDirectFrontageCandidate(
       source,
       targetShape,
       exclusionShape,
       directCore,
       parkingEdge ?? input.frontEdge,
       input.frontEdge,
-      config
+      config,
+      context
     );
-    if (direct && candidateIsBetter(direct, best)) {
+    if (direct && connectCandidate(direct, input, directCore, exclusionShape, config, context) && candidateIsBetter(direct, best)) {
       best = direct;
       bestCore = directCore;
     }
@@ -713,10 +878,7 @@ function calculateSingleLayout(
     const angle = angles[0] ?? longestEdgeAngle(targetShape);
     const bounds = orientedBounds(targetShape, angle);
     const targetDepthM = Math.max(0, bounds.maxV - bounds.minV);
-    const usableAreaSqm = Math.max(
-      0,
-      polygonAreaSqm(targetShape) - polygonAreaSqm(exclusionShape)
-    );
+    const usableAreaSqm = usableArea();
     return {
       ...emptyResult(input, source, [
         source === "surface"
@@ -764,17 +926,16 @@ function calculateSingleLayout(
 
   const columns =
     source === "piloti"
-      ? generateColumns(targetShape, bestCore, best.angleDeg)
+      ? generateColumns(targetShape, bestCore, best.angleDeg, context, finitePositive(input.parking.vehicleProfile?.columnWidthM, 0.4))
       : [];
+  context.selectedEntryPaths = context.entryPaths.get(best) ?? [];
   const requiredCars = Math.max(0, Math.ceil(input.requiredCars));
-  const usableAreaSqm = Math.max(
-    0,
-    polygonAreaSqm(targetShape) -
-      polygonAreaSqm(exclusionShape) -
-      polygonAreaSqm(bestCore)
-  );
+  const usableAreaSqm = usableArea(bestCore);
 
   return {
+    generationStatus: "complete",
+    approvalStatus: "unverified",
+    components: [],
     supportedStrategy: true,
     source,
     requiredCars,
@@ -801,60 +962,103 @@ function calculateSingleLayout(
 export function calculateParkingLayout(
   input: ParkingLayoutInput
 ): ParkingLayoutResult {
-  if (input.strategy === "surface") {
-    return calculateSingleLayout(input, "surface");
-  }
-  if (input.strategy === "piloti") {
-    return calculateSingleLayout(input, "piloti");
-  }
-  if (input.strategy === "mixed") {
-    const piloti = calculateSingleLayout(
-      { ...input, strategy: "piloti" },
-      "piloti"
-    );
-    const surface = calculateSingleLayout(
-      { ...input, strategy: "surface" },
-      "surface"
-    );
-    const requiredCars = Math.max(0, Math.ceil(input.requiredCars));
-    const capacityCars = piloti.capacityCars + surface.capacityCars;
-    return {
-      supportedStrategy:
-        piloti.supportedStrategy || surface.supportedStrategy,
-      source: "mixed",
-      requiredCars,
-      capacityCars,
-      shortfallCars: Math.max(0, requiredCars - capacityCars),
-      rawCandidateCars:
-        piloti.rawCandidateCars + surface.rawCandidateCars,
-      usableAreaSqm: piloti.usableAreaSqm + surface.usableAreaSqm,
-      targetShape: surface.targetShape,
-      exclusionShape: surface.exclusionShape,
-      stalls: [...piloti.stalls, ...surface.stalls],
-      aisleShape: surface.aisleShape.length > 0
-        ? surface.aisleShape
-        : piloti.aisleShape,
-      coreShape: piloti.coreShape,
-      columns: piloti.columns,
-      orientationDeg: surface.orientationDeg || piloti.orientationDeg,
-      accessMode: "mixed",
-      targetDepthM: Math.max(surface.targetDepthM, piloti.targetDepthM),
-      requiredDepthM: Math.max(surface.requiredDepthM, piloti.requiredDepthM),
-      entryPath:
-        surface.entryPath.length > 0 ? surface.entryPath : piloti.entryPath,
-      accessDistanceM: Math.max(
-        surface.accessDistanceM,
-        piloti.accessDistanceM
-      ),
-      warnings: [...piloti.warnings, ...surface.warnings],
-    };
-  }
   if (input.strategy === "none") {
     return emptyResult(input, "none", ["주차 계획 없음이 선택되어 있습니다."]);
   }
-  return emptyResult(input, "none", [
-    input.strategy === "basement"
-      ? "지하주차 램프와 회차 배치는 후속 고급 검토 대상입니다."
-      : "기계식 주차 제원과 장비 형식은 후속 고급 검토 대상입니다.",
+  if (!["surface", "piloti", "mixed"].includes(input.strategy)) return emptyResult(input, "none", [
+    input.strategy === "basement" ? "지하주차 램프와 회차 배치는 후속 고급 검토 대상입니다." : "기계식 주차 제원과 장비 형식은 후속 고급 검토 대상입니다.",
   ]);
+  const source = input.strategy as "surface" | "piloti" | "mixed";
+  const checkBudget = createPlanningGeometryBudget();
+  const invalid = (message: string) => ({ ...emptyResult(input, source, [message]), generationStatus: "invalid-input" as const });
+  try {
+    const polygons = input.parcelPolygons === undefined ? [{ outer: input.parcelShape ?? [], holes: [] }] : input.parcelPolygons;
+    if (!validateLocalParcelTopology(polygons, checkBudget)) return invalid("대지 전체 경계·구멍 자료가 비어 있거나 올바르지 않습니다.");
+    for (const shape of [input.buildingShape, input.pilotiShape]) {
+      if (shape !== undefined && shape.length && !validateLocalParcelTopology([{ outer: shape, holes: [] }], checkBudget)) {
+        return invalid("건물 또는 필로티 경계 자료가 올바르지 않습니다.");
+      }
+    }
+    if (!Number.isFinite(input.requiredCars) || [input.parking.coreAreaSqm, input.parking.columnLossPct,
+      input.parking.stallWidthM, input.parking.stallDepthM, input.parking.aisleWidthM, input.parking.entryWidthM,
+      input.parking.entryOffsetRatio].some(value => value !== undefined && !Number.isFinite(value)) ||
+      (input.parking.entryOffsetRatio !== undefined && (input.parking.entryOffsetRatio < 0 || input.parking.entryOffsetRatio > 1))) {
+      return invalid("주차 치수·진입 위치 입력을 확인해야 합니다.");
+    }
+    let frontages = input.frontages;
+    if (frontages === undefined) {
+      frontages = [];
+      // A legacy edge can identify a single target, never an arbitrary first component.
+      if (polygons.length === 1 && input.frontEdge) {
+        const ring = openParcelRing(polygons[0].outer);
+        const edgeIndex = ring.findIndex((_, index) => parkingFrontageMatchesPolygon({
+          polygonIndex: 0, ringIndex: 0, edgeIndex: index, edge: input.frontEdge!,
+        }, polygons));
+        if (edgeIndex >= 0) frontages.push({ polygonIndex: 0, ringIndex: 0, edgeIndex, edge: input.frontEdge });
+      }
+    }
+    if (!Array.isArray(frontages) || frontages.length > 200 || frontages.some(frontage => {
+      checkBudget();
+      return !parkingFrontageMatchesPolygon(frontage, polygons);
+    })) return invalid("도로 접면의 구성요소·외곽 링·변 참조가 현재 대지와 일치하지 않습니다.");
+
+    const components: ParkingComponentLayout[] = [];
+    const geometry = new WeakMap<LocalPlanPoint[], PreparedShape>();
+    const sources = source === "mixed" ? ["piloti", "surface"] as const : [source];
+    for (let polygonIndex = 0; polygonIndex < polygons.length; polygonIndex++) {
+      for (const componentSource of sources) {
+        checkBudget();
+        const polygon = polygons[polygonIndex], id = `parcel-${polygonIndex}-${componentSource}`;
+        const ownedFrontages = frontages.filter(frontage => frontage.polygonIndex === polygonIndex);
+        const additionalExclusions = componentSource === "surface" && source === "mixed" && input.pilotiShape?.length
+          ? [input.pilotiShape] : [];
+        let chosen: ParkingLayoutResult | null = null;
+        let chosenFrontage: ParkingFrontage | null = null;
+        let entryPaths: ParkingComponentLayout["entryPaths"] = [];
+        for (const frontage of ownedFrontages) {
+          const context: LayoutContext = { polygon, checkBudget, strictAccess: input.parcelPolygons !== undefined || input.frontages !== undefined,
+            additionalExclusions, entryPaths: new Map(), selectedEntryPaths: [], geometry };
+          const candidate = calculateSingleLayout({ ...input, frontEdge: frontage.edge }, componentSource, context);
+          if (!chosen || candidate.capacityCars > chosen.capacityCars) {
+            chosen = candidate; chosenFrontage = frontage; entryPaths = context.selectedEntryPaths;
+          }
+        }
+        const layout = chosen ?? {
+          ...emptyResult(input, componentSource, [componentSource === "piloti" && !input.pilotiEnabled
+            ? "1층 프로그램에 필로티 또는 주차 구역이 없어 필로티 주차를 배치할 수 없습니다."
+            : "이 대지 구성요소의 확인된 도로 접면이 없어 주차 대수를 산입하지 않습니다."]),
+          supportedStrategy: componentSource === "surface" || Boolean(input.pilotiEnabled),
+          targetShape: componentSource === "surface" ? polygon.outer : input.pilotiShape ?? [],
+          exclusionShape: componentSource === "surface" ? input.buildingShape ?? [] : [],
+          usableAreaSqm: componentSource === "surface" ? localParcelArea([polygon]) : 0,
+        };
+        const columnWidthM = finitePositive(input.parking.vehicleProfile?.columnWidthM, 0.4);
+        const obstacles = [
+          ...[layout.exclusionShape, ...additionalExclusions].filter(shape => shape.length >= 3).map((shape, i) => ({ id: `${id}-building-${i}`, shape })),
+          ...(layout.coreShape.length ? [{ id: `${id}-core`, shape: layout.coreShape }] : []),
+          ...layout.columns.map((center, i) => ({ id: `${id}-column-${i}`, shape: planRectangle(center, columnWidthM, columnWidthM) })),
+        ];
+        const { components: unusedComponents, ...layoutGeometry } = layout;
+        void unusedComponents;
+        components.push({ ...layoutGeometry, id, polygonIndex, parcelPolygon: polygon, frontage: chosenFrontage,
+          accessStatus: layout.capacityCars > 0 ? "candidate" : ownedFrontages.length ? "no-fit" : "missing",
+          stalls: layout.stalls.map(stall => ({ ...stall, id: `${id}-${stall.id}`, componentId: id, polygonIndex })),
+          entryPaths: entryPaths.map(entry => ({ ...entry, stallId: entry.stallId ? `${id}-${entry.stallId}` : undefined })), obstacles });
+      }
+    }
+    checkBudget();
+    const capacityCars = components.reduce((sum, part) => sum + part.capacityCars, 0);
+    const result = { ...emptyResult(input, source, components.flatMap(part => part.warnings)),
+      supportedStrategy: components.some(part => part.supportedStrategy), components, capacityCars,
+      shortfallCars: Math.max(0, Math.ceil(input.requiredCars) - capacityCars),
+      rawCandidateCars: components.reduce((sum, part) => sum + part.rawCandidateCars, 0),
+      usableAreaSqm: components.reduce((sum, part) => sum + part.usableAreaSqm, 0),
+      stalls: components.flatMap(part => part.stalls),
+    };
+    // No singular aisle, path, core or orientation can represent several independent layouts.
+    return components.length === 1 ? { ...components[0], components } : { ...result, accessMode: "mixed" };
+  } catch (error) {
+    return { ...emptyResult(input, source, ["대지 전체 주차 배치 검사를 완료하지 못했습니다. 검토 가능한 대수는 미확정입니다."]),
+      generationStatus: error instanceof Error && error.name === "TimeoutError" ? "budget-exhausted" : "invalid-input" };
+  }
 }

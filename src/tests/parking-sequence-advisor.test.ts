@@ -3,38 +3,27 @@ import {
   buildParkingAlternativePatch,
   buildParkingSequenceRecommendation,
 } from "@/lib/planning/parking-sequence-advisor";
-import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
+import { buildPlanningGeometry, type PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { createBlankPlanningScenario } from "@/lib/planning/scenario-utils";
 import type {
   PlanningScenario,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
 
-const boundary: [number, number][] = [
-  [127, 37],
-  [127.00018, 37],
-  [127.00018, 37.00014],
-  [127, 37.00014],
-  [127, 37],
-];
+const geo = (x: number, z: number): [number, number] => [127 + x / (111000 * Math.cos(37 * Math.PI / 180)), 37 - z / 111000];
+const boundary = [[-10, -8], [10, -8], [10, 8], [-10, 8]].map(([x, z]) => geo(x, z));
 const roads = [
   {
     name: "테스트로",
     points: [
-      [126.9999, 36.99998],
-      [127.00028, 36.99998],
+      geo(-20, 10),
+      geo(20, 10),
     ] as [number, number][],
   },
 ];
-const parcelShape = [
-  { x: -10, z: -8 },
-  { x: 10, z: -8 },
-  { x: 10, z: 8 },
-  { x: -10, z: 8 },
-];
-
-function scenario(): PlanningScenario {
-  const result = createBlankPlanningScenario({ name: "주차 순서 테스트" });
+function scenario(areaSqm = 100): PlanningScenario {
+  const result = createBlankPlanningScenario({ projectId: "sequence-test", name: "주차 순서 테스트" });
+  result.id = "sequence-plan";
   result.floorPrograms = [
     {
       id: "floor-1",
@@ -47,7 +36,7 @@ function scenario(): PlanningScenario {
         {
           id: "zone-1",
           useType: "residential",
-          areaSqm: 100,
+          areaSqm,
           unitCount: 2,
           revenueModel: "sale",
         },
@@ -64,7 +53,7 @@ function scenario(): PlanningScenario {
         {
           id: "zone-2",
           useType: "residential",
-          areaSqm: 100,
+          areaSqm,
           unitCount: 2,
           revenueModel: "sale",
         },
@@ -92,26 +81,53 @@ function calculation(requiredCars: number): PlanningScenarioCalculation {
   } as unknown as PlanningScenarioCalculation;
 }
 
-function geometry(firstFloorShape = parcelShape): PlanningGeometrySnapshot {
-  return {
-    parcel: { polygon: parcelShape },
-    building: {
-      aboveGroundFloors: [{ level: 1, shape: firstFloorShape }],
-    },
-  } as unknown as PlanningGeometrySnapshot;
+function geometry(plan = scenario(), source = boundary): PlanningGeometrySnapshot {
+  return buildPlanningGeometry({ projectId: "sequence-test", scenario: plan, boundary: source,
+    roads, lotAreaSqm: 320, zoning: "일반상업지역" }).snapshot;
 }
 
 describe("planning parking sequence advisor", () => {
+  it("preserves all accessible components and withholds alternatives when a secondary source changes", () => {
+    const plan = scenario();
+    const boundaryPolygons = [{ outer: boundary, holes: [] },
+      { outer: boundary.map(([lng, lat]): [number, number] => [lng + 30 / (111000 * Math.cos(37 * Math.PI / 180)), lat]), holes: [] }];
+    const fullRoads = [{ name: "두 조각 접근", points: [geo(-20, 10), geo(50, 10)] }];
+    const snapshot = buildPlanningGeometry({ projectId: "sequence-test", scenario: plan, boundaryPolygons,
+      roads: fullRoads, lotAreaSqm: 640, zoning: "일반상업지역" }).snapshot;
+    const input = { scenario: plan, calculation: calculation(1), geometry: snapshot, boundaryPolygons, roads: fullRoads };
+    const before = JSON.stringify(input);
+    const result = buildParkingSequenceRecommendation(input);
+    expect(result.surface.layout!.components).toHaveLength(2);
+    expect(result.surface.layout!.components.every(component => component.frontage?.polygonIndex === component.polygonIndex)).toBe(true);
+    expect(result.surface.layout!.capacityCars).toBeGreaterThan(0);
+    expect(result.kind).toBe("surface");
+    expect(JSON.stringify(input)).toBe(before);
+    const changed = structuredClone(boundaryPolygons); changed[1].outer[0][0] += 0.00001;
+    const stale = buildParkingSequenceRecommendation({ ...input, boundaryPolygons: changed });
+    expect(stale.kind).toBe("manual-review");
+    expect(stale.actionable).toBe(false);
+    expect(stale.surface.layout!.capacityCars).toBe(0);
+    expect(buildParkingSequenceRecommendation({ ...input, boundary, boundaryPolygons: [] }).surface.layout!.capacityCars).toBe(0);
+  });
+
+  it("does not apply a parking alternative to a stale plan or road snapshot", () => {
+    const plan = scenario();
+    const snapshot = geometry();
+    plan.placement.offsetXM++;
+    const stalePlan = buildParkingSequenceRecommendation({ scenario: plan, calculation: calculation(1), geometry: snapshot, boundary, roads });
+    expect(stalePlan.kind).toBe("manual-review");
+    const staleRoad = buildParkingSequenceRecommendation({ scenario: scenario(), calculation: calculation(1), geometry: snapshot, boundary,
+      roads: [{ ...roads[0], name: "changed" }] });
+    expect(staleRoad.actionable).toBe(false);
+    expect(staleRoad.currentLayout.capacityCars).toBe(0);
+  });
+
   it("recommends surface parking first when the actual layout meets demand", () => {
+    const plan = scenario(64);
     const result = buildParkingSequenceRecommendation({
-      scenario: scenario(),
+      scenario: plan,
       calculation: calculation(1),
-      geometry: geometry([
-        { x: -4, z: -2 },
-        { x: 4, z: -2 },
-        { x: 4, z: 6 },
-        { x: -4, z: 6 },
-      ]),
+      geometry: geometry(plan),
       boundary,
       roads,
     });
@@ -124,10 +140,11 @@ describe("planning parking sequence advisor", () => {
   });
 
   it("falls back to piloti when the building consumes the surface parking area", () => {
+    const plan = scenario(280);
     const result = buildParkingSequenceRecommendation({
-      scenario: scenario(),
+      scenario: plan,
       calculation: calculation(4),
-      geometry: geometry(parcelShape),
+      geometry: geometry(plan),
       boundary,
       roads,
     });
@@ -144,15 +161,14 @@ describe("planning parking sequence advisor", () => {
       { x: 2, z: 2 },
       { x: -2, z: 2 },
     ];
-    const tinyGeometry = {
-      ...geometry(tinyShape),
-      parcel: { ...geometry().parcel, polygon: tinyShape },
-    } as PlanningGeometrySnapshot;
+    const tinyBoundary = tinyShape.map(p => geo(p.x, p.z));
+    const plan = scenario(4);
+    const tinyGeometry = geometry(plan, tinyBoundary);
     const result = buildParkingSequenceRecommendation({
-      scenario: scenario(),
+      scenario: plan,
       calculation: calculation(2),
       geometry: tinyGeometry,
-      boundary,
+      boundary: tinyBoundary,
       roads,
     });
 
@@ -184,7 +200,7 @@ describe("planning parking sequence advisor", () => {
     const result = buildParkingSequenceRecommendation({
       scenario: referenceScenario,
       calculation: calculation(4),
-      geometry: geometry(parcelShape),
+      geometry: geometry(referenceScenario),
       boundary,
       roads,
     });

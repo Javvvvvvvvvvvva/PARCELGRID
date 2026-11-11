@@ -1,8 +1,9 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { FINANCIAL_SOURCE_FIELD_META, type FinancialSourceField } from "@/lib/finance/source-data-gate";
+import { FINANCIAL_SOURCE_FIELD_META } from "@/lib/finance/source-data-gate";
 import {
   buildVersionedSourceDocumentPath,
+  MAX_SOURCE_DOCUMENT_BYTES,
   isProjectSourceDocumentPath,
   sourceDocumentContentType,
   validateSourceDocumentBytes,
@@ -13,6 +14,10 @@ import {
   loadSourceDocument,
   saveSourceDocument,
 } from "@/lib/runtime/source-document-storage";
+import { requireApiCapability } from "@/lib/auth/request";
+import { appendAuditEvent } from "@/lib/audit/audit-ledger";
+import { tenantScopedProjectId } from "@/lib/auth/roles";
+import { readMultipartForm } from "@/lib/http/bounded-multipart";
 
 export const runtime = "nodejs";
 
@@ -20,41 +25,32 @@ interface RouteContext {
   params: Promise<{ projectId: string }>;
 }
 
-function hasWorkspaceAccess(request: NextRequest): boolean {
-  const expected = process.env.SOURCE_DOCUMENT_UPLOAD_KEY?.trim();
-  const supplied = request.headers.get("x-parcelgrid-upload-key")?.trim();
-  if (!expected && process.env.NODE_ENV !== "production") return true;
-  if (!expected || expected.length < 16 || !supplied) return false;
-  const expectedHash = createHash("sha256").update(expected).digest();
-  const suppliedHash = createHash("sha256").update(supplied).digest();
-  return timingSafeEqual(expectedHash, suppliedHash);
-}
-
-function unauthorized() {
-  return NextResponse.json(
-    { error: "원문 보관함 접근 키가 올바르지 않습니다." },
-    { status: 401 },
+function isSourceDocumentField(value: string): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(FINANCIAL_SOURCE_FIELD_META, value) ||
+    value === "tax-stabilized-sale" ||
+    value === "tax-long-term-hold"
   );
 }
 
-function isFinancialSourceField(value: string): value is FinancialSourceField {
-  return Object.prototype.hasOwnProperty.call(FINANCIAL_SOURCE_FIELD_META, value);
-}
-
 export async function POST(request: NextRequest, context: RouteContext) {
-  if (!hasWorkspaceAccess(request)) return unauthorized();
+  const authorization = await requireApiCapability(request, "evidence.upload");
+  if (!authorization.ok) return authorization.response;
   const { projectId } = await context.params;
+  const storageProjectId = tenantScopedProjectId(
+    authorization.principal,
+    projectId,
+  );
 
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return NextResponse.json({ error: "업로드 양식을 읽을 수 없습니다." }, { status: 400 });
-  }
+  const parsedForm = await readMultipartForm(request, {
+    fileField: "file", maxFileBytes: MAX_SOURCE_DOCUMENT_BYTES, fields: { field: 128 },
+  });
+  if (!parsedForm.ok) return parsedForm.response;
+  const { form } = parsedForm;
 
   const field = String(form.get("field") ?? "");
   const file = form.get("file");
-  if (!isFinancialSourceField(field)) {
+  if (!isSourceDocumentField(field)) {
     return NextResponse.json({ error: "유효한 계산 항목이 필요합니다." }, { status: 422 });
   }
   if (!(file instanceof File)) {
@@ -76,7 +72,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   try {
     const pathname = buildVersionedSourceDocumentPath(
-      projectId,
+      storageProjectId,
       field,
       file.name,
       sha256,
@@ -90,22 +86,34 @@ export async function POST(request: NextRequest, context: RouteContext) {
       sha256,
       uploadedAt: new Date().toISOString(),
     };
+    await appendAuditEvent({
+      principal: authorization.principal,
+      action: "evidence.uploaded",
+      resourceType: "project-evidence",
+      resourceId: projectId,
+      payload: { projectId, field, document },
+    });
     return NextResponse.json({ document }, { status: 201 });
-  } catch (error) {
-    console.error("source document upload failed", error);
+  } catch {
+    console.error("source document upload failed");
     return NextResponse.json(
-      { error: "로컬 비공개 원문 저장소에 파일을 쓰지 못했습니다." },
+      { error: "원문 저장 또는 감사 원장 기록을 완료하지 못했습니다." },
       { status: 503 },
     );
   }
 }
 
 export async function GET(request: NextRequest, context: RouteContext) {
-  if (!hasWorkspaceAccess(request)) return unauthorized();
+  const authorization = await requireApiCapability(request, "project.read");
+  if (!authorization.ok) return authorization.response;
   const { projectId } = await context.params;
+  const storageProjectId = tenantScopedProjectId(
+    authorization.principal,
+    projectId,
+  );
   const pathname = request.nextUrl.searchParams.get("pathname") ?? "";
   const requestedName = request.nextUrl.searchParams.get("fileName") ?? "source-document";
-  if (!pathname || !isProjectSourceDocumentPath(projectId, pathname)) {
+  if (!pathname || !isProjectSourceDocumentPath(storageProjectId, pathname)) {
     return NextResponse.json({ error: "이 프로젝트의 원문 경로가 아닙니다." }, { status: 400 });
   }
 
@@ -121,7 +129,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
       },
     });
   } catch (error) {
-    console.error("source document download failed", error);
-    return new NextResponse("Not found", { status: 404 });
+    const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
+    if (!missing) console.error("source document storage read failed");
+    return NextResponse.json(
+      {
+        code: missing ? "DOCUMENT_NOT_FOUND" : "STORAGE_UNAVAILABLE",
+        error: missing
+          ? "저장된 원문을 찾을 수 없습니다."
+          : "원문 저장소를 읽을 수 없습니다. 잠시 후 다시 시도해 주세요.",
+      },
+      { status: missing ? 404 : 503, headers: { "Cache-Control": "private, no-store" } },
+    );
   }
 }

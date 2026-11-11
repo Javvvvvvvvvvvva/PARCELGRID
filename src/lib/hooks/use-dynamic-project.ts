@@ -8,12 +8,21 @@
 
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+import { sessionDraftStorage } from "@/lib/auth/client-session";
+import { readWorkspaceDraft, type WorkspaceDraft } from "@/lib/workspace/workspace-draft";
+
 import { useQuery } from "@tanstack/react-query";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import type { ProjectComputed } from "@/lib/services/compute-project";
 import type { AcquisitionEstimateSnapshot, Parcel } from "@/lib/finance/types";
 import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
 import { DEMO_PROJECT_ID } from "@/lib/seed/demo-project-meta";
+import {
+  hashProjectWorkspacePayload,
+  validateProjectWorkspaceRecord,
+  type ProjectWorkspaceRecord,
+} from "@/lib/workspace/project-workspace";
 
 /**
  * Stored parcel shape — matches what /projects/new writes to sessionStorage.
@@ -28,6 +37,7 @@ export interface StoredParcel {
   pnu: string | null;
   lotArea: number;
   boundary?: [number, number][];
+  boundaryPolygons?: Parcel["boundaryPolygons"];
   roads?: { name: string | null; points: [number, number][] }[];
   zoning: string;
   zoneCode: string;
@@ -55,6 +65,13 @@ export interface DynamicProjectRequest {
   parcelDong: string;
 }
 
+export interface DynamicProjectLoadResult {
+  data: ProjectComputed;
+  workspace: ProjectWorkspaceRecord | null;
+  source: "demo" | "server-workspace" | "computed-local-intake";
+  localDraft?: WorkspaceDraft | null;
+}
+
 export function buildDynamicProjectRequest(
   stored: StoredParcel,
 ): DynamicProjectRequest {
@@ -75,6 +92,7 @@ export function buildDynamicProjectRequest(
       lng: stored.lng,
       lotArea: stored.lotArea,
       boundary: stored.boundary,
+      boundaryPolygons: stored.boundaryPolygons,
       roads: stored.roads,
       zoning: stored.zoning,
       zoneCode: stored.zoneCode,
@@ -101,7 +119,7 @@ export function buildDynamicProjectRequest(
 /** Read the stored parcel. Returns null if nothing stored. */
 export function readStoredParcel(): StoredParcel | null {
   if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem("parcelgrid:draft-parcel");
+  const raw = sessionDraftStorage.getItem("parcelgrid:draft-parcel");
   if (!raw) return null;
   try {
     return JSON.parse(raw) as StoredParcel;
@@ -116,13 +134,56 @@ export function readStoredParcel(): StoredParcel | null {
  * validated demo project is served by its deterministic seed endpoint.
  */
 export function useDynamicProject(projectId: string) {
-  return useQuery<ProjectComputed>({
-    queryKey: ["dynamic-project", projectId],
+  return useQuery<DynamicProjectLoadResult>({
+    queryKey: ["dynamic-project", projectId, JSON.stringify(readStoredParcel())],
     queryFn: async () => {
-      if (projectId === DEMO_PROJECT_ID) {
+
+      const workspaceResponse = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/workspace`,
+        { cache: "no-store", credentials: "same-origin" },
+      );
+      if (workspaceResponse.ok) {
+        const candidate = (await workspaceResponse.json()) as unknown;
+        const validation = validateProjectWorkspaceRecord(candidate, projectId);
+        if (!validation.valid || !validation.record) {
+          throw new Error(validation.errors.join(" "));
+        }
+        const actualHash = await hashProjectWorkspacePayload(
+          validation.record.payload,
+        );
+        if (actualHash !== validation.record.payloadHash) {
+          throw new Error("서버 프로젝트 Workspace의 SHA-256이 일치하지 않습니다.");
+        }
+        const localDraft = readWorkspaceDraft(projectId);
+        return {
+          data: localDraft?.payload.projectData ?? validation.record.payload.projectData,
+          workspace: validation.record,
+          source: "server-workspace",
+          localDraft,
+        };
+      }
+      if (workspaceResponse.status !== 404) {
+        const result = (await workspaceResponse.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(
+          result?.error ??
+            `서버 프로젝트 Workspace 조회 실패 (${workspaceResponse.status})`,
+        );
+      }
+
+      const localDraft = readWorkspaceDraft(projectId);
+      if (localDraft) {
+        return { data: localDraft.payload.projectData, workspace: null, source: "computed-local-intake", localDraft };
+      }
+      if (projectId === DEMO_PROJECT_ID && readStoredParcel()?.id !== projectId) {
         const res = await fetch(`/api/projects/${projectId}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return {
+          data: (await res.json()) as ProjectComputed,
+          workspace: null,
+          source: "demo",
+        };
       }
 
       // Dynamic flow — read stored parcel
@@ -160,9 +221,16 @@ export function useDynamicProject(projectId: string) {
         );
       }
 
-      return res.json();
+      return {
+        data: (await res.json()) as ProjectComputed,
+        workspace: null,
+        source: "computed-local-intake",
+      };
     },
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: "always",
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }

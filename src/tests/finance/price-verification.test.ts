@@ -40,16 +40,51 @@ function priceRecord(): PriceVerificationRecord {
 function expertRecord(
   discipline: ExpertReviewRecord["discipline"]
 ): ExpertReviewRecord {
+  const reviewerRole = {
+    architect: "architect",
+    developer: "developer",
+    "finance-tax": "tax-advisor",
+    "insurance-risk": "insurance-underwriter",
+    "sales-marketing": "sales-marketing",
+  } as const;
   return {
     discipline,
     status: "approved",
     reviewer: "검토자",
     organization: "전문가",
+    reviewerRole: reviewerRole[discipline],
+    requestedBy: "프로젝트 담당자",
+    requestedAt: "2026-07-21",
     evidenceRef: `${discipline}-memo.pdf`,
     notes: "검토 범위 내 승인",
     reviewedAt: "2026-07-22",
     updatedAt: "2026-07-22T12:00:00.000Z",
     snapshotKey: "PG-REVIEW-TEST",
+    attestations: {
+      snapshotReviewed: true,
+      evidenceReviewed: true,
+      preliminaryLimitAcknowledged: true,
+    },
+    history: [
+      {
+        status: "requested",
+        actor: "프로젝트 담당자",
+        occurredAt: "2026-07-21T09:00:00.000Z",
+        snapshotKey: "PG-REVIEW-TEST",
+      },
+      {
+        status: "in-review",
+        actor: "검토자",
+        occurredAt: "2026-07-22T09:00:00.000Z",
+        snapshotKey: "PG-REVIEW-TEST",
+      },
+      {
+        status: "approved",
+        actor: "검토자",
+        occurredAt: "2026-07-22T12:00:00.000Z",
+        snapshotKey: "PG-REVIEW-TEST",
+      },
+    ],
   };
 }
 
@@ -86,11 +121,12 @@ describe("expert review workflow", () => {
     expect(validation.valid).toBe(false);
   });
 
-  it("opens final reporting only after all four disciplines approve", () => {
+  it("opens final reporting only after all five disciplines approve", () => {
     const partial: ExpertReviewMap = {
       architect: expertRecord("architect"),
       developer: expertRecord("developer"),
       "finance-tax": expertRecord("finance-tax"),
+      "insurance-risk": expertRecord("insurance-risk"),
     };
     expect(buildExpertReviewSummary(partial).ready).toBe(false);
     const complete: ExpertReviewMap = {
@@ -99,6 +135,6 @@ describe("expert review workflow", () => {
     };
     const summary = buildExpertReviewSummary(complete);
     expect(summary.ready).toBe(true);
-    expect(summary.approvedCount).toBe(4);
+    expect(summary.approvedCount).toBe(5);
   });
 });

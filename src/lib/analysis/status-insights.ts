@@ -1,9 +1,11 @@
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { Parcel } from "@/lib/finance/types";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import { sunRestrictionApplies } from "@/lib/finance/sun-envelope";
 import { computeExistingRatios, headroomPct } from "./existing-building-metrics";
 import { analyzeOrientation, type Direction } from "@/lib/geo/orientation";
-import { analyzeFrontage } from "@/lib/geo/road-frontage";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 import { getBuildingRegistryStatus } from "./status-summary";
 import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
@@ -91,25 +93,25 @@ function ensureClosedBoundary(boundary: [number, number][]): [number, number][] 
 }
 
 export function buildRoadOrientationInsight(parcel: Parcel): RoadOrientationInsight {
-  const rawBoundary = parcel.boundary;
-  const boundary = rawBoundary && rawBoundary.length >= 3 ? ensureClosedBoundary(rawBoundary) : null;
+  const region = resolvePlanningParcel(parcel);
   const roads = parcel.roads ?? [];
-  const orientation = boundary ? analyzeOrientation(boundary) : null;
-  const frontage = boundary && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const orientations = region.available ? region.source.map(part => analyzeOrientation(ensureClosedBoundary(part.outer))) : [];
+  const frontage = region.available ? analyzeParcelFrontage(region.source, roads, region.origin) : null;
   const manualParcel = parcel.inputProvenance?.mode === "manual";
-
-  const northEdge = orientation?.edges.find((e) => e.index === orientation.northEdgeIndex) ?? null;
-  const frontEdge =
-    frontage && frontage.frontIndex >= 0
-      ? orientation?.edges.find((e) => e.index === frontage.frontIndex) ?? null
-      : null;
+  const primary = frontage?.frontages.reduce<(NonNullable<typeof frontage>["frontages"])[number] | null>(
+    (best, edge) => !best || edge.roadDistM < best.roadDistM ? edge : best, null) ?? null;
+  const north = frontage?.edges.filter(edge => edge.ringIndex === 0).reduce<typeof primary>(
+    (best, edge) => !best || edge.edge[0].z + edge.edge[1].z < best.edge[0].z + best.edge[1].z ? edge : best, null) ?? null;
+  const frontDirection = primary ? orientations[primary.polygonIndex]?.edges.find(edge => edge.index === primary.edgeIndex)?.direction ?? null : null;
+  const northDirection = north ? orientations[north.polygonIndex]?.edges.find(edge => edge.index === north.edgeIndex)?.direction ?? null : null;
 
   const notes: string[] = [];
-  if (!orientation) notes.push("필지 경계 좌표가 부족해 방위 분석을 완료하지 못했습니다.");
-  if (!frontage) {
+  if (!region.available) notes.push("전체 필지 경계를 확인하지 못해 방위 분석을 보류했습니다. 일부 외곽선으로 대체하지 않습니다.");
+  if (region.available && !region.simple) notes.push(`전체 ${region.source.length}개 조각과 내부 제외 영역을 반영했습니다. 전면은 가장 가까운 접근 후보, 북측은 가장 북쪽 외곽선의 방위 요약이며 조각별 법규 적용은 별도 검토가 필요합니다.`);
+  if (!frontage || !roads.length) {
     notes.push("도로 중심선 데이터가 부족해 전면 도로를 판정하지 못했습니다.");
-  } else if (frontage.frontIndex < 0) {
-    notes.push("가까운 도로 중심선이 12m 이상 떨어져 있어 접도 여부를 추가 확인해야 합니다.");
+  } else if (!primary) {
+    notes.push("12m 이내의 도로 접근 방향 후보를 확인하지 못했습니다. 거리·방향·조각 간 간섭과 접도 여부를 추가 확인해야 합니다.");
   } else {
     notes.push(
       manualParcel
@@ -120,22 +122,15 @@ export function buildRoadOrientationInsight(parcel: Parcel): RoadOrientationInsi
   notes.push("도로 폭은 현재 연동 데이터에 포함되지 않아 별도 확인이 필요합니다.");
 
   return {
-    orientationAvailable: Boolean(orientation),
-    frontageAvailable: Boolean(frontage && frontage.frontIndex >= 0),
-    frontDirection: frontEdge?.direction ?? null,
-    frontLengthM:
-      frontage && frontage.frontIndex >= 0
-        ? frontage.edges.find((e) => e.index === frontage.frontIndex)?.lengthM ?? null
-        : null,
-    roadName: frontage?.roadName ?? null,
-    roadCenterDistanceM:
-      frontage && frontage.frontIndex >= 0 ? frontage.frontDistM : null,
-    northDirection: northEdge?.direction ?? null,
-    northLengthM: northEdge?.lengthM ?? null,
-    northIsRoad:
-      frontage && frontage.frontIndex >= 0 && orientation
-        ? frontage.frontIndex === orientation.northEdgeIndex
-        : null,
+    orientationAvailable: Boolean(region.available && orientations.length && orientations.every(Boolean)),
+    frontageAvailable: Boolean(primary),
+    frontDirection,
+    frontLengthM: primary?.lengthM ?? null,
+    roadName: primary?.roadName ?? null,
+    roadCenterDistanceM: primary?.roadDistM ?? null,
+    northDirection,
+    northLengthM: north?.lengthM ?? null,
+    northIsRoad: north && roads.length ? north.role === "전면" : null,
     sunReviewApplies: sunRestrictionApplies(parcel.zoning),
     notes,
   };
@@ -196,6 +191,9 @@ export function buildDataReadinessInsight(
     regulatoryConstraintIsDecisionGrade(constraints?.bcr);
   const hasRegulationReference = parcel.maxFAR > 0 && parcel.maxBCR > 0;
   const manualParcel = parcel.inputProvenance?.mode === "manual";
+  const hasLookupProvenance = Boolean(parcel.inputProvenance);
+  const cadastralFacts = parcel.inputProvenance?.parcelFacts === "vworld-cadastral";
+  const cadastralGeometry = parcel.inputProvenance?.geometry === "vworld-cadastral";
   const userEnteredRegulation =
     constraints?.far.status === "user-entered" ||
     constraints?.bcr.status === "user-entered";
@@ -203,31 +201,31 @@ export function buildDataReadinessInsight(
   const items: DataCheckItem[] = [
     {
       label: "주소·좌표",
-      status: parcel.lat != null && parcel.lng != null ? "available" : "missing",
-      source: "Kakao 지오코딩",
+      status: parcel.lat != null && parcel.lng != null ? hasLookupProvenance ? "available" : "derived" : "missing",
+      source: hasLookupProvenance ? "Kakao 지오코딩" : "시드·기존 좌표 · 조회 출처 미확인",
     },
     {
       label: "대지면적·PNU",
       status:
         parcel.lotArea > 0 && parcel.id.length > 0
-          ? manualParcel
-            ? "derived"
-            : "available"
+          ? cadastralFacts
+            ? "available"
+            : "derived"
           : "missing",
-      source: manualParcel ? "Kakao 주소 기반 PNU · 사용자 면적" : "VWorld 지적",
+      source: manualParcel ? "Kakao 주소 기반 PNU · 사용자 면적" : cadastralFacts ? "VWorld 지적" : "시드·기존 값 · 조회 출처 미확인",
     },
     {
       label: "필지 경계",
       status:
-        parcel.boundary && parcel.boundary.length >= 3
-          ? manualParcel
-            ? "derived"
-            : "available"
+        hasParcelBoundary(parcel)
+          ? cadastralGeometry
+            ? "available"
+            : "derived"
           : "missing",
       source:
         parcel.inputProvenance?.geometry === "user-geojson"
           ? "사용자 GeoJSON · WGS84"
-          : "VWorld 연속지적도",
+          : cadastralGeometry ? "VWorld 연속지적도" : manualParcel ? "사용자 경계 미연결" : "시드·기존 경계 · 조회 출처 미확인",
     },
     {
       label: "용도지역",
@@ -487,9 +485,9 @@ export function buildExistingReviewOptions(parcel: Parcel): ExistingReviewOption
       status: oldBuilding && highFarHeadroom ? "검토 여지 큼" : "비교 검토",
       tone: oldBuilding && highFarHeadroom ? "positive" : "neutral",
       summary:
-        "노후도와 법정 용적률 미사용 여유는 신축 검토 근거지만, 실제 가능 규모와 사업성 확인 전에는 결론을 내리지 않습니다.",
+        "노후도와 입력 용적률 대비 산술 여유는 예비 검토 자료입니다. 관할 원문·실제 가능 규모·사업성 확인 전에는 결론을 내리지 않습니다.",
       points: [
-        farHeadroom != null ? `법정 용적률 잔여 ${farHeadroom.toFixed(1)}%p` : "용적률 잔여 미확인",
+        farHeadroom != null ? `입력 용적률 대비 산술 여유 ${farHeadroom.toFixed(1)}%p · 법적 여유 미확정` : "용적률 잔여 미확인",
         parcel.demolitionCost && parcel.demolitionCost > 0
           ? `개략 철거비 ${parcel.demolitionCost.toLocaleString("ko-KR")}만원 반영`
           : "철거비 개략값 확인 필요",

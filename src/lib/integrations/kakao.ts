@@ -11,17 +11,32 @@
  */
 
 import { z } from "zod";
+import { discardProviderBody, readProviderJson } from "@/lib/http/provider-body";
+import { createProviderDeadline } from "@/lib/http/provider-deadline";
 
 const KEY = process.env.KAKAO_REST_API_KEY;
 const BASE = "https://dapi.kakao.com";
 
+async function fetchKakao(url: string, init: RequestInit): Promise<Response> {
+  try { return await fetch(url, init); }
+  catch (error) {
+    if (init.signal?.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) throw new DOMException("Kakao request interrupted.", "TimeoutError");
+    throw new Error("Kakao network request failed");
+  }
+}
+
 /* ─── Response shape (only fields we use) ──────────────────────────── */
 
+const numericText = z.string().trim().min(1).max(32).regex(/^-?\d+(?:\.\d+)?$/);
+const coordinate = (min: number, max: number) => numericText.refine(value => {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= min && number <= max;
+});
 const AddressDocSchema = z.object({
   address_name: z.string(),
   address_type: z.enum(["REGION", "ROAD", "REGION_ADDR", "ROAD_ADDR"]),
-  x: z.string(),
-  y: z.string(),
+  x: coordinate(-180, 180),
+  y: coordinate(-90, 90),
   address: z
     .object({
       address_name: z.string(),
@@ -53,7 +68,7 @@ const AddressDocSchema = z.object({
 });
 
 const AddressSearchResponse = z.object({
-  documents: z.array(AddressDocSchema),
+  documents: z.array(AddressDocSchema).max(15),
   meta: z.object({
     total_count: z.number(),
     pageable_count: z.number(),
@@ -136,24 +151,23 @@ async function fetchAddressDocuments(
   url.searchParams.set("query", query);
   url.searchParams.set("size", String(Math.min(Math.max(size, 1), 15)));
 
-  const res = await fetch(url.toString(), {
+  const budget = createProviderDeadline(8_000);
+  const signal = budget.signal;
+  const res = await fetchKakao(url.toString(), {
     headers: { Authorization: `KakaoAK ${KEY}` },
-    signal: AbortSignal.timeout(8_000),
+    signal,
   });
-
+  budget.check(res);
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error("KAKAO error body:", body);
-    throw new Error(`Kakao geocode HTTP ${res.status}: ${body}`);
+    discardProviderBody(res);
+    throw new Error(`Kakao geocode HTTP ${res.status}`);
   }
 
-  const raw = await res.json();
+  const raw = await readProviderJson(res, { maxBytes: 1_048_576, timeoutMs: budget.remainingMs(), signal });
   const parsed = AddressSearchResponse.safeParse(raw);
+  budget.check();
   if (!parsed.success) {
-    console.error("KAKAO parse error:", parsed.error.issues);
-    throw new Error(
-      `Kakao response shape unexpected: ${parsed.error.issues[0]?.message}`
-    );
+    throw new Error("Kakao response shape unexpected");
   }
 
   return parsed.data.documents;
@@ -166,7 +180,6 @@ export async function geocodeAddress(
 ): Promise<GeocodeResult | null> {
   const docs = await fetchAddressDocuments(query, 1);
   if (docs.length === 0) {
-    console.log("KAKAO: no results for query:", query);
     return null;
   }
   return parseAddressDoc(docs[0]);
@@ -230,24 +243,26 @@ export async function searchNearbyStations(
   url.searchParams.set("sort", "distance");
   url.searchParams.set("size", "5");
 
-  const res = await fetch(url.toString(), {
+  const budget = createProviderDeadline(8_000);
+  const signal = budget.signal;
+  const res = await fetchKakao(url.toString(), {
     headers: { Authorization: `KakaoAK ${KEY}` },
     cache: "no-store",
+    signal,
   });
-
+  budget.check(res);
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Kakao station search HTTP ${res.status}: ${body}`);
+    discardProviderBody(res);
+    throw new Error(`Kakao station search HTTP ${res.status}`);
   }
 
-  const data = (await res.json()) as {
-    documents?: Array<{
-      place_name: string;
-      x: string;
-      y: string;
-      distance: string;
-    }>;
-  };
+  const parsed = z.object({ documents: z.array(z.object({
+    place_name: z.string().trim().min(1).max(200), x: coordinate(-180, 180), y: coordinate(-90, 90),
+    distance: numericText.refine(value => Number(value) >= 0 && Number(value) <= 20_000),
+  })).max(5) }).safeParse(await readProviderJson(res, { maxBytes: 1_048_576, timeoutMs: budget.remainingMs(), signal }));
+  budget.check();
+  if (!parsed.success) throw new Error("Kakao station response shape unexpected");
+  const data = parsed.data;
 
   return (data.documents ?? []).map((d) => ({
     name: d.place_name,

@@ -1,5 +1,7 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 /**
  * 실거래 비교 — PARCELGRID (PDF p5 재현, 정직판).
  *
@@ -204,6 +206,8 @@ export default function CompsPage({
           <KakaoMap
             centerLat={parcel.lat}
             centerLng={parcel.lng}
+            boundary={parcel.boundary}
+            boundaryPolygons={parcel.boundaryPolygons}
             subjectLabel={parcel.address?.split(" ").slice(-2).join(" ") ?? "대상 대지"}
             subjectPPP={subjectPPP}
             comps={compMarkers}

@@ -4,12 +4,14 @@ import {
   DEAL_STRESS_MODEL_VERSION,
 } from "../../lib/finance/deal-stress-test";
 import { passesDealRescueTarget } from "../../lib/finance/deal-rescue";
+import { revenuePricingFromAssumptions } from "../../lib/finance/revenue-contract";
 import {
   calculateScenario,
   defaultAssumptions,
   defaultProgram,
 } from "../../lib/finance/scenario";
 import type { Parcel, Scenario } from "../../lib/finance/types";
+import { integratedVerificationFixture } from "../helpers/integrated-verification-fixture";
 
 const parcel: Parcel = {
   id: "DEAL-STRESS-PARCEL",
@@ -52,7 +54,10 @@ describe("Deal stress test", () => {
     expect(stress.modelVersion).toBe(DEAL_STRESS_MODEL_VERSION);
     expect(costSum).toBeCloseTo(stress.baseline.totalCost, 6);
     expect(stress.reconciliationError).toBeCloseTo(0, 8);
-    expect(stress.gateGap.profit).toBe(Math.max(0, -stress.baseline.profit));
+    expect(stress.gateGap.profit).toBe(Math.max(0, -stress.baseline.profitUnroundedManwon!));
+    expect(stress.gateGap.npv).toBe(Math.max(0, -stress.baseline.npvUnroundedManwon!));
+    expect(stress.gateGap.irrPctPoint).toBe(stress.baseline.irrUnroundedPct == null
+      ? null : Math.max(0, stress.targetIRR - stress.baseline.irrUnroundedPct));
   });
 
   it("finds land and revenue survival lines at the full profit/NPV/IRR gate", () => {
@@ -103,6 +108,10 @@ describe("Deal stress test", () => {
 
   it("stress cases recalculate the ledger without mutating inputs", () => {
     const scenario = makeScenario({ salePricePerSqM: 15_000_000 });
+    scenario.revenuePricing = revenuePricingFromAssumptions(
+      scenario.assumptions,
+    );
+    scenario.assumptions.salePricePerSqM = 1_000_000;
     const healthyParcel = { ...parcel, acquiredPrice: 5_000 };
     const beforeParcel = JSON.stringify(healthyParcel);
     const beforeScenario = JSON.stringify(scenario);
@@ -113,6 +122,13 @@ describe("Deal stress test", () => {
     expect(stress.stressCases.every((row) => row.result.totalMonths > 0)).toBe(
       true,
     );
+    expect(
+      stress.thresholds.find((row) => row.id === "revenue-price")?.current,
+    ).toBe(15_000_000);
+    expect(
+      stress.stressCases.find((row) => row.id === "revenue-down-10")?.result
+        .totalRevenue,
+    ).toBeCloseTo(stress.baseline.totalRevenue * 0.9, 0);
     expect(JSON.stringify(healthyParcel)).toBe(beforeParcel);
     expect(JSON.stringify(scenario)).toBe(beforeScenario);
   });
@@ -132,5 +148,52 @@ describe("Deal stress test", () => {
       true,
     );
     expect(stress.geometryPolicy).toContain("저장된 법규·배치 검증 계획안");
+  });
+
+  it.each(["modest", "large"])("searches the valid cost domain with a %s material credit", size => {
+    const fixture = integratedVerificationFixture();
+    const creditParcel = { ...fixture.data.parcel, acquiredPrice: 55_000 };
+    const scenario = fixture.data.scenarios[0]._raw;
+    const original = calculateScenario({ parcel: creditParcel, scenario });
+    scenario.program.areaContract!.materialAdjustmentCostManwon = size === "modest" ? -100 : -original.hardCost * 0.95;
+    const before = structuredClone(scenario);
+    const atRate = (rate: number) => calculateScenario({
+      parcel: creditParcel,
+      scenario: { ...scenario, assumptions: { ...scenario.assumptions, constCostPerSqM: rate } },
+    });
+    expect(() => atRate(0)).toThrow("음수 공사비");
+    if (size === "large") expect(() => atRate(scenario.assumptions.constCostPerSqM * 0.85)).toThrow("음수 공사비");
+
+    const stress = buildDealStressTest(creditParcel, scenario);
+    const threshold = stress.thresholds.find(row => row.id === "construction-cost")!;
+    expect(stress.baseline.hardCost).toBeGreaterThan(0);
+    expect(threshold.status).toBe("change-required");
+    expect(threshold.threshold).toBeGreaterThan(0);
+    expect(passesDealRescueTarget(atRate(threshold.threshold!), stress.targetIRR)).toBe(true);
+    expect(passesDealRescueTarget(atRate(threshold.threshold! + 100), stress.targetIRR)).toBe(false);
+    expect(scenario).toEqual(before);
+  });
+
+  it("caps cost and revenue threshold probes at the financial input limits", () => {
+    const scenario = makeScenario({ constCostPerSqM: 500_000_000, salePricePerSqM: 500_000_000 });
+    const stress = buildDealStressTest(parcel, scenario);
+    for (const id of ["construction-cost", "revenue-price"]) {
+      const threshold = stress.thresholds.find(row => row.id === id)!.threshold;
+      if (threshold !== null) expect(threshold).toBeLessThanOrEqual(1_000_000_000);
+    }
+    expect(stress.stressCases).toHaveLength(5);
+    expect(stress.bounds.join(" ")).toContain("1000000000");
+  });
+
+  it("reports an unsupported named shock without reducing or substituting its result", () => {
+    expect(() => buildDealStressTest(parcel, makeScenario({ constCostPerSqM: 1_000_000_000 })))
+      .toThrow("기본 공사단가 +10% 분석을 완료하지 못했습니다");
+  });
+
+  it("still rejects a negative-hard-cost baseline before searching", () => {
+    const fixture = integratedVerificationFixture();
+    const scenario = fixture.data.scenarios[0]._raw;
+    scenario.program.areaContract!.materialAdjustmentCostManwon = -fixture.data.scenarios[0].hardCost - 1;
+    expect(() => buildDealStressTest(fixture.data.parcel, scenario)).toThrow("음수 공사비");
   });
 });

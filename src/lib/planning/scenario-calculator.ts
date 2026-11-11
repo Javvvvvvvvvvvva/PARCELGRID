@@ -1,14 +1,43 @@
-import { calcParking } from "@/lib/finance/parking";
-import type { AssumptionSet, BuildingType } from "@/lib/finance/types";
+import {
+  createRevenuePricingSnapshot,
+  DEFAULT_OPERATING_EXPENSE_RATE_PCT,
+  DEFAULT_STABILIZATION_FACTOR_PCT,
+  revenuePricingFromAssumptions,
+  valueRevenueAreaPools,
+} from "@/lib/finance/revenue-contract";
+import type {
+  AssumptionSet,
+  FinancialRevenueProjectionSnapshot,
+} from "@/lib/finance/types";
+import {
+  calculateParkingRequirement,
+  type ParkingExclusiveAreaStatus,
+  type ParkingUseInput,
+} from "@/lib/regulatory/parking-rules";
 import {
   constraintStatusLabel,
   regulatoryConstraintIsDecisionGrade,
   type RegulatoryConstraintEvidence,
 } from "@/lib/regulatory/constraints";
 import {
-  resolveZoneRevenueModel,
   summarizePlanningScenario,
 } from "@/lib/planning/scenario-utils";
+import { additionalDwellingCostManwon } from "@/lib/planning/dwelling-program";
+import { evaluateQuantityCost } from "@/lib/planning/quantity-cost";
+import { quantityCostPlanBasis } from "@/lib/planning/quantity-cost-contract";
+import { layoutFinancePlanningCheck } from "@/lib/planning/layout-finance-state";
+import { applyDwellingSalePricing } from "@/lib/planning/dwelling-pricing";
+import { screenZoningUse } from "@/lib/regulatory/zoning-use-screening";
+import {
+  planningRevenueAreas,
+  unsupportedRevenueZones,
+} from "@/lib/planning/revenue-pools";
+import {
+  evaluateSunlightRegulation,
+  type SunlightInputStatus,
+  type SunlightLegalUse,
+  type SunlightRegulationResult,
+} from "@/lib/regulatory/sunlight-rules";
 import {
   calculatePlanningMaterialAdjustment,
   PLANNING_FACADE_LABELS,
@@ -28,7 +57,6 @@ import type {
 } from "@/lib/planning/types";
 
 const WON_PER_MANWON = 10_000;
-const RETAIL_AREA_PER_CAR_SQM = 134;
 const CONVENTIONAL_PARKING_AREA_PER_CAR_SQM = 25;
 const MECHANICAL_PARKING_AREA_PER_CAR_SQM = 16;
 const DEFAULT_ROOF_ALLOWANCE_M = 1.4;
@@ -61,50 +89,181 @@ function preliminaryFarZoneArea(zone: FloorZone): number {
   return nonNegative(zone.areaSqm);
 }
 
-function primaryResidentialType(scenario: PlanningScenario, units: number): BuildingType {
+function primaryResidentialType(
+  scenario: PlanningScenario,
+  units: number
+): "single-house" | "multi-family" {
   if (scenario.primaryUse === "single-house") return "single-house";
   if (scenario.primaryUse === "multi-family") return "multi-family";
   return units <= 1 ? "single-house" : "multi-family";
 }
 
+function sunlightLegalUseForScenario(scenario: PlanningScenario): {
+  legalUse: SunlightLegalUse;
+  status: SunlightInputStatus;
+} {
+  if (scenario.sunlightLegalUse) {
+    return {
+      legalUse: scenario.sunlightLegalUse,
+      status: scenario.sunlightLegalUseStatus ?? "user-entered",
+    };
+  }
+
+  if (scenario.primaryUse === "single-house") {
+    return { legalUse: "detached-house", status: "source-backed" };
+  }
+  if (scenario.primaryUse === "multi-family") {
+    // 기존 UI의 "다가구·다세대" 선택은 단독주택과 공동주택을 함께 뜻한다.
+    return { legalUse: "unknown-residential", status: "user-entered" };
+  }
+  if (scenario.primaryUse === "mixed") {
+    const hasResidential = scenario.floorPrograms.some((floor) =>
+      floor.zones.some((zone) => zone.useType === "residential")
+    );
+    return hasResidential
+      ? { legalUse: "unknown-residential", status: "user-entered" }
+      : { legalUse: "general-building", status: "source-backed" };
+  }
+  return { legalUse: "general-building", status: "source-backed" };
+}
+
+function assessSunlight(
+  scenario: PlanningScenario,
+  parcel: PlanningCalculationParcel,
+  buildingHeightM: number,
+  floorsAbove: number
+): SunlightRegulationResult {
+  const legalUse = sunlightLegalUseForScenario(scenario);
+  return evaluateSunlightRegulation({
+    context: {
+      address: parcel.address,
+      asOf: parcel.sunlightRuleAsOf,
+    },
+    zoning: parcel.zoning,
+    zoningStatus: parcel.zoningStatus,
+    buildingHeightM,
+    floorsAbove,
+    legalUse: legalUse.legalUse,
+    legalUseStatus: legalUse.status,
+    northBoundary: parcel.sunlightNorthBoundary,
+    daylight: {
+      sameLotBuildingCount: 1,
+      sameLotBuildingCountStatus: "source-backed",
+      ...parcel.sunlightDaylight,
+    },
+  });
+}
+
 function assessParking(
   scenario: PlanningScenario,
-  residentialAreaSqm: number,
-  commercialAreaSqm: number,
-  unitCount: number,
-  parkingAreaSqm: number
+  parkingAreaSqm: number,
+  context: Pick<PlanningCalculationParcel, "address" | "parkingRuleAsOf">
 ): PlanningParkingAssessment {
-  const basis: string[] = [];
-  const reference: string[] = [];
-  let requiredCars = 0;
-  let estimated = false;
-  let exemptPossible = false;
+  const zones = scenario.floorPrograms.flatMap((floor) => floor.zones);
+  const residentialZones = zones.filter((zone) => zone.useType === "residential");
+  const areaFor = (...useTypes: FloorUseType[]) =>
+    zones
+      .filter((zone) => useTypes.includes(zone.useType))
+      .reduce((sum, zone) => sum + nonNegative(zone.areaSqm), 0);
+  const baseAreas = {
+    residential: areaFor("residential"),
+    retail: areaFor("retail"),
+    office: areaFor("office"),
+    other: areaFor("storage", "other"),
+  };
+  const allocatableCommonAreaSqm = areaFor("common", "mechanical");
+  const allocationBase = Object.values(baseAreas).reduce(
+    (sum, area) => sum + area,
+    0
+  );
+  const facilityArea = (area: number) =>
+    area +
+    (allocationBase > 0
+      ? allocatableCommonAreaSqm * (area / allocationBase)
+      : 0);
 
-  if (residentialAreaSqm > 0 || unitCount > 0) {
-    const residential = calcParking(
-      primaryResidentialType(scenario, unitCount),
-      residentialAreaSqm,
+  const unitCount = residentialZones.reduce(
+    (sum, zone) => sum + Math.max(0, Math.floor(zone.unitCount)),
+    0
+  );
+  const hasCompleteExclusiveArea =
+    residentialZones.length > 0 &&
+    residentialZones.every(
+      (zone) =>
+        Number.isFinite(zone.parkingExclusiveAreaSqm) &&
+        Number(zone.parkingExclusiveAreaSqm) > 0 &&
+        zone.parkingExclusiveAreaStatus != null
+    );
+  const exclusiveAreaSqm = hasCompleteExclusiveArea
+    ? residentialZones.reduce(
+        (sum, zone) => sum + nonNegative(zone.parkingExclusiveAreaSqm ?? 0),
+        0
+      )
+    : undefined;
+  const exclusiveAreaStatuses = residentialZones
+    .map((zone) => zone.parkingExclusiveAreaStatus)
+    .filter((status): status is ParkingExclusiveAreaStatus => status != null);
+  const exclusiveAreaStatus = hasCompleteExclusiveArea
+    ? exclusiveAreaStatuses.includes("user-entered")
+      ? "user-entered"
+      : exclusiveAreaStatuses.includes("source-backed")
+        ? "source-backed"
+        : "expert-approved"
+    : undefined;
+  const uses: ParkingUseInput[] = [];
+
+  if (baseAreas.residential > 0) {
+    uses.push({
+      use: primaryResidentialType(scenario, unitCount),
+      facilityAreaSqm: facilityArea(baseAreas.residential),
       unitCount,
-      0
-    );
-    requiredCars += residential.requiredCars;
-    estimated ||= residential.estimated;
-    exemptPossible ||= residential.exemptPossible;
-    basis.push(`주거: ${residential.basis}`);
-    reference.push(residential.reference);
+      exclusiveAreaSqm,
+      exclusiveAreaStatus,
+      dwellingGroups: hasCompleteExclusiveArea
+        ? residentialZones.map((zone) => ({
+            unitCount: zone.unitCount,
+            exclusiveAreaPerUnitSqm: (zone.parkingExclusiveAreaSqm ?? 0) / zone.unitCount,
+            estimated: zone.unitCount !== 1,
+          }))
+        : undefined,
+    });
+  }
+  if (baseAreas.retail > 0) {
+    uses.push({ use: "retail", facilityAreaSqm: facilityArea(baseAreas.retail) });
+  }
+  if (baseAreas.office > 0) {
+    uses.push({ use: "office", facilityAreaSqm: facilityArea(baseAreas.office) });
+  }
+  if (baseAreas.other > 0 || (allocationBase === 0 && allocatableCommonAreaSqm > 0)) {
+    uses.push({
+      use: "other",
+      facilityAreaSqm:
+        facilityArea(baseAreas.other) +
+        (allocationBase === 0 ? allocatableCommonAreaSqm : 0),
+    });
   }
 
-  if (commercialAreaSqm > 0) {
-    const commercialCars = Math.ceil(commercialAreaSqm / RETAIL_AREA_PER_CAR_SQM);
-    requiredCars += commercialCars;
-    basis.push(
-      `상가·업무: ${commercialAreaSqm.toFixed(1)}㎡ ÷ ${RETAIL_AREA_PER_CAR_SQM}㎡/대 → ${commercialCars}대`
-    );
-    reference.push("주차장법 시행령 별표1 (시설면적 기준 · 관할 조례 확인)");
-  }
+  const requirement = calculateParkingRequirement({
+    context: {
+      address: context.address,
+      asOf: context.parkingRuleAsOf,
+    },
+    uses,
+  });
+  const invalidExclusiveArea = residentialZones.some(
+    (zone) =>
+      zone.parkingExclusiveAreaSqm != null &&
+      zone.parkingExclusiveAreaSqm > zone.areaSqm + 0.01
+  );
+  const warnings = invalidExclusiveArea
+    ? [
+        ...requirement.warnings,
+        "주차 산정용 주거 전용면적이 해당 주거 구역 면적을 초과합니다.",
+      ]
+    : requirement.warnings;
 
   const providedCars = Math.max(0, Math.floor(scenario.parking.providedCars));
-  const shortfallCars = Math.max(0, requiredCars - providedCars);
+  const shortfallCars = Math.max(0, requirement.requiredCars - providedCars);
   const programBasedStrategy = ["piloti", "basement", "mechanical", "mixed"].includes(
     scenario.parking.strategy
   );
@@ -118,34 +277,19 @@ function assessParking(
       : null;
 
   return {
-    requiredCars,
+    requiredCars: requirement.requiredCars,
     providedCars,
     shortfallCars,
     estimatedCapacityFromProgram,
-    estimated,
-    exemptPossible,
-    basis,
-    reference: unique(reference),
+    estimated: requirement.estimated,
+    exemptPossible: requirement.exemptPossible,
+    basis: requirement.basis,
+    reference: unique(requirement.references),
+    decisionGrade: requirement.decisionGrade && !invalidExclusiveArea,
+    warnings,
+    rule: requirement.rule,
+    components: requirement.components,
   };
-}
-
-function salePriceForUse(
-  useType: FloorUseType,
-  assumptions: PlanningEconomicsAssumptions
-): number {
-  if (useType === "retail" || useType === "office") {
-    return nonNegative(assumptions.commercialSalePricePerSqmWon);
-  }
-  return nonNegative(assumptions.residentialSalePricePerSqmWon);
-}
-
-function rentForUse(
-  useType: FloorUseType,
-  assumptions: PlanningEconomicsAssumptions
-): number {
-  if (useType === "retail") return nonNegative(assumptions.retailRentPerSqmMonthWon);
-  if (useType === "office") return nonNegative(assumptions.officeRentPerSqmMonthWon);
-  return nonNegative(assumptions.residentialRentPerSqmMonthWon);
 }
 
 function calculateEconomics(
@@ -155,7 +299,11 @@ function calculateEconomics(
   aboveGroundAreaSqm: number,
   basementAreaSqm: number,
   calculatedAt?: string
-): PlanningEconomicsPreview {
+): {
+  preview: PlanningEconomicsPreview;
+  revenueProjection: FinancialRevenueProjectionSnapshot;
+  quantityCost: ReturnType<typeof evaluateQuantityCost>;
+} {
   const weightedConstructionAreaSqm =
     aboveGroundAreaSqm +
     basementAreaSqm * Math.max(1, assumptions.basementCostMultiplier);
@@ -163,51 +311,108 @@ function calculateEconomics(
     (weightedConstructionAreaSqm * nonNegative(assumptions.constructionCostPerSqmWon)) /
     WON_PER_MANWON;
   const materialAdjustment = calculatePlanningMaterialAdjustment(scenario);
+  const dwellingCostManwon = additionalDwellingCostManwon(scenario.floorPrograms, scenario.dwellingProgram);
+  const quantityCost = evaluateQuantityCost(scenario, {
+    constructionCostPerSqmWon: assumptions.constructionCostPerSqmWon,
+    basementCostMultiplier: assumptions.basementCostMultiplier,
+  });
+  const quantityCostReady =
+    quantityCost.status === "ready" &&
+    quantityCost.contract !== null &&
+    quantityCost.adjustmentManwon !== null &&
+    Number.isFinite(quantityCost.adjustmentManwon);
+  const quantityCostAdjustmentManwon = quantityCostReady
+    ? quantityCost.adjustmentManwon!
+    : 0;
+  const invalidQuantityCost = scenario.quantityCost !== undefined && !quantityCostReady;
   const constructionCostManwon = Math.max(
     0,
-    baseConstructionCostManwon + materialAdjustment.adjustmentManwon
+    baseConstructionCostManwon + materialAdjustment.adjustmentManwon + dwellingCostManwon +
+      quantityCostAdjustmentManwon
   );
   const softCostManwon =
     constructionCostManwon * (nonNegative(assumptions.softCostRatePct) / 100);
   const contingencyCostManwon =
     (constructionCostManwon + softCostManwon) *
     (nonNegative(assumptions.contingencyRatePct) / 100);
-  const financingCostManwon =
+  const interestEstimateManwon =
     (constructionCostManwon + softCostManwon + contingencyCostManwon) *
     (nonNegative(assumptions.financingCostRatePct) / 100);
+  const pfCommitmentManwon =
+    (constructionCostManwon + softCostManwon + contingencyCostManwon) *
+    (nonNegative(assumptions.ltcTargetPct) / 100);
+  const pfFeeManwon =
+    pfCommitmentManwon *
+    (nonNegative(assumptions.pfUpfrontFeeRatePct) / 100);
+  const trustFeeManwon = nonNegative(assumptions.trustFeeManwon);
+  const financingCostManwon =
+    interestEstimateManwon + pfFeeManwon + trustFeeManwon;
 
-  let saleRevenueWon = 0;
-  let annualNoiWon = 0;
-  const vacancyFactor = 1 - Math.min(100, nonNegative(assumptions.vacancyRatePct)) / 100;
-
-  for (const floor of scenario.floorPrograms) {
-    for (const zone of floor.zones) {
-      const area = nonNegative(zone.areaSqm);
-      const model = resolveZoneRevenueModel(zone);
-      if (model === "sale") {
-        const saleable = Math.min(area, nonNegative(zone.saleableAreaSqm ?? area));
-        saleRevenueWon += saleable * salePriceForUse(zone.useType, assumptions);
-      }
-      if (model === "lease") {
-        const rentable = Math.min(area, nonNegative(zone.rentableAreaSqm ?? area));
-        annualNoiWon +=
-          rentable * rentForUse(zone.useType, assumptions) * 12 * vacancyFactor;
-      }
-    }
-  }
-
-  const capRate = nonNegative(assumptions.capRatePct);
-  const capitalizedLeaseValueWon = capRate > 0 ? annualNoiWon / (capRate / 100) : 0;
-  const saleRevenueManwon = saleRevenueWon / WON_PER_MANWON;
-  const expectedAnnualNoiManwon = annualNoiWon / WON_PER_MANWON;
-  const capitalizedLeaseValueManwon = capitalizedLeaseValueWon / WON_PER_MANWON;
-  const expectedRevenueManwon = saleRevenueManwon + capitalizedLeaseValueManwon;
+  const residentialRent = nonNegative(
+    assumptions.residentialRentPerSqmMonthWon
+  );
+  const pricing = assumptions.revenuePricing ?? createRevenuePricingSnapshot({
+    assumptionsVersion: assumptions.version,
+    unitPricesWon: {
+      residentialSale: nonNegative(
+        assumptions.residentialSalePricePerSqmWon
+      ),
+      retailSale: nonNegative(assumptions.commercialSalePricePerSqmWon),
+      officeSale: nonNegative(assumptions.commercialSalePricePerSqmWon),
+      residentialLease: residentialRent,
+      retailLease:
+        residentialRent > 0
+          ? residentialRent
+          : nonNegative(assumptions.retailRentPerSqmMonthWon),
+      officeLease:
+        residentialRent > 0
+          ? residentialRent
+          : nonNegative(assumptions.officeRentPerSqmMonthWon),
+    },
+    vacancyRatePct: assumptions.vacancyRatePct,
+    operatingExpenseRatePct: assumptions.operatingExpenseRatePct,
+    capRatePct: assumptions.capRatePct,
+    stabilizationFactorPct: DEFAULT_STABILIZATION_FACTOR_PCT,
+    adjustmentFactors: {
+      retailLease:
+        residentialRent > 0
+          ? nonNegative(assumptions.retailRentPerSqmMonthWon) /
+            residentialRent
+          : 1,
+      officeLease:
+        residentialRent > 0
+          ? nonNegative(assumptions.officeRentPerSqmMonthWon) /
+            residentialRent
+          : 1,
+    },
+  });
+  const revenueProjection = valueRevenueAreaPools(
+    planningRevenueAreas(scenario),
+    applyDwellingSalePricing(scenario, pricing)
+  );
+  const saleRevenueManwon = revenueProjection.saleRevenueManwon;
+  const expectedAnnualNoiManwon = revenueProjection.annualNoiManwon;
+  const capitalizedLeaseValueManwon =
+    revenueProjection.capitalizedLeaseValueManwon;
+  const expectedRevenueManwon = revenueProjection.totalRevenueManwon;
 
   const acquisitionCostManwon = nonNegative(parcel.acquisitionCostManwon);
+  const acquisitionTaxManwon = nonNegative(
+    assumptions.acquisitionTaxManwon
+  );
+  const acquisitionOtherCostManwon = nonNegative(
+    assumptions.acquisitionOtherCostManwon
+  );
   const demolitionCostManwon = nonNegative(parcel.demolitionCostManwon);
+  const tenantRelocationCostManwon = nonNegative(
+    assumptions.tenantRelocationCostManwon
+  );
   const totalCostManwon =
     acquisitionCostManwon +
+    acquisitionTaxManwon +
+    acquisitionOtherCostManwon +
     demolitionCostManwon +
+    tenantRelocationCostManwon +
     constructionCostManwon +
     softCostManwon +
     contingencyCostManwon +
@@ -217,36 +422,77 @@ function calculateEconomics(
     expectedRevenueManwon > 0 ? (profitManwon / expectedRevenueManwon) * 100 : 0;
 
   return {
-    status: "estimated",
-    acquisitionCostManwon: round(acquisitionCostManwon),
-    demolitionCostManwon: round(demolitionCostManwon),
-    constructionCostManwon: round(constructionCostManwon),
-    baseConstructionCostManwon: round(baseConstructionCostManwon),
-    materialAdjustmentCostManwon: round(
-      materialAdjustment.adjustmentManwon
-    ),
-    facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
-    materialCostStatus: materialAdjustment.priced
-      ? materialAdjustment.evidenceStatus === "source-backed" &&
-        materialAdjustment.areaBasis === "user-input"
-        ? "source-backed"
-        : materialAdjustment.areaBasis === "user-input"
-          ? "user-input"
-          : "estimated"
-      : "unpriced",
-    materialCostSource: materialAdjustment.sourceLabel,
-    softCostManwon: round(softCostManwon),
-    contingencyCostManwon: round(contingencyCostManwon),
-    financingCostManwon: round(financingCostManwon),
-    totalCostManwon: round(totalCostManwon),
-    saleRevenueManwon: round(saleRevenueManwon),
-    capitalizedLeaseValueManwon: round(capitalizedLeaseValueManwon),
-    expectedRevenueManwon: round(expectedRevenueManwon),
-    expectedAnnualNoiManwon: round(expectedAnnualNoiManwon),
-    profitManwon: round(profitManwon),
-    profitMarginPct: round(profitMarginPct, 1),
-    assumptionsVersion: assumptions.version,
-    calculatedAt: calculatedAt ?? new Date().toISOString(),
+    preview: {
+      status: invalidQuantityCost ? "stale" : "estimated",
+      acquisitionCostManwon: round(acquisitionCostManwon),
+      acquisitionTaxManwon: round(acquisitionTaxManwon),
+      acquisitionOtherCostManwon: round(acquisitionOtherCostManwon),
+      demolitionCostManwon: round(demolitionCostManwon),
+      tenantRelocationCostManwon: round(tenantRelocationCostManwon),
+      constructionCostManwon: round(constructionCostManwon),
+      baseConstructionCostManwon: round(baseConstructionCostManwon),
+      materialAdjustmentCostManwon: round(
+        materialAdjustment.adjustmentManwon
+      ),
+      additionalDwellingCostManwon: round(dwellingCostManwon),
+      ...(scenario.quantityCost !== undefined ? {
+        quantityCostInputBasis: quantityCostPlanBasis(scenario.quantityCost) ?? undefined,
+        quantityCostStatus: quantityCost.status === "ready" && !quantityCostReady
+          ? "conflict" as const
+          : quantityCost.status,
+        quantityCostAdjustmentManwon: quantityCostReady
+          ? round(quantityCostAdjustmentManwon)
+          : undefined,
+      } : {}),
+      residentialFallbackUnitPriceWon: pricing.pools.residentialSale.unitPriceWon,
+      facadeAreaSqm: round(materialAdjustment.facadeAreaSqm),
+      materialCostStatus: materialAdjustment.priced
+        ? materialAdjustment.evidenceStatus === "source-backed" &&
+          materialAdjustment.areaBasis === "user-input"
+          ? "source-backed"
+          : materialAdjustment.areaBasis === "user-input"
+            ? "user-input"
+            : "estimated"
+        : "unpriced",
+      materialCostSource: materialAdjustment.sourceLabel,
+      softCostManwon: round(softCostManwon),
+      contingencyCostManwon: round(contingencyCostManwon),
+      financingCostManwon: round(financingCostManwon),
+      interestEstimateManwon: round(interestEstimateManwon),
+      pfFeeManwon: round(pfFeeManwon),
+      trustFeeManwon: round(trustFeeManwon),
+      totalCostManwon: round(totalCostManwon),
+      saleRevenueManwon: round(saleRevenueManwon),
+      capitalizedLeaseValueManwon: round(capitalizedLeaseValueManwon),
+      expectedRevenueManwon: round(expectedRevenueManwon),
+      expectedAnnualNoiManwon: round(expectedAnnualNoiManwon),
+      profitManwon: round(profitManwon),
+      profitMarginPct: round(profitMarginPct, 1),
+      costInputs: {
+        constructionCostPerSqmWon: nonNegative(
+          assumptions.constructionCostPerSqmWon
+        ),
+        basementCostMultiplier: Math.max(
+          1,
+          nonNegative(assumptions.basementCostMultiplier)
+        ),
+        softCostRatePct: nonNegative(assumptions.softCostRatePct),
+        contingencyRatePct: nonNegative(assumptions.contingencyRatePct),
+        financingCostRatePct: nonNegative(assumptions.financingCostRatePct),
+        acquisitionTaxManwon,
+        acquisitionOtherCostManwon,
+        tenantRelocationCostManwon,
+        pfUpfrontFeeRatePct: nonNegative(
+          assumptions.pfUpfrontFeeRatePct
+        ),
+        trustFeeManwon,
+        ltcTargetPct: nonNegative(assumptions.ltcTargetPct),
+      },
+      assumptionsVersion: assumptions.version,
+      calculatedAt: calculatedAt ?? new Date().toISOString(),
+    },
+    revenueProjection,
+    quantityCost,
   };
 }
 
@@ -255,10 +501,74 @@ function buildChecks(
   parcel: PlanningCalculationParcel,
   metrics: PlanningScenarioMetrics,
   parking: PlanningParkingAssessment,
+  sunlight: SunlightRegulationResult,
   economics: PlanningEconomicsPreview,
-  assumptions: PlanningEconomicsAssumptions
+  assumptions: PlanningEconomicsAssumptions,
+  quantityCost: ReturnType<typeof evaluateQuantityCost>
 ): PlanningCheck[] {
   const checks: PlanningCheck[] = [];
+  if (scenario.quantityCost !== undefined) {
+    const ready = economics.quantityCostStatus === "ready";
+    checks.push({
+      code: "quantity-cost",
+      label: "상세 수량·공사비",
+      status: ready ? "review" : "fail",
+      message: ready
+        ? "상세 수량 대체 원가에서 기본 공사비 포함액을 차감해 반영했습니다. 예비 산정이며 견적·전문가 검토는 미확정입니다."
+        : `상세 수량 원가를 반영할 수 없어 사업성이 미확정입니다. ${quantityCost.issues.join(" · ") || "수량·단가·기본 포함액과 현재 계획의 연결을 확인해야 합니다."}`,
+      source: "상세 수량 원가 계약 · 전문가 검토 전",
+    });
+  }
+  const layoutAdoption = layoutFinancePlanningCheck(scenario);
+  if (layoutAdoption) checks.push(layoutAdoption);
+  for (const floor of scenario.floorPrograms.filter(floor => floor.zones.some(zone => zone.useType === "residential"))) {
+    checks.push({
+      code: `interior-layout:${floor.id}`, label: `${floor.label} 실내 구획`, status: "unknown",
+      message: "현재 층 외곽에 대한 실내 구획·공용부·문 연결 검증이 필요합니다.", source: "실내 구획 예비 검증",
+    });
+    checks.push({ code: "room-layout:" + floor.id, label: floor.label + " 상세 실·현관", status: "unknown",
+      message: "방·주방·욕실 구획과 현관 연결 검증이 필요합니다.", source: "상세 실 예비 검증" });
+  }
+  if (scenario.floorPrograms.some(floor => floor.zones.some(zone => zone.useType === "residential"))) checks.push({
+    code: "egress-core", label: "피난·층간 코어 연결", status: "unknown",
+    message: "실에서 지상 출구까지의 연결·계단 예약공간 검증이 필요합니다. 법정 적합성·승인은 미확정입니다.", source: "피난·코어 예비 검증",
+  });
+  if (parking.requiredCars > 0 || scenario.parking.strategy !== "none") checks.push({
+    code: "vehicle-circulation", label: "차량 동선", status: "review",
+    message: "주차면 개수는 차량 회전·출입구 허가를 확정하지 않습니다. 내부 후보 궤적 및 공식 도로·기둥·보행 동선·전문가 검토가 필요합니다.",
+    source: "차량 동선 예비 검증",
+  });
+  if (scenario.dwellingProgram) {
+    const a = scenario.dwellingProgram;
+    const valid = Number.isInteger(a.baselineDwellingCount) && a.baselineDwellingCount >= 0 &&
+      Number.isFinite(a.additionalDwellingCostWon) && a.additionalDwellingCostWon >= 0 &&
+      a.baseNetRatio > 0 && a.baseNetRatio < 1 &&
+      Number.isFinite(a.extraCommonAreaPerSplitSqm) && a.extraCommonAreaPerSplitSqm >= 0 &&
+      Number.isFinite(a.minimumCommonAreaSqm) && a.minimumCommonAreaSqm > 0;
+    checks.push({
+      code: "dwelling-program-assumptions", label: "세대 구성 가정",
+      status: valid ? "review" : "fail",
+      message: valid
+        ? `세대별 전용면적·공용부는 면적 프로그램이며 실내 평면 검증 전입니다. ${a.baselineDwellingCount}세대 초과 순증비 ${(a.additionalDwellingCostWon / 10000).toLocaleString()}만원/세대 · ${a.costEvidenceStatus === "quoted" ? "견적 입력, 포함 공종 확인 필요" : "현장 견적 미확정"}`
+        : "세대 구성의 전용률·공용부·추가세대 비용 입력을 확인해야 합니다.",
+      source: a.costSource || "자동 탐색 가정 · 실내 평면·견적 확인 전",
+    });
+    const use = screenZoningUse(parcel.zoning ?? "", "multi-family", {
+      address: parcel.address,
+      asOf: parcel.parkingRuleAsOf ?? scenario.createdAt.slice(0, 10),
+      legalUseCode: "BA-A1-2-C",
+      residentialFloors: scenario.floorPrograms.filter((floor) => floor.level > 0 && floor.zones.some((zone) => zone.useType === "residential")).length,
+      useAreaSqm: scenario.floorPrograms.reduce((sum, floor) => sum + floor.zones.filter((zone) => zone.useType !== "piloti").reduce((subtotal, zone) => subtotal + zone.areaSqm, 0), 0),
+      householdCount: metrics.residentialUnitCount,
+      aboveGroundFloors: metrics.aboveGroundFloors,
+    });
+    checks.push({ code: "dwelling-legal-use", label: "다세대 용도 조건",
+      status: use.status === "condition-failed" || use.status === "unsupported-auto" ? "fail" : "review",
+      message: `${use.basis} · 필지별 중첩 규제·허가 미확정`, source: use.sources.map((source) => source.title).join(" · ") });
+    checks.push({ code: "dwelling-layout-verification", label: "실내·차량 동선 검증", status: "review",
+      message: "실내 구획·차량 후보 궤적의 예비 검사는 상세 실내 설계·구조·피난·진출입 허가·전문가 승인을 대체하지 않습니다.",
+      source: "자동 면적 탐색 검증 범위" });
+  }
   const levelCounts = new Map<number, number>();
   scenario.floorPrograms.forEach((floor) => {
     levelCounts.set(floor.level, (levelCounts.get(floor.level) ?? 0) + 1);
@@ -393,6 +703,96 @@ function buildChecks(
     });
   }
 
+  const north = sunlight.north;
+  const northConfirmedFailure =
+    north.complianceDecisionGrade && north.compliant === false;
+  const northConfirmedPass =
+    north.complianceDecisionGrade && north.compliant === true;
+  checks.push({
+    code: "sunlight-north",
+    label: "정북일조",
+    status:
+      north.applicability === "not-applicable"
+        ? north.requirementDecisionGrade
+          ? "pass"
+          : "review"
+        : northConfirmedFailure
+          ? "fail"
+          : northConfirmedPass
+            ? "pass"
+            : "review",
+    message:
+      north.applicability === "not-applicable"
+        ? north.basis.join(" · ")
+        : north.effectiveDistanceM != null
+          ? "계획 높이 " +
+            metrics.totalHeightM.toFixed(1) +
+            "m · 북측 유효 이격 " +
+            north.effectiveDistanceM.toFixed(1) +
+            "m 필요" +
+            (north.actualDistanceM != null
+              ? " · 입력 거리 " + north.actualDistanceM.toFixed(1) + "m"
+              : " · 실제 배치 거리 확인 전") +
+            (north.warnings[0] ? " · " + north.warnings[0] : "")
+          : north.warnings.join(" · "),
+    source:
+      sunlight.rule.jurisdictionName +
+      " · " +
+      sunlight.rule.id +
+      " · 시행 " +
+      sunlight.rule.effectiveFrom,
+  });
+
+  if (sunlight.daylight.applicability !== "not-applicable") {
+    const applicableDaylightDistances = [
+      sunlight.daylight.boundary,
+      sunlight.daylight.sameLot,
+    ].filter(
+      (assessment) =>
+        assessment.applicability !== "not-applicable" &&
+        assessment.effectiveDistanceM != null
+    );
+    const confirmedDaylightFailure = applicableDaylightDistances.some(
+      (assessment) =>
+        assessment.complianceDecisionGrade && assessment.compliant === false
+    );
+    const confirmedDaylightPass =
+      applicableDaylightDistances.length > 0 &&
+      applicableDaylightDistances.every(
+        (assessment) =>
+          assessment.complianceDecisionGrade && assessment.compliant === true
+      );
+    const distanceSummary = applicableDaylightDistances
+      .map((assessment) =>
+        assessment.effectiveDistanceM != null
+          ? assessment.effectiveDistanceM.toFixed(1) + "m"
+          : ""
+      )
+      .filter(Boolean)
+      .join(" · ");
+    checks.push({
+      code: "sunlight-daylight",
+      label: "공동주택 채광·동간거리",
+      status: confirmedDaylightFailure
+        ? "fail"
+        : confirmedDaylightPass
+          ? "pass"
+          : "review",
+      message:
+        sunlight.daylight.applicability === "review"
+          ? sunlight.daylight.warnings[0] ??
+            "건축물 세부 용도와 채광창 방향을 확인해야 합니다."
+          : "법정 거리 " +
+            distanceSummary +
+            " · 채광창 방향과 실제 배치 거리 확인 전",
+      source:
+        sunlight.rule.jurisdictionName +
+        " · " +
+        sunlight.rule.id +
+        " · 건축법 제61조·시행령 제86조",
+    });
+  }
+
   const floorEvidence = parcel.regulatoryConstraints?.floors;
   if (floorEvidence?.value != null && floorEvidence.value > 0) {
     const exceeds = metrics.aboveGroundFloors > floorEvidence.value;
@@ -417,19 +817,18 @@ function buildChecks(
   checks.push({
     code: "parking",
     label: "주차",
-    status:
-      parking.shortfallCars > 0
+    status: parking.decisionGrade
+      ? parking.shortfallCars > 0
         ? "fail"
-        : parking.exemptPossible && parking.requiredCars === 0
-          ? "review"
-          : "pass",
+        : "pass"
+      : "review",
     message:
       parking.shortfallCars > 0
-        ? `예상 의무 ${parking.requiredCars}대 · 계획 ${parking.providedCars}대 · ${parking.shortfallCars}대 부족`
-        : parking.exemptPossible && parking.requiredCars === 0
-          ? `예상 의무 0대 · 면제 가능성은 관할 조례 최종 확인 필요`
-          : `예상 의무 ${parking.requiredCars}대 · 계획 ${parking.providedCars}대`,
-    source: parking.reference.join(" · "),
+        ? `${parking.decisionGrade ? "확인 의무" : "예비 의무"} ${parking.requiredCars}대 · 계획 ${parking.providedCars}대 · ${parking.shortfallCars}대 부족${parking.warnings[0] ? ` · ${parking.warnings[0]}` : ""}`
+        : `${parking.decisionGrade ? "확인 의무" : "예비 의무"} ${parking.requiredCars}대 · 계획 ${parking.providedCars}대${parking.warnings[0] ? ` · ${parking.warnings[0]}` : ""}`,
+    source:
+      `${parking.rule.jurisdictionName} · ${parking.rule.id} · 시행 ${parking.rule.effectiveFrom}` +
+      ` · ${parking.reference.join(" · ")}`,
   });
 
   if (
@@ -442,6 +841,17 @@ function buildChecks(
       status: "review",
       message: `입력 주차 ${parking.providedCars}대가 프로그램 면적 기준 개략 수용 ${parking.estimatedCapacityFromProgram}대를 초과합니다.`,
       source: "일반식 25㎡/대 · 기계식 16㎡/대 개략 검토",
+    });
+  }
+
+  const unsupportedRevenue = unsupportedRevenueZones(scenario);
+  if (unsupportedRevenue.length > 0) {
+    checks.push({
+      code: "unsupported-revenue-use",
+      label: "수익 용도",
+      status: "fail",
+      message: `${unsupportedRevenue.length}개 공용·주차·기계·창고·기타 구역에 매각 또는 임대가 지정됐습니다. 주거·상가·업무 구역만 수익 풀로 계산합니다.`,
+      source: "stage2-finance-area-2026.2 · 여섯 수익 풀·비용 2026.2 계약",
     });
   }
 
@@ -495,9 +905,13 @@ function buildChecks(
   checks.push({
     code: "economics-preview",
     label: "개략 사업성",
-    status: economics.expectedRevenueManwon > 0 ? "pass" : "review",
+    status: economics.status === "stale"
+      ? "fail"
+      : economics.expectedRevenueManwon > 0 ? "pass" : "review",
     message:
-      economics.expectedRevenueManwon > 0
+      economics.status === "stale"
+        ? "상세 수량 원가 검증 실패로 사업성 계산이 미확정입니다. 수량 원가를 수정하고 다시 계산해야 합니다."
+        : economics.expectedRevenueManwon > 0
         ? `예상 매출 ${economics.expectedRevenueManwon.toFixed(0)}만원 · 예상 이익 ${economics.profitManwon.toFixed(0)}만원`
         : "수익 방식 또는 매각·임대 단가를 입력해야 예상 매출을 계산할 수 있습니다.",
     source: `Stage 2 개략 계산 · ${assumptions.version}`,
@@ -518,17 +932,37 @@ export function planningEconomicsAssumptionsFromLegacy(
 
   return {
     version,
+    revenuePricing: revenuePricingFromAssumptions(assumptions),
     constructionCostPerSqmWon: nonNegative(assumptions.constCostPerSqM),
-    basementCostMultiplier: 1.25,
+    basementCostMultiplier: Math.max(
+      1,
+      nonNegative(assumptions.basementCostMultiplier ?? 1.25)
+    ),
     softCostRatePct: nonNegative(assumptions.softCostRate),
     contingencyRatePct: nonNegative(assumptions.contingencyRate),
+    acquisitionTaxManwon: nonNegative(
+      assumptions.acquisitionTaxManwon ?? 0
+    ),
+    acquisitionOtherCostManwon: nonNegative(
+      assumptions.acquisitionOtherCostManwon ?? 0
+    ),
+    tenantRelocationCostManwon: nonNegative(
+      assumptions.tenantRelocationCostManwon ?? 0
+    ),
     financingCostRatePct,
+    pfUpfrontFeeRatePct: nonNegative(assumptions.pfUpfrontFeeRate ?? 0),
+    trustFeeManwon: nonNegative(assumptions.trustFeeManwon ?? 0),
+    ltcTargetPct: nonNegative(assumptions.ltcTarget),
     residentialSalePricePerSqmWon: nonNegative(assumptions.salePricePerSqM),
     commercialSalePricePerSqmWon: nonNegative(assumptions.salePricePerSqM),
     residentialRentPerSqmMonthWon: nonNegative(assumptions.rentPerSqMMonth),
     retailRentPerSqmMonthWon: nonNegative(assumptions.rentPerSqMMonth) * 1.2,
     officeRentPerSqmMonthWon: nonNegative(assumptions.rentPerSqMMonth),
     vacancyRatePct: nonNegative(assumptions.vacancyRate),
+    operatingExpenseRatePct: nonNegative(
+      assumptions.operatingExpenseRate ??
+        DEFAULT_OPERATING_EXPENSE_RATE_PCT
+    ),
     capRatePct: nonNegative(assumptions.capRate),
   };
 }
@@ -570,10 +1004,15 @@ export function calculatePlanningScenario(
 
   const parking = assessParking(
     scenario,
-    summary.residentialAreaSqm,
-    summary.commercialAreaSqm,
-    summary.unitCount,
-    summary.parkingAreaSqm
+    summary.parkingAreaSqm,
+    parcel
+  );
+
+  const sunlight = assessSunlight(
+    scenario,
+    parcel,
+    totalHeightM,
+    aboveFloors.length
   );
 
   const metrics: PlanningScenarioMetrics = {
@@ -594,7 +1033,7 @@ export function calculatePlanningScenario(
     parkingShortfallCars: parking.shortfallCars,
   };
 
-  const economicsPreview = calculateEconomics(
+  const economics = calculateEconomics(
     scenario,
     parcel,
     assumptions,
@@ -607,8 +1046,10 @@ export function calculatePlanningScenario(
     parcel,
     metrics,
     parking,
-    economicsPreview,
-    assumptions
+    sunlight,
+    economics.preview,
+    assumptions,
+    economics.quantityCost
   );
 
   return {
@@ -634,8 +1075,10 @@ export function calculatePlanningScenario(
       totalHeightM: round(metrics.totalHeightM, 1),
     },
     parking,
+    sunlight,
     checks,
-    economicsPreview,
+    economicsPreview: economics.preview,
+    revenueProjection: economics.revenueProjection,
   };
 }
 

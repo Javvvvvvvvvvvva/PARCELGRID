@@ -65,10 +65,16 @@ export interface ScenarioVM {
   cost: number;
   // Cost breakdown
   landCost: number;
+  acquisitionTax: number;
+  acquisitionOtherCost: number;
   demolitionCost: number;
+  tenantRelocationCost: number;
   hardCost: number;
   softCost: number;
   contingency: number;
+  interestCost: number;
+  pfFee: number;
+  trustFee: number;
   financingCost: number;
 
   revenue: number;
@@ -76,9 +82,16 @@ export interface ScenarioVM {
   revenueSale: number;
   revenueLease: number;
   revenueRetail: number;
+  revenueByPool: ScenarioResult["revenueByPool"];
+  annualNoiByPool: ScenarioResult["annualNoiByPool"];
+  annualPotentialRentByPool: ScenarioResult["annualPotentialRentByPool"];
+  annualEffectiveGrossIncomeByPool: ScenarioResult["annualEffectiveGrossIncomeByPool"];
+  annualOperatingExpenseByPool: ScenarioResult["annualOperatingExpenseByPool"];
 
   profit: number;
-  /** 공사비 Low(-15%)/High(+20%) 적용 시 손익 (근사) */
+  profitUnroundedManwon?: ScenarioResult["profitUnroundedManwon"];
+  constructionCostSensitivity?: ScenarioResult["constructionCostSensitivity"];
+  /** 기본 공사단가 Low(-15%)/High(+20%) 월별 재계산 손익. */
   profitAtLowCost?: number;
   profitAtHighCost?: number;
   constructionCostLow?: number;
@@ -86,15 +99,24 @@ export interface ScenarioVM {
   profitMargin: number;
   equity: number;
   pf: number;
+  pfCommitment: number;
+  funding: ScenarioResult["funding"];
+  takeout: ScenarioResult["takeout"];
+  hold: ScenarioResult["hold"];
   ltc: number;
   dscr: number;
+  dscrStatus: ScenarioResult["dscrStatus"];
   npv: number;
+  npvUnroundedManwon?: ScenarioResult["npvUnroundedManwon"];
   irr: number;
+  irrUnroundedPct?: ScenarioResult["irrUnroundedPct"];
   irrStatus?: "calculated" | "not-calculated" | "ambiguous";
   equityMultiple: number;
-  taxBurden: number;
+  /** 세전 사업비에 이미 반영된 세금. 추가 세후 차감액이 아니다. */
+  taxIncludedInPretax: number;
   maxExposure: number;
   paybackMonths: number | null;
+  equityCashFlowsManwon: number[];
   timeline: number;
   regulatory: number;
 
@@ -142,18 +164,32 @@ export function toScenarioVM(
 
     cost: result.totalCost,
     landCost: result.landCost,
+    acquisitionTax: result.acquisitionTax,
+    acquisitionOtherCost: result.acquisitionOtherCost,
     demolitionCost: result.demolitionCost,
+    tenantRelocationCost: result.tenantRelocationCost,
     hardCost: result.hardCost,
     softCost: result.softCost,
     contingency: result.contingency,
+    interestCost: result.interestCost,
+    pfFee: result.pfFee,
+    trustFee: result.trustFee,
     financingCost: result.financingCost,
 
     revenue: result.totalRevenue,
     revenueSale: result.revenueSale,
     revenueLease: result.revenueLease,
     revenueRetail: result.revenueRetail,
+    revenueByPool: result.revenueByPool,
+    annualNoiByPool: result.annualNoiByPool,
+    annualPotentialRentByPool: result.annualPotentialRentByPool,
+    annualEffectiveGrossIncomeByPool:
+      result.annualEffectiveGrossIncomeByPool,
+    annualOperatingExpenseByPool: result.annualOperatingExpenseByPool,
 
     profit: result.profit,
+    profitUnroundedManwon: result.profitUnroundedManwon,
+    constructionCostSensitivity: result.constructionCostSensitivity,
     profitAtLowCost: result.profitAtLowCost,
     profitAtHighCost: result.profitAtHighCost,
     constructionCostLow: result.constructionCostLow,
@@ -161,15 +197,23 @@ export function toScenarioVM(
     profitMargin: result.profitMargin,
     equity: result.equity,
     pf: result.pfLoan,
+    pfCommitment: result.pfCommitment,
+    funding: result.funding,
+    takeout: result.takeout,
+    hold: result.hold,
     ltc: result.ltc,
     dscr: result.dscr,
+    dscrStatus: result.dscrStatus,
     npv: result.npv,
+    npvUnroundedManwon: result.npvUnroundedManwon,
     irr: result.irr,
+    irrUnroundedPct: result.irrUnroundedPct,
     irrStatus: result.irrStatus,
     equityMultiple: equityMult,
-    taxBurden: taxes.total,
+    taxIncludedInPretax: taxes.includedInPretaxTotal,
     maxExposure: result.maxExposure,
     paybackMonths: result.paybackMonths,
+    equityCashFlowsManwon: result.equityCashFlowsManwon,
     timeline: result.totalMonths,
     regulatory: complianceScore,
 
@@ -218,6 +262,7 @@ export interface RiskVM {
   label: string;
   level: "ok" | "low" | "med" | "high";
   levelLabel: string;
+  evidenceStatus?: RiskCheck["evidenceStatus"];
   note: string;
   reference?: string;
 }
@@ -227,7 +272,9 @@ export function toRiskVMs(checks: RiskCheck[]): RiskVM[] {
     code: c.code,
     label: c.label,
     level: c.level,
-    levelLabel: RISK_LABEL_KR[c.level],
+    levelLabel: c.evidenceStatus === "confirmed" ? RISK_LABEL_KR[c.level]
+      : c.level === "high" ? "협의 · 미확정" : c.level === "med" ? "주의 · 미확정" : "미확정",
+    evidenceStatus: c.evidenceStatus ?? "preliminary",
     note: c.finding,
     reference: c.reference,
   }));
@@ -238,7 +285,7 @@ export function toRiskVMs(checks: RiskCheck[]): RiskVM[] {
 
 /**
  * 실거래 비교 표시용. MOLIT 거래를 대시보드/실거래비교 화면에서 보기 좋게 변환.
- * 거리 정보는 MOLIT가 좌표를 안 줘서 — 본인 부지와 같은 동이면 distanceKm=0, 다른 동이면 null.
+ * MOLIT는 좌표를 제공하지 않는다. 같은 법정동도 거리 0km로 간주하지 않는다.
  */
 export interface CompVM {
   id: string;
@@ -253,13 +300,24 @@ export interface CompVM {
   lawdCd: string;          // 법정동코드 10자리 (앞5=시군구, 같은 구 판별용)
   /** 준공년도 (단독/다가구 등 — 신축 필터용) */
   buildYear?: number;
+  dongName?: string;
+  jibun?: string;
+  floor?: number;
+  areaBasis?: import("@/lib/integrations/molit").MolitTransaction["areaBasis"];
+  cancellationStatus?: import("@/lib/integrations/molit").MolitTransaction["cancellationStatus"];
+  cancellationDate?: string;
+  registrationDate?: string;
+  dealingGbn?: string;
+  buyerType?: string;
+  sellerType?: string;
+  houseType?: string;
 }
 
 const TYPE_KR: Record<string, string> = {
   land: "토지",
   apartment: "아파트",
   officetel: "오피스텔",
-  villa: "도시형생활",
+  villa: "연립다세대",
   commercial: "상업/근생",
   office: "사무실",
 };
@@ -288,6 +346,11 @@ export function toCompVMs(
         sameDong,
         lawdCd: t.lawdCd,
         buildYear: t.buildYear,
+        dongName: t.dongName, jibun: t.jibun, floor: t.floor,
+        areaBasis: t.areaBasis, cancellationStatus: t.cancellationStatus,
+        cancellationDate: t.cancellationDate, registrationDate: t.registrationDate,
+        dealingGbn: t.dealingGbn, buyerType: t.buyerType, sellerType: t.sellerType,
+        houseType: t.houseType,
       };
     })
     .sort((a, b) => b.date.localeCompare(a.date)); // 최신 순

@@ -115,13 +115,11 @@ export function validateSourceDocumentBytes(
       ? []
       : ["XLS 파일 시그니처를 확인할 수 없습니다."];
   }
-  if (bytes.slice(0, Math.min(bytes.length, 4096)).includes(0)) {
+  if (bytes.includes(0)) {
     return ["CSV로 처리할 수 없는 바이너리 파일입니다."];
   }
   try {
-    new TextDecoder("utf-8", { fatal: true }).decode(
-      bytes.slice(0, Math.min(bytes.length, 4096)),
-    );
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return [];
   } catch {
     return ["CSV 파일은 UTF-8 텍스트여야 합니다."];

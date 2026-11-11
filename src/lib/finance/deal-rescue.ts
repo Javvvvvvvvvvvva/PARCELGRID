@@ -1,4 +1,12 @@
-import { calculateScenario } from "./scenario";
+import { calculateScenario, minimumConstructionCostRate } from "./scenario";
+import { ASSUMPTION_VALUE_RULES } from "./assumption-validation";
+import { meetsIrrTarget } from "./return-metrics";
+import {
+  blendedRevenueUnitPrice,
+  revenueAreaTotals,
+  withScenarioRevenueUnitPrice,
+  type RevenuePricingKind,
+} from "./revenue-contract";
 import type {
   AssumptionSet,
   Parcel,
@@ -6,7 +14,7 @@ import type {
   ScenarioResult,
 } from "./types";
 
-export const DEAL_RESCUE_MODEL_VERSION = "deal-rescue-2026.1";
+export const DEAL_RESCUE_MODEL_VERSION = "deal-rescue-2026.2";
 
 export type DealRescueStatus =
   | "already-viable"
@@ -102,10 +110,10 @@ export function passesDealRescueTarget(
 ): boolean {
   return (
     result.viable &&
-    result.profit >= 0 &&
-    result.npv >= 0 &&
-    result.irrStatus === "calculated" &&
-    result.irr >= targetIRR
+    Number.isFinite(result.profitUnroundedManwon) && result.profitUnroundedManwon! >= 0 &&
+    Number.isFinite(result.npvUnroundedManwon) && result.npvUnroundedManwon! >= 0 &&
+    result.funding.status !== "shortfall" &&
+    meetsIrrTarget(result, targetIRR)
   );
 }
 
@@ -161,12 +169,13 @@ export function findDealRescuePaths(
     };
   }
 
+  const constructionCostFloor = minimumConstructionCostRate({ parcel, scenario });
   const paths = [
     findLandPricePath(parcel, scenario, target.irr),
     findRevenuePricePath(parcel, scenario, target.irr),
-    findConstructionCostPath(parcel, scenario, target.irr),
+    findConstructionCostPath(parcel, scenario, target.irr, constructionCostFloor),
     findInterestRatePath(parcel, scenario, target.irr),
-    findBalancedPath(parcel, scenario, target.irr),
+    findBalancedPath(parcel, scenario, target.irr, constructionCostFloor),
   ];
 
   return {
@@ -221,7 +230,8 @@ function findLandPricePath(
       ),
     ],
     result,
-    "다른 가정은 고정하고 목표를 통과하는 최대 토지 검토가를 역산했습니다."
+    "다른 가정은 고정한 제한 탐색의 토지 검토가 후보입니다.",
+    targetIRR
   );
 }
 
@@ -240,7 +250,7 @@ function findRevenuePricePath(
     );
   }
 
-  const baseValue = scenario.assumptions[revenueField.field];
+  const baseValue = blendedRevenueUnitPrice(scenario, revenueField.kind);
   if (baseValue <= 0) {
     return unavailablePath(
       "revenue-price",
@@ -251,31 +261,49 @@ function findRevenuePricePath(
   }
 
   let infeasible = baseValue;
-  let feasible = baseValue * SINGLE_REVENUE_MULTIPLIER;
-  const upperResult = evaluate(parcel, scenario, {
-    assumptions: { [revenueField.field]: feasible },
+  let feasible = Math.min(baseValue * SINGLE_REVENUE_MULTIPLIER, ASSUMPTION_VALUE_RULES[revenueField.field].max);
+  if (feasible <= baseValue) {
+    return unavailablePath("revenue-price", revenueField.title, "unreachable", "단가 입력 상한 안에서 매출 단가를 더 높일 수 없습니다.");
+  }
+  const upperResult = calculateScenario({
+    parcel,
+    scenario: withScenarioRevenueUnitPrice(
+      scenario,
+      revenueField.kind,
+      feasible,
+    ),
   });
   if (!passesDealRescueTarget(upperResult, targetIRR)) {
     return unavailablePath(
       "revenue-price",
       revenueField.title,
       "unreachable",
-      `현재 단가의 ${SINGLE_REVENUE_MULTIPLIER.toFixed(0)}배까지 높여도 손익·NPV·IRR 목표를 동시에 충족하지 못합니다.`
+      `입력 상한 안의 단가 ${feasible}원까지 높여도 손익·NPV·IRR 목표를 동시에 충족하지 못합니다.`
     );
   }
 
   for (let index = 0; index < BINARY_SEARCH_ITERATIONS; index += 1) {
     const candidate = (infeasible + feasible) / 2;
-    const result = evaluate(parcel, scenario, {
-      assumptions: { [revenueField.field]: candidate },
+    const result = calculateScenario({
+      parcel,
+      scenario: withScenarioRevenueUnitPrice(
+        scenario,
+        revenueField.kind,
+        candidate,
+      ),
     });
     if (passesDealRescueTarget(result, targetIRR)) feasible = candidate;
     else infeasible = candidate;
   }
 
   const value = Math.ceil(feasible);
-  const result = evaluate(parcel, scenario, {
-    assumptions: { [revenueField.field]: value },
+  const result = calculateScenario({
+    parcel,
+    scenario: withScenarioRevenueUnitPrice(
+      scenario,
+      revenueField.kind,
+      value,
+    ),
   });
   return reachablePath(
     "revenue-price",
@@ -290,14 +318,16 @@ function findRevenuePricePath(
       ),
     ],
     result,
-    "토지가·공사비·금융조건은 고정하고 목표를 통과하는 최소 매출 단가를 역산했습니다."
+    "토지가·공사비·금융조건은 고정한 제한 탐색의 매출 단가 후보입니다.",
+    targetIRR
   );
 }
 
 function findConstructionCostPath(
   parcel: Parcel,
   scenario: Scenario,
-  targetIRR: number
+  targetIRR: number,
+  constructionCostFloor: number,
 ): DealRescuePath {
   const baseValue = scenario.assumptions.constCostPerSqM;
   if (baseValue <= 0) {
@@ -309,7 +339,8 @@ function findConstructionCostPath(
     );
   }
 
-  let feasible = baseValue * SINGLE_CONSTRUCTION_COST_FLOOR;
+  const lowerBound = Math.max(baseValue * SINGLE_CONSTRUCTION_COST_FLOOR, constructionCostFloor);
+  let feasible = lowerBound;
   let infeasible = baseValue;
   const floorResult = evaluate(parcel, scenario, {
     assumptions: { constCostPerSqM: feasible },
@@ -319,9 +350,7 @@ function findConstructionCostPath(
       "construction-cost",
       "공사비 VE",
       "unreachable",
-      `직접 공사비를 ${Math.round(
-        (1 - SINGLE_CONSTRUCTION_COST_FLOOR) * 100
-      )}% 낮춰도 손익·NPV·IRR 목표를 동시에 충족하지 못합니다.`
+      `음수 공사비가 되지 않는 탐색 하한 ${lowerBound}원/㎡에서도 손익·NPV·IRR 목표를 동시에 충족하지 못합니다.`
     );
   }
 
@@ -334,7 +363,7 @@ function findConstructionCostPath(
     else infeasible = candidate;
   }
 
-  const value = Math.max(0, Math.floor(feasible));
+  const value = Math.max(lowerBound, Math.floor(feasible));
   const result = evaluate(parcel, scenario, {
     assumptions: { constCostPerSqM: value },
   });
@@ -351,7 +380,8 @@ function findConstructionCostPath(
       ),
     ],
     result,
-    "다른 가정은 고정하고 목표를 통과하는 최대 직접 공사비를 역산했습니다."
+    "다른 가정은 고정한 제한 탐색의 직접 공사비 후보입니다.",
+    targetIRR
   );
 }
 
@@ -402,18 +432,20 @@ function findInterestRatePath(
     "PF 조건 조정",
     [change("interestRate", "PF 금리", baseValue, value, "%")],
     result,
-    "다른 가정은 고정하고 목표를 통과하는 최대 PF 금리를 역산했습니다."
+    "다른 가정은 고정한 제한 탐색의 PF 금리 후보입니다.",
+    targetIRR
   );
 }
 
 function findBalancedPath(
   parcel: Parcel,
   scenario: Scenario,
-  targetIRR: number
+  targetIRR: number,
+  constructionCostFloor: number,
 ): DealRescuePath {
   const revenueField = getRevenueField(scenario);
   const revenueBase = revenueField
-    ? scenario.assumptions[revenueField.field]
+    ? blendedRevenueUnitPrice(scenario, revenueField.kind)
     : 0;
   let best:
     | {
@@ -453,7 +485,7 @@ function findBalancedPath(
         assumptions: {
           ...scenario.assumptions,
           constCostPerSqM: Math.max(
-            0,
+            constructionCostFloor,
             Math.floor(
               scenario.assumptions.constCostPerSqM *
                 (1 - costReduction)
@@ -468,11 +500,11 @@ function findBalancedPath(
           ),
         },
       };
-      if (revenueField && revenueBase > 0) {
-        candidateScenario = withAssumption(
+      if (revenueField && revenueBase > 0 && revenueBase < ASSUMPTION_VALUE_RULES[revenueField.field].max) {
+        candidateScenario = withScenarioRevenueUnitPrice(
           candidateScenario,
-          revenueField.field,
-          Math.ceil(revenueBase * (1 + revenueIncrease))
+          revenueField.kind,
+          Math.min(Math.ceil(revenueBase * (1 + revenueIncrease)), ASSUMPTION_VALUE_RULES[revenueField.field].max)
         );
       }
       return {
@@ -484,8 +516,10 @@ function findBalancedPath(
         }),
         landReduction,
         revenueIncrease:
-          revenueField && revenueBase > 0 ? revenueIncrease : 0,
-        costReduction,
+          revenueField && revenueBase > 0
+            ? blendedRevenueUnitPrice(candidateScenario, revenueField.kind) / revenueBase - 1 : 0,
+        costReduction: scenario.assumptions.constCostPerSqM > 0
+          ? 1 - candidateScenario.assumptions.constCostPerSqM / scenario.assumptions.constCostPerSqM : 0,
         rateReduction,
       };
     };
@@ -529,7 +563,7 @@ function findBalancedPath(
           revenueField.field,
           revenueField.label,
           revenueBase,
-          candidate.scenario.assumptions[revenueField.field],
+          blendedRevenueUnitPrice(candidate.scenario, revenueField.kind),
           revenueField.unit
         )
       );
@@ -591,7 +625,8 @@ function findBalancedPath(
       "균형 조정안",
       best.changes,
       best.result,
-      "공개된 4개 조합 프로필 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다."
+      "공개된 4개 조합 프로필 안에서 동일 가중치 부담 점수가 가장 낮은 다중 변수 조합입니다.",
+      targetIRR
     ),
     burdenScore: Number(best.score.toFixed(4)),
   };
@@ -619,42 +654,38 @@ function evaluate(
   });
 }
 
-function withAssumption<K extends keyof AssumptionSet>(
-  scenario: Scenario,
-  field: K,
-  value: AssumptionSet[K]
-): Scenario {
-  return {
-    ...scenario,
-    assumptions: {
-      ...scenario.assumptions,
-      [field]: value,
-    },
-  };
-}
-
 function getRevenueField(scenario: Scenario):
   | {
       field: "salePricePerSqM" | "rentPerSqMMonth";
+      kind: RevenuePricingKind;
       title: string;
       label: string;
       unit: "원/㎡" | "원/㎡·월";
     }
   | undefined {
-  if (scenario.program.mix.residentialSale > 0) {
+  const contractedRevenue = scenario.program.areaContract
+    ? revenueAreaTotals(scenario.program.areaContract.revenueAreas)
+    : null;
+  const hasSale = contractedRevenue
+    ? contractedRevenue.saleSqm > 0
+    : scenario.program.mix.residentialSale > 0;
+  const hasLease = contractedRevenue
+    ? contractedRevenue.leaseSqm > 0
+    : scenario.program.mix.residentialLease > 0 ||
+      scenario.program.mix.retail > 0;
+  if (hasSale) {
     return {
       field: "salePricePerSqM",
+      kind: "sale",
       title: "매각·분양 단가 검토",
       label: "매각·분양 단가",
       unit: "원/㎡",
     };
   }
-  if (
-    scenario.program.mix.residentialLease > 0 ||
-    scenario.program.mix.retail > 0
-  ) {
+  if (hasLease) {
     return {
       field: "rentPerSqMMonth",
+      kind: "lease",
       title: "임대료 검토",
       label: "월 임대료",
       unit: "원/㎡·월",
@@ -685,8 +716,12 @@ function reachablePath(
   title: string,
   changes: DealRescueChange[],
   result: ScenarioResult,
-  reason: string
+  reason: string,
+  targetIRR: number
 ): DealRescuePath {
+  if (!passesDealRescueTarget(result, targetIRR)) {
+    return unavailablePath(id, title, "unreachable", "표시 단위로 확정한 후보의 재계산에서 목표를 충족하지 못했습니다. 탐색 범위 내 해결안을 확정하지 않았습니다.");
+  }
   return {
     id,
     title,

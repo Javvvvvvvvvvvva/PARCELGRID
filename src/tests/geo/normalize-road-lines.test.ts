@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
 
 describe("normalizeRoadLines", () => {
+  it("preserves an authoritative source part even with irregular vertex spacing", () => {
+    const points: [number, number][] = [[127, 37], [127.00001, 37], [127.003, 37], [127.00301, 37]];
+    expect(normalizeRoadLines([{ name: "Source road", points, topology: "source-part" }])).toEqual([{ name: "Source road", points, topology: "source-part" }]);
+  });
   it("keeps a continuous road polyline intact", () => {
     const roads = normalizeRoadLines([
       {

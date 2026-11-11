@@ -47,4 +47,36 @@ describe("dynamic project route", () => {
       code: "INVALID_PROJECT_INPUT",
     });
   });
+
+  it("stops instead of inventing scenarios for an unclassified zoning label", async () => {
+    const response = await POST(
+      new NextRequest("http://localhost/api/projects/dynamic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parcel: {
+            id: "unknown-zoning",
+            address: "서울 테스트 1",
+            addressRoad: "",
+            lotArea: 118,
+            zoning: "도시지역",
+            zoneCode: "",
+            maxFAR: 200,
+            maxBCR: 60,
+            heightLimit: 0,
+            setback: { road: 0, side: 0, rear: 0 },
+            landPrice: 1,
+            estMarketPrice: 1,
+            acquired: "2026-09-08",
+            acquiredPrice: 1,
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "NO_ELIGIBLE_SCENARIO",
+    });
+  });
 });

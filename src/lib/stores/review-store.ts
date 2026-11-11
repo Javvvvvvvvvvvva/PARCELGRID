@@ -1,7 +1,8 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools, persist } from "zustand/middleware";
+import { createJSONStorage, devtools, persist } from "zustand/middleware";
+import { sessionLocalStorage } from "@/lib/auth/client-session";
 import type {
   PriceVerificationRecord,
   PriceVerificationTarget,
@@ -26,6 +27,7 @@ interface ReviewStore {
   ) => void;
 
   expertReviews: Record<string, ExpertReviewMap>;
+  replaceExpertReviews: (projectId: string, records: ExpertReviewMap) => void;
   setExpertReview: (projectId: string, record: ExpertReviewRecord) => void;
   removeExpertReview: (
     projectId: string,
@@ -63,6 +65,13 @@ export const useReviewStore = create<ReviewStore>()(
           }),
 
         expertReviews: {},
+        replaceExpertReviews: (projectId, records) =>
+          set((state) => ({
+            expertReviews: {
+              ...state.expertReviews,
+              [projectId]: records,
+            },
+          })),
         setExpertReview: (projectId, record) =>
           set((state) => ({
             expertReviews: {
@@ -87,7 +96,11 @@ export const useReviewStore = create<ReviewStore>()(
             };
           }),
       }),
-      { name: "parcelgrid-review-workflow" }
+      {
+        name: "parcelgrid-review-workflow",
+        storage: createJSONStorage(() => sessionLocalStorage),
+        skipHydration: true,
+      }
     )
   )
 );

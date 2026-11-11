@@ -2,7 +2,13 @@
 
 import { useMemo } from "react";
 import { Panel } from "@/components/ui/primitives";
+import { defaultAssumptions } from "@/lib/finance/scenario";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import {
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
 
@@ -52,17 +58,46 @@ export function PlanningGeometryContractPanel({
   const parcel = data?.parcel;
 
   const result = useMemo(() => {
-    if (!scenario || !parcel?.boundary || parcel.boundary.length < 3) return null;
+    if (!scenario || !parcel || !hasParcelBoundary(parcel)) return null;
+    const legacyAssumptions =
+      data?.scenarios.find((candidate) => candidate.recommended)?._raw.assumptions ??
+      data?.scenarios[0]?._raw.assumptions ??
+      defaultAssumptions();
+    const calculation = calculatePlanningScenario(scenario, {
+      parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus: parcel.inputProvenance?.zoning === "vworld-land-use"
+          ? "public-observation" : "user-entered",
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
+        lotAreaSqm: parcel.lotArea,
+        maxFARPct: parcel.maxFAR,
+        maxBCRPct: parcel.maxBCR,
+        heightLimitM: parcel.heightLimit ?? 0,
+        regulatoryConstraints: parcel.regulatoryConstraints,
+        roofAllowanceM: 1.4,
+        acquisitionCostManwon: parcel.acquiredPrice,
+        demolitionCostManwon: parcel.demolitionCost ?? 0,
+      },
+      assumptions: planningEconomicsAssumptionsFromLegacy(
+        legacyAssumptions,
+        `stage2-${data?.meta.version ?? "local"}`
+      ),
+      calculatedAt: data?.meta.lastSyncedAt,
+    });
     return buildPlanningGeometry({
       projectId,
       scenario,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       lotAreaSqm: parcel.lotArea,
       zoning: parcel.zoning ?? "",
       roads: parcel.roads,
       setback: parcel.setback,
+      sunlight: calculation.sunlight,
+      roofAllowanceM: calculation.metrics.roofAllowanceM,
     });
-  }, [projectId, scenario, parcel]);
+  }, [data, projectId, scenario, parcel]);
 
   if (!scenario || !parcel) return null;
 

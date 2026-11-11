@@ -7,21 +7,12 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { defaultAssumptions } from "@/lib/finance/scenario";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import type { LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
+import type { PlanningPlacementAssessment } from "@/lib/planning/placement-assessment";
 import {
-  calcBuildableArea,
-  type LngLat,
-} from "@/lib/finance/buildable-area";
-import {
-  analyzeFrontage,
-  legalEdgeSetbacksFromFrontage,
-} from "@/lib/geo/road-frontage";
-import {
-  assessPlanningPlacement,
-  type PlanningPlacementAssessment,
-} from "@/lib/planning/placement-assessment";
-import {
-  buildPlanningMassModel,
-  polygonAreaSqm,
   polygonCentroid,
   type LocalPlanPoint,
   type PlanningEnvelopeStep,
@@ -37,8 +28,13 @@ import {
   pointerRotationDeltaDeg,
   snapPlacementValue,
 } from "@/lib/planning/placement-interaction";
+import {
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
+import { calculatePlanningSpatialValidation } from "@/lib/planning/scenario-spatial-validation";
+import type { ProjectComputed } from "@/lib/services/compute-project";
 import { useProjectStore } from "@/lib/stores/project-store";
-import type { RoadLine } from "@/components/ui/MassingView";
 import { num } from "@/lib/utils/format";
 
 const PREVIEW_WIDTH = 440;
@@ -63,6 +59,7 @@ interface RotationDragState {
 
 interface PlacementPreviewData {
   groundShape: LocalPlanPoint[];
+  groundPolygons: LocalParcelPolygon[];
   envelopeSteps: PlanningEnvelopeStep[];
   model: PlanningMassModel;
   assessment: PlanningPlacementAssessment;
@@ -72,127 +69,53 @@ interface PlacementPreviewData {
   warnings: string[];
 }
 
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length < 2) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function ringCentroid(ring: LngLat[]): LngLat {
-  const points = openRing(ring);
-  if (points.length === 0) return [0, 0];
-  return [
-    points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    points.reduce((sum, point) => sum + point[1], 0) / points.length,
-  ];
-}
-
-function ringToLocalMeters(
-  ring: LngLat[],
-  origin: LngLat
-): LocalPlanPoint[] {
-  const [originLng, originLat] = origin;
-  const longitudeScale = Math.cos((originLat * Math.PI) / 180);
-  return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - originLng) * 111_000 * longitudeScale,
-    z: -(lat - originLat) * 111_000,
-  }));
-}
-
-function buildPlacementPreviewData(
-  boundary: LngLat[],
-  zoning: string,
-  scenario: PlanningScenario,
-  roads?: RoadLine[]
-): PlacementPreviewData {
-  const origin = ringCentroid(boundary);
-  const groundShape = ringToLocalMeters(boundary, origin);
-  const groundFloors = scenario.floorPrograms.filter((floor) => floor.level > 0);
-  const maxFloor = Math.max(1, ...groundFloors.map((floor) => floor.level));
-  const averageFloorHeight =
-    groundFloors.length > 0
-      ? groundFloors.reduce(
-          (sum, floor) => sum + Math.max(2, floor.floorHeightM),
-          0
-        ) / groundFloors.length
-      : 3;
-
-  const frontage =
-    roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
-  // 화면의 통과/실패 외곽선은 Geometry Contract·3D·Export와 같은
-  // 법적 최대 기준을 사용한다. 프로젝트 설계 여유거리는 별도로 안내한다.
-  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
-
-  const buildable = calcBuildableArea(
-    boundary,
-    0.5,
-    maxFloor,
-    averageFloorHeight,
-    /주거/.test(zoning),
-    edgeSetbacks
+export function buildPlacementPreviewData(
+  data: ProjectComputed,
+  scenario: PlanningScenario
+): PlacementPreviewData | null {
+  const projectParcel = data.parcel;
+  const parcel = resolvePlanningParcel(projectParcel);
+  if (!parcel.available) return null;
+  const { origin } = parcel;
+  const groundShape = parcel.simple ? parcel.polygons[0].outer : [];
+  const legacy = data.scenarios.find((candidate) => candidate.recommended)?._raw.assumptions
+    ?? data.scenarios[0]?._raw.assumptions
+    ?? defaultAssumptions();
+  // Match the calculation context used by PlanningScenarioWorkspaceV4.
+  const calculation = calculatePlanningScenario(scenario, {
+    parcel: {
+      address: projectParcel.address,
+      zoning: projectParcel.zoning,
+      zoningStatus: projectParcel.inputProvenance?.zoning === "vworld-land-use"
+        ? "public-observation" : "user-entered",
+      sunlightRuleAsOf: data.meta.lastSyncedAt?.slice(0, 10),
+      lotAreaSqm: projectParcel.lotArea,
+      maxFARPct: projectParcel.maxFAR,
+      maxBCRPct: projectParcel.maxBCR,
+      heightLimitM: projectParcel.heightLimit ?? 0,
+      regulatoryConstraints: projectParcel.regulatoryConstraints,
+      roofAllowanceM: 1.4,
+      acquisitionCostManwon: projectParcel.acquiredPrice,
+      demolitionCostManwon: projectParcel.demolitionCost ?? 0,
+    },
+    assumptions: planningEconomicsAssumptionsFromLegacy(legacy, `stage2-${data.meta.version ?? "local"}`),
+    calculatedAt: data.meta.lastSyncedAt,
+  });
+  const spatial = calculatePlanningSpatialValidation(
+    projectParcel.boundary,
+    projectParcel.zoning ?? "",
+    scenario,
+    projectParcel.roads,
+    projectParcel.setback,
+    calculation.sunlight,
+    calculation.metrics.roofAllowanceM,
+    projectParcel.boundaryPolygons
   );
-  const basementBuildable = calcBuildableArea(
-    boundary,
-    0.5,
-    1,
-    3,
-    false,
-    edgeSetbacks
-  );
+  if (!spatial) return null;
 
-  const fallbackRing = buildable.buildable2DRing ?? boundary;
-  const firstStep = buildable.stepped3D.find((step) => step.ringLngLat);
-  const basementRing = basementBuildable.buildable2DRing ?? boundary;
-
-  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map(
-    (floor) => {
-      const step =
-        floor.level > 0
-          ? buildable.stepped3D.find(
-              (candidate) => candidate.floor === floor.level
-            )
-          : undefined;
-      const ring =
-        floor.level < 0
-          ? basementRing
-          : step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
-      const shape = ringToLocalMeters(ring, origin);
-      return {
-        level: floor.level,
-        shape,
-        envelopeAreaSqm:
-          floor.level < 0
-            ? polygonAreaSqm(shape)
-            : step?.floorPlateSqm ?? polygonAreaSqm(shape),
-        requiredSetbackM:
-          floor.level < 0 ? 0 : step?.requiredSetbackM ?? 0,
-        envelopeAvailable:
-          floor.level < 0
-            ? Boolean(basementBuildable.buildable2DRing)
-            : Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
-      };
-    }
-  );
-
-  const model = buildPlanningMassModel(
-    scenario.floorPrograms,
-    envelopeSteps,
-    scenario.placement
-  );
-  const assessment = assessPlanningPlacement(model, envelopeSteps);
-
-  const frontEdge =
-    frontage &&
-    frontage.frontIndex >= 0 &&
-    groundShape.length > frontage.frontIndex
-      ? ([
-          groundShape[frontage.frontIndex],
-          groundShape[(frontage.frontIndex + 1) % groundShape.length],
-        ] as [LocalPlanPoint, LocalPlanPoint])
-      : null;
+  const frontage = analyzeParcelFrontage(parcel.source, projectParcel.roads ?? [], origin);
+  const primaryFrontage = frontage?.frontages.reduce((best, edge) => edge.roadDistM < best.roadDistM ? edge : best, frontage.frontages[0]);
+  const frontEdge = primaryFrontage?.edge ?? null;
   const frontEdgeAngleDeg = frontEdge
     ? (Math.atan2(
         frontEdge[1].z - frontEdge[0].z,
@@ -204,13 +127,14 @@ function buildPlacementPreviewData(
 
   return {
     groundShape,
-    envelopeSteps,
-    model,
-    assessment,
-    frontageRoadName: frontage?.roadName ?? null,
+    groundPolygons: parcel.polygons,
+    envelopeSteps: spatial.envelopeSteps,
+    model: spatial.model,
+    assessment: spatial.assessment,
+    frontageRoadName: primaryFrontage?.roadName ?? null,
     frontEdge,
     frontEdgeAngleDeg,
-    warnings: [...buildable.warnings, ...basementBuildable.warnings],
+    warnings: spatial.warnings,
   };
 }
 
@@ -304,14 +228,9 @@ export function ScenarioPlacementWorkspace({
     null;
 
   const preview = useMemo(() => {
-    if (!parcel?.boundary || parcel.boundary.length < 3 || !scenario) return null;
-    return buildPlacementPreviewData(
-      parcel.boundary,
-      parcel.zoning ?? "",
-      scenario,
-      parcel.roads
-    );
-  }, [parcel, scenario]);
+    if (!data || !scenario) return null;
+    return buildPlacementPreviewData(data, scenario);
+  }, [data, scenario]);
 
   const [previewFloorId, setPreviewFloorId] = useState<string | null>(null);
   const moveDragRef = useRef<MoveDragState | null>(null);
@@ -355,14 +274,15 @@ export function ScenarioPlacementWorkspace({
   const previewEnvelope = previewMass
     ? preview.envelopeSteps.find((step) => step.level === previewMass.level) ?? null
     : null;
+  const previewEnvelopePolygons = previewEnvelope?.polygons ?? [];
   const previewFloorAssessment = previewMass
     ? preview.assessment.floors.find((floor) => floor.floorId === previewMass.id) ?? null
     : null;
   // Keep the viewport fixed while dragging. Including the moving mass would
   // continuously rescale the SVG and make pointer-to-meter conversion unstable.
   const bounds = previewBounds([
-    preview.groundShape,
-    previewEnvelope?.shape ?? [],
+    ...preview.groundPolygons.flatMap(part => [part.outer, ...part.holes]),
+    ...previewEnvelopePolygons.flatMap(part => [part.outer, ...part.holes]),
   ]);
   const previewMassCenter = previewMass
     ? polygonCentroid(previewMass.shape)
@@ -746,21 +666,24 @@ export function ScenarioPlacementWorkspace({
                 aria-label="건물 직접 배치 미리보기"
                 style={{ width: "100%", display: "block", touchAction: "none" }}
               >
-                <polygon
-                  points={svgPoints(preview.groundShape, bounds)}
+                {preview.groundPolygons.map((part, index) => <path key={index}
+                  d={[part.outer, ...part.holes].map(ring => `M ${svgPoints(ring, bounds)} Z`).join(" ")}
+                  fillRule="evenodd"
                   fill="#e2e8f0"
                   stroke="#64748b"
                   strokeWidth="1.5"
-                />
-                {previewEnvelope && (
-                  <polygon
-                    points={svgPoints(previewEnvelope.shape, bounds)}
+                />)}
+                {previewEnvelopePolygons.map((part, index) => (
+                  <path
+                    key={index}
+                    d={[part.outer, ...part.holes].map(ring => `M ${svgPoints(ring, bounds)} Z`).join(" ")}
+                    fillRule="evenodd"
                     fill="rgba(14, 116, 144, 0.08)"
                     stroke="#0e7490"
                     strokeWidth="1.5"
                     strokeDasharray="5 4"
                   />
-                )}
+                ))}
                 {preview.frontEdge && (
                   <line
                     x1={Number(svgPoints([preview.frontEdge[0]], bounds).split(",")[0])}

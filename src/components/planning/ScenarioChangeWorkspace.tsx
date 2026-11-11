@@ -235,6 +235,13 @@ export function ScenarioChangeWorkspace({ projectId }: { projectId: string }) {
     if (!parcel) return null;
     return {
       parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus:
+          parcel.inputProvenance?.zoning === "vworld-land-use"
+            ? ("public-observation" as const)
+            : ("user-entered" as const),
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,

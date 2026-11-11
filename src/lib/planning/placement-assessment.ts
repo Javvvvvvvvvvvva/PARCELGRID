@@ -3,6 +3,12 @@ import type {
   PlanningEnvelopeStep,
   PlanningMassModel,
 } from "@/lib/planning/planning-massing";
+import {
+  createPlanningGeometryBudget,
+  planningEnvelopeContainsFootprint,
+  planningEnvelopePolygons,
+} from "@/lib/planning/planning-massing";
+import { localParcelContainsPoint } from "@/lib/geo/parcel-topology-geometry";
 
 const EPSILON = 1e-7;
 
@@ -42,6 +48,7 @@ function pointOnSegment(
 
   const lengthSquared =
     (end.x - start.x) ** 2 + (end.z - start.z) ** 2;
+  if (lengthSquared <= EPSILON ** 2) return Math.hypot(point.x - start.x, point.z - start.z) <= EPSILON;
   return dot <= lengthSquared + EPSILON;
 }
 
@@ -81,37 +88,37 @@ function edgeSamples(
   }));
 }
 
-/**
- * 계획 외곽선의 모든 꼭짓점과 변 내부 샘플이 법규 외곽선 안에 있는지 확인한다.
- * 회전·이동으로 오목한 법규 외곽선을 가로지르는 경우도 변 샘플로 감지한다.
- */
+/** Samples are diagnostic only. Full planar clipping determines containment. */
 export function polygonInsidePolygon(
   inner: LocalPlanPoint[],
   outer: LocalPlanPoint[]
 ): { fits: boolean; outsidePointCount: number } {
-  if (inner.length < 3 || outer.length < 3) {
+  return assessFootprint(inner, { level: 1, shape: outer, envelopeAreaSqm: 0, requiredSetbackM: 0, envelopeAvailable: true }, createPlanningGeometryBudget());
+}
+
+function assessFootprint(inner: LocalPlanPoint[], envelope: PlanningEnvelopeStep, checkBudget: () => void) {
+  try {
+    const fits = planningEnvelopeContainsFootprint(inner, envelope, checkBudget);
+    const polygons = planningEnvelopePolygons(envelope);
+    let outsidePointCount = 0;
+    for (let index = 0; index < inner.length; index++) {
+      checkBudget();
+      const current = inner[index], next = inner[(index + 1) % inner.length];
+      for (const point of [current, ...edgeSamples(current, next)]) {
+        if (!localParcelContainsPoint(polygons, point)) outsidePointCount++;
+      }
+    }
+    return { fits, outsidePointCount };
+  } catch {
     return { fits: false, outsidePointCount: inner.length };
   }
-
-  const samples: LocalPlanPoint[] = [...inner];
-  inner.forEach((point, index) => {
-    const next = inner[(index + 1) % inner.length];
-    samples.push(...edgeSamples(point, next));
-  });
-
-  const outsidePointCount = samples.reduce(
-    (count, point) =>
-      count + (pointInPolygonInclusive(point, outer) ? 0 : 1),
-    0
-  );
-
-  return { fits: outsidePointCount === 0, outsidePointCount };
 }
 
 export function assessPlanningPlacement(
   model: PlanningMassModel,
   envelopeSteps: PlanningEnvelopeStep[]
 ): PlanningPlacementAssessment {
+  const checkBudget = createPlanningGeometryBudget();
   const envelopeByLevel = new Map(
     envelopeSteps.map((step) => [step.level, step])
   );
@@ -119,9 +126,9 @@ export function assessPlanningPlacement(
   const floors = model.floors.map((floor) => {
     const envelope = envelopeByLevel.get(floor.level);
     const placement = envelope
-      ? polygonInsidePolygon(floor.shape, envelope.shape)
+      ? assessFootprint(floor.shape, envelope, checkBudget)
       : { fits: false, outsidePointCount: floor.shape.length };
-    const areaFits = floor.capacityShortfallSqm <= 0.1;
+    const areaFits = Number.isFinite(floor.capacityShortfallSqm) && floor.capacityShortfallSqm <= 0.1;
 
     return {
       floorId: floor.id,

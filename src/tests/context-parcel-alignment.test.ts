@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CADASTRAL_CONTEXT_VERSION, type CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import * as topology from "@/lib/geo/parcel-topology-geometry";
 import { buildContextParcelAlignment } from "@/lib/planning/context-parcel-alignment";
 import type { ContextGeometrySnapshot } from "@/lib/planning/sketchup-export-package";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
@@ -61,7 +62,7 @@ function context(shape: LocalPlanPoint[]): ContextGeometrySnapshot {
 
 function cadastral(adjacent: LocalPlanPoint[]): CadastralContextSnapshot {
   return {
-    version: "cadastral-context-v2",
+    version: CADASTRAL_CONTEXT_VERSION,
     projectId: "alignment-test",
     generatedAt: "2026-07-16T00:00:00.000Z",
     cadastralHash: "CAD-ALIGN",
@@ -104,6 +105,8 @@ function cadastral(adjacent: LocalPlanPoint[]): CadastralContextSnapshot {
   };
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("context building parcel alignment", () => {
   it("marks a building fully contained by an adjacent parcel as aligned", () => {
     const result = buildContextParcelAlignment({
@@ -138,5 +141,90 @@ describe("context building parcel alignment", () => {
     expect(result.buildings[0].status).toBe("mismatch");
     expect(result.buildings[0].coveragePct).toBeLessThan(60);
     expect(result.summary.mismatchBuildings).toBe(1);
+  });
+
+  it("stops during parcel validation and marks all buildings unavailable", () => {
+    const buildings = context(square(2, -5, 8, 5));
+    buildings.buildings.push({ ...buildings.buildings[0], id: "building-2" });
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const validate = topology.validateLocalParcelTopology;
+    const validation = vi.spyOn(topology, "validateLocalParcelTopology").mockImplementation((polygons, checkDeadline) => {
+      expect(checkDeadline).toBeTypeOf("function");
+      now = 2_000;
+      return validate(polygons, checkDeadline);
+    });
+    const coverage = vi.spyOn(topology, "localParcelCoveredArea");
+
+    const result = buildContextParcelAlignment({ context: buildings, cadastral: cadastral(square(0, -10, 10, 10)) });
+
+    expect(validation).toHaveBeenCalledOnce();
+    expect(coverage).not.toHaveBeenCalled();
+    expect(result.buildings).toHaveLength(2);
+    for (const building of result.buildings) expect(building).toMatchObject({
+      status: "unavailable", coverageRatio: null, coveragePct: null, bestParcelPnu: null, bestParcelCoverageRatio: null,
+    });
+    expect(result.summary).toMatchObject({ unavailableBuildings: 2, alignedBuildings: 0, mismatchBuildings: 0, averageCoveragePct: null });
+  });
+
+  it("shares one budget across buildings, retaining only completed coverage", () => {
+    const buildings = context(square(2, -5, 8, 5));
+    buildings.buildings = [1, 2, 3].map(id => ({ ...structuredClone(buildings.buildings[0]), id: `building-${id}` }));
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const cover = topology.localParcelCoveredArea;
+    const coverage = vi.spyOn(topology, "localParcelCoveredArea").mockImplementation((...args) => {
+      const result = cover(...args);
+      now = 1_500;
+      return result;
+    });
+    const validate = topology.validateLocalParcelTopology;
+    const validation = vi.spyOn(topology, "validateLocalParcelTopology").mockImplementation((polygons, checkDeadline) => {
+      if (polygons === buildings.buildings[1].polygons) now = 2_000;
+      return validate(polygons, checkDeadline);
+    });
+
+    const result = buildContextParcelAlignment({ context: buildings, cadastral: cadastral(square(0, -10, 10, 10)) });
+
+    expect(result.buildings[0]).toMatchObject({ status: "aligned", coveragePct: 100 });
+    for (const building of result.buildings.slice(1)) expect(building).toMatchObject({
+      status: "unavailable", coverageRatio: null, coveragePct: null, bestParcelPnu: null, bestParcelCoverageRatio: null,
+    });
+    expect(result.summary).toMatchObject({ alignedBuildings: 1, unavailableBuildings: 2, mismatchBuildings: 0, averageCoveragePct: 100 });
+    expect(coverage).toHaveBeenCalledOnce();
+    expect(validation.mock.calls.some(([polygons]) => polygons === buildings.buildings[2].polygons)).toBe(false);
+  });
+
+  it.each(["localParcelCoveredArea", "localParcelIntersectionArea"] as const)("rejects late %s results before exposing partial coverage", operation => {
+    const buildings = context(square(2, -5, 8, 5));
+    buildings.buildings.push({ ...buildings.buildings[0], id: "building-2" });
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const cover = topology.localParcelCoveredArea;
+    const intersect = topology.localParcelIntersectionArea;
+    const expire = (result: number) => {
+      now = 2_000;
+      return result;
+    };
+    const calculation = operation === "localParcelCoveredArea"
+      ? vi.spyOn(topology, operation).mockImplementation((...args) => expire(cover(...args)))
+      : vi.spyOn(topology, operation).mockImplementation((...args) => expire(intersect(...args)));
+
+    const result = buildContextParcelAlignment({ context: buildings, cadastral: cadastral(square(0, -10, 10, 10)) });
+
+    expect(calculation).toHaveBeenCalledOnce();
+    expect(result.buildings.map(building => building.status)).toEqual(["unavailable", "unavailable"]);
+    expect(result.buildings.every(building => building.coveragePct === null && building.bestParcelCoverageRatio === null)).toBe(true);
+    expect(result.summary.averageCoveragePct).toBeNull();
+  });
+
+  it("continues after invalid building topology without treating it as timeout", () => {
+    const buildings = context(square(2, -5, 8, 5));
+    buildings.buildings = [{ ...buildings.buildings[0], id: "invalid", polygons: [] }, buildings.buildings[0]];
+
+    const result = buildContextParcelAlignment({ context: buildings, cadastral: cadastral(square(0, -10, 10, 10)) });
+
+    expect(result.buildings.map(building => building.status)).toEqual(["unavailable", "aligned"]);
+    expect(result.summary).toMatchObject({ alignedBuildings: 1, unavailableBuildings: 1, averageCoveragePct: 100 });
   });
 });

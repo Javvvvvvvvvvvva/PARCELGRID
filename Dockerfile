@@ -2,9 +2,10 @@
 #
 # Stage 1: install deps (cached when package.json doesn't change)
 # Stage 2: build the Next app
-# Stage 3: copy build output + minimal runtime deps into a clean image
+# Stage 3: copy build output + installed dependencies into a clean image
 #
-# Result: ~200MB image, no source code, no dev deps, no build tooling.
+# The conventional runtime layout retains installed development dependencies.
+# Image size and container startup must be verified on the deployment host.
 
 # ─────────────────────────── Stage 1: deps ───────────────────────────
 FROM node:24-alpine AS deps
@@ -25,7 +26,9 @@ RUN corepack enable && corepack prepare pnpm@11.1.0 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Next standalone output makes the runtime image tiny.
+# Only the public browser map key is a build argument. Server credentials
+# belong in runtime secrets, never in the image build context.
+ARG NEXT_PUBLIC_KAKAO_JS_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm next build
 

@@ -59,5 +59,9 @@ export function protectLockedPlanningGeometryPatch<
   delete protectedPatch.floorPrograms;
   delete protectedPatch.placement;
   delete protectedPatch.parking;
+  delete protectedPatch.egressPlan;
+  delete protectedPatch.layoutFinanceHistory;
+  delete protectedPatch.quantityCost;
+  delete protectedPatch.constructionQuote;
   return protectedPatch as T;
 }

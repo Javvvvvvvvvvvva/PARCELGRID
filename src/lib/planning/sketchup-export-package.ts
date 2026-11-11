@@ -10,6 +10,8 @@ import {
 } from "@/lib/planning/planning-geometry";
 import { polygonAreaSqm, type LocalPlanPoint } from "@/lib/planning/planning-massing";
 import type { PlanningParkingGeometrySnapshot } from "@/lib/planning/planning-parking-geometry";
+import { localParcelPolygons } from "@/lib/geo/parcel-topology";
+import { parkingGeometryParts } from "@/lib/planning/parking-geometry-parts";
 
 export const CONTEXT_GEOMETRY_VERSION = "context-geometry-v1" as const;
 export const SKETCHUP_EXPORT_PACKAGE_VERSION = "sketchup-export-package-v2" as const;
@@ -342,10 +344,12 @@ export function buildSketchupExportPackage(input: {
   });
   const verifiedContextCount = context.summary.verifiedHeightBuildings;
   const estimatedContextCount = context.summary.estimatedHeightBuildings;
+  const parcelPolygons = localParcelPolygons(input.planning.parcel);
+  const parkingParts = input.parking ? parkingGeometryParts(input.parking.layout) : [];
   const layers: SketchupExportLayer[] = [
     {
       name: "PG_PARCEL",
-      objectCount: input.planning.parcel.polygon.length >= 3 ? 1 : 0,
+      objectCount: parcelPolygons.filter((polygon) => polygon.outer.length >= 3).length,
       accuracy: "verified",
       purpose: "대상 필지 경계",
     },
@@ -359,31 +363,34 @@ export function buildSketchupExportPackage(input: {
       ? [
           {
             name: "PG_PARKING_STALLS" as const,
-            objectCount: input.parking.layout.stalls.length,
+            objectCount: parkingParts.reduce((sum, part) => sum + part.stalls.length, 0),
             accuracy: "exact-plan" as const,
             purpose: "실제 배치된 주차면 외곽",
           },
           {
             name: "PG_PARKING_AISLE" as const,
-            objectCount: input.parking.layout.aisleShape.length >= 3 ? 1 : 0,
+            objectCount: parkingParts.filter((part) => part.aisleShape.length >= 3).length,
             accuracy: "exact-plan" as const,
             purpose: "주차 차량 통로 외곽",
           },
           {
             name: "PG_PARKING_CORE" as const,
-            objectCount: input.parking.layout.coreShape.length >= 3 ? 1 : 0,
+            objectCount: parkingParts.filter((part) => part.coreShape.length >= 3).length,
             accuracy: "exact-plan" as const,
             purpose: "필로티 주차 불가 코어",
           },
           {
             name: "PG_PARKING_COLUMNS_REFERENCE" as const,
-            objectCount: input.parking.layout.columns.length,
+            objectCount: parkingParts.reduce((sum, part) => sum + part.columns.length, 0),
             accuracy: "reference" as const,
             purpose: "구조설계 전 주차 효율 검토용 기둥 참고점",
           },
           {
             name: "PG_PARKING_ACCESS_REFERENCE" as const,
-            objectCount: input.parking.layout.entryPath.length >= 2 ? 1 : 0,
+            objectCount: parkingParts.reduce((sum, part) => sum + part.entryPaths.filter(
+              (path) => path.points.some((point, index) => index > 0 &&
+                Math.hypot(point.x - path.points[index - 1].x, point.z - path.points[index - 1].z) >= 1e-6)
+            ).length, 0),
             accuracy: "reference" as const,
             purpose: "도로 접면 방향 기반 차량 진입 참고선",
           },
@@ -409,7 +416,7 @@ export function buildSketchupExportPackage(input: {
     },
     {
       name: "PG_NORTH",
-      objectCount: 1,
+      objectCount: parcelPolygons.some((polygon) => polygon.outer.length >= 3) ? 1 : 0,
       accuracy: "verified",
       purpose: "정북 방향 및 좌표축",
     },

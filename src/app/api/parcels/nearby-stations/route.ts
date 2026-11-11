@@ -5,10 +5,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { searchNearbyStations } from "@/lib/integrations/kakao";
+import { requireApiCapability } from "@/lib/auth/request";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
+  const authorization = await requireApiCapability(req, "project.read");
+  if (!authorization.ok) return authorization.response;
   const sp = req.nextUrl.searchParams;
   const rawLat = sp.get("lat");
   const rawLng = sp.get("lng");

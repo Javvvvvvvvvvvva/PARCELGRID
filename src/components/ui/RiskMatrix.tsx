@@ -1,16 +1,7 @@
 "use client";
 
 /**
- * 규제 위험 매트릭스 — 대시보드 (PDF p1).
- *
- * 5개 규제 항목을 카드 형태로 표시:
- *   GFA-01 용적률 상한 여유 [정상]
- *   SUN-02 일조권 사선제한 [주의]
- *   PRK-04 주차 대수 충족 [정상]
- *   CUL-01 문화재 보호구역 [협의]
- *   ENV-03 환경영향평가 [정상]
- *
- * 본인 도구 데이터: RiskVM (code, label, level, levelLabel, note)
+ * Risk severity and evidence certainty are separate; missing status is unverified.
  */
 
 import type { RiskVM } from "@/lib/adapters/view-model";
@@ -26,6 +17,7 @@ interface RiskMatrixProps {
 export function RiskMatrix({ risks, showSummary = true, compact = false }: RiskMatrixProps) {
   // 주의/협의 항목 카운트
   const warnCount = risks.filter((r) => r.level === "med" || r.level === "high").length;
+  const unverifiedCount = risks.filter((r) => r.evidenceStatus !== "confirmed").length;
 
   const rows = (
     <>
@@ -64,8 +56,9 @@ export function RiskMatrix({ risks, showSummary = true, compact = false }: RiskM
         style={{
           display: "flex",
           alignItems: "center",
-          height: 36,
-          padding: "0 14px",
+          minHeight: 36,
+          flexWrap: "wrap",
+          padding: "6px 14px",
           borderBottom: "1px solid var(--border)",
           gap: 8,
         }}
@@ -74,14 +67,14 @@ export function RiskMatrix({ risks, showSummary = true, compact = false }: RiskM
           style={{
             fontSize: 11,
             fontWeight: 600,
-            letterSpacing: "0.06em",
+            letterSpacing: 0,
             textTransform: "uppercase",
             color: "var(--fg-muted)",
           }}
         >
           규제 위험 매트릭스
         </div>
-        {showSummary && warnCount > 0 && (
+        {showSummary && (warnCount > 0 || unverifiedCount > 0) && (
           <div style={{ marginLeft: "auto" }}>
             <span
               style={{
@@ -98,7 +91,7 @@ export function RiskMatrix({ risks, showSummary = true, compact = false }: RiskM
                 fontFamily: "var(--font-mono)",
               }}
             >
-              {warnCount} 요주의
+              {[warnCount > 0 ? `${warnCount} 요주의` : "", unverifiedCount > 0 ? `${unverifiedCount} 미확정` : ""].filter(Boolean).join(" · ")}
             </span>
           </div>
         )}
@@ -113,17 +106,19 @@ export function RiskMatrix({ risks, showSummary = true, compact = false }: RiskM
 /* ─────────────────────────── Risk row ─────────────────────────── */
 
 function RiskRow({ risk, compact = false }: { risk: RiskVM; compact?: boolean }) {
+  const unverified = risk.evidenceStatus !== "confirmed";
   const statusKind: "pos" | "warn" | "neg" =
-    risk.level === "high" ? "neg" : risk.level === "med" ? "warn" : "pos";
+    risk.level === "high" ? "neg" : risk.level === "med" || unverified ? "warn" : "pos";
 
-  const statusLabel =
+  const severityLabel =
     risk.level === "high"
       ? "협의"
       : risk.level === "med"
         ? "주의"
-        : risk.level === "low"
-          ? "확인"
-          : "정상";
+        : "모델 확인";
+  const statusLabel = unverified
+    ? risk.level === "high" || risk.level === "med" ? `${severityLabel} · 미확정` : "미확정"
+    : severityLabel;
 
   const pillStyle = {
     display: "inline-flex" as const,
@@ -134,7 +129,8 @@ function RiskRow({ risk, compact = false }: { risk: RiskVM; compact?: boolean })
     fontSize: 10.5,
     fontWeight: 500,
     fontFamily: "var(--font-mono)",
-    letterSpacing: "0.02em",
+    letterSpacing: 0,
+    whiteSpace: "nowrap" as const,
     background:
       statusKind === "neg"
         ? "var(--neg-soft)"

@@ -1,5 +1,7 @@
+import { molitEvidenceFixture } from "./helpers/molit-evidence-fixture";
 import { describe, expect, it } from "vitest";
 import { defaultAssumptions } from "@/lib/finance/scenario";
+import { revenuePricingFromAssumptions } from "@/lib/finance/revenue-contract";
 import type { Parcel, Scenario } from "@/lib/finance/types";
 import { computeProject } from "@/lib/services/compute-project";
 import { commitStage3FeasibilitySnapshot } from "@/lib/services/commit-stage3-feasibility";
@@ -48,12 +50,18 @@ describe("Stage 3 feasibility snapshot", () => {
       recommendedId: baseScenario.id,
       calculateMaxAcquisition: false,
     });
+    previous.transactionEvidence = [molitEvidenceFixture({ status: "unavailable", completedMonths: [], failedMonths: [{ month: "202601", issue: "access-denied" }], transactionCount: 0 })];
+    previous.dwellingMarket = { comps: [], evidence: [molitEvidenceFixture({ type: "villa" })] };
     const editedScenario: Scenario = {
       ...baseScenario,
       assumptions: {
         ...baseScenario.assumptions,
         constCostPerSqM: baseScenario.assumptions.constCostPerSqM * 1.2,
       },
+      revenuePricing: revenuePricingFromAssumptions({
+        ...baseScenario.assumptions,
+        salePricePerSqM: 8_800_000,
+      }),
     };
     const editedParcel = { ...parcel, acquiredPrice: 95_000 };
 
@@ -64,10 +72,17 @@ describe("Stage 3 feasibility snapshot", () => {
     );
     const saved = committed.scenarios.find((item) => item.id === baseScenario.id);
 
+    expect(committed.transactionEvidence).toEqual(previous.transactionEvidence);
+    expect(committed.dwellingMarket).toEqual(previous.dwellingMarket);
+    expect(committed.comps).toEqual([]);
+    expect(committed.saleEstimate).toBeUndefined();
     expect(committed.parcel.acquiredPrice).toBe(95_000);
     expect(saved?.recommended).toBe(true);
     expect(saved?._raw.assumptions.constCostPerSqM).toBe(
       editedScenario.assumptions.constCostPerSqM
+    );
+    expect(saved?._raw.revenuePricing?.pools.residentialSale.unitPriceWon).toBe(
+      8_800_000,
     );
     expect(saved?.profit).not.toBe(previous.scenarios[0].profit);
     expect(saved?.profitAtLowCost).toBeTypeOf("number");

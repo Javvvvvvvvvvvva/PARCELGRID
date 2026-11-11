@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 interface TopBarProps {
   crumb: string[];
@@ -24,7 +25,9 @@ export function TopBar({ crumb, right }: TopBarProps) {
       <div className="ui-crumb">
         {crumb.map((c, i) => (
           <span key={i} style={{ display: "contents" }}>
-            <span className={i === crumb.length - 1 ? "ui-crumb__current" : ""}>{c}</span>
+            {i === 0 && c === "프로젝트" ? (
+              <Link href="/" style={{ color: "inherit", textDecoration: "none" }}>{c}</Link>
+            ) : <span className={i === crumb.length - 1 ? "ui-crumb__current" : ""}>{c}</span>}
             {i < crumb.length - 1 && <span className="ui-crumb__sep">›</span>}
           </span>
         ))}

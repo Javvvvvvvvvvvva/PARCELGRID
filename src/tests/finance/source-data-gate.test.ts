@@ -3,6 +3,8 @@ import {
   applyFinancialSources,
   buildSourceDataGate,
   FINANCIAL_SOURCE_GUIDANCE,
+  HOLD_PERIOD_SOURCE_FIELDS,
+  TENANT_ROLLOVER_SOURCE_FIELDS,
   requiredSourceFields,
   sourceKindRequiresDocument,
   validateFinancialSource,
@@ -61,11 +63,59 @@ function validRecord(field: FinancialSourceField, value: number) {
   > = {
     acquisitionPrice: "signed-contract",
     salePricePerSqM: "appraisal",
+    rentPerSqMMonth: "appraisal",
+    residentialSalePricePerSqM: "appraisal",
+    retailSalePricePerSqM: "appraisal",
+    officeSalePricePerSqM: "appraisal",
+    residentialRentPerSqMMonth: "appraisal",
+    retailRentPerSqMMonth: "appraisal",
+    officeRentPerSqMMonth: "appraisal",
+    operatingExpenseRate: "professional-quote",
     constCostPerSqM: "professional-quote",
     softCostRate: "professional-quote",
     contingencyRate: "approved-policy",
+    acquisitionTaxManwon: "professional-quote",
+    acquisitionOtherCostManwon: "professional-quote",
+    tenantRelocationCostManwon: "professional-quote",
     ltcTarget: "lender-term-sheet",
     interestRate: "lender-term-sheet",
+    pfUpfrontFeeRate: "lender-term-sheet",
+    trustFeeManwon: "professional-quote",
+    equityCommitmentManwon: "approved-policy",
+    takeoutLtv: "lender-term-sheet",
+    takeoutInterestRate: "lender-term-sheet",
+    takeoutAmortizationYears: "lender-term-sheet",
+    takeoutLoanTermYears: "lender-term-sheet",
+    takeoutPaymentDeferralMonths: "lender-term-sheet",
+    takeoutInterestOnlyMonths: "lender-term-sheet",
+    takeoutRateResetMonths: "lender-term-sheet",
+    takeoutAnnualRateChange: "approved-policy",
+    takeoutRateFloor: "lender-term-sheet",
+    takeoutRateCap: "lender-term-sheet",
+    takeoutDsraMonths: "lender-term-sheet",
+    takeoutMinDscr: "lender-term-sheet",
+    takeoutLoanCommitmentManwon: "lender-term-sheet",
+    takeoutFeeRate: "lender-term-sheet",
+    holdPeriodYears: "approved-policy",
+    annualRentGrowthRate: "appraisal",
+    annualExpenseGrowthRate: "approved-policy",
+    rentFreeMonths: "appraisal",
+    tenantImprovementPerSqM: "professional-quote",
+    leasingCommissionRate: "professional-quote",
+    securityDepositMonths: "appraisal",
+    tenantLeaseTermMonths: "appraisal",
+    tenantRenewalProbability: "appraisal",
+    renewalRentAdjustmentRate: "appraisal",
+    renewalRentFreeMonths: "appraisal",
+    replacementDowntimeMonths: "appraisal",
+    replacementRentFreeMonths: "appraisal",
+    replacementTenantImprovementPerSqM: "professional-quote",
+    replacementLeasingCommissionRate: "professional-quote",
+    replacementReservePerSqMYear: "professional-quote",
+    majorRepairYear: "approved-policy",
+    majorRepairCostManwon: "professional-quote",
+    holdExitCapRate: "appraisal",
+    exitSellingCostRate: "professional-quote",
     equityIRR: "approved-policy",
     salesPaceMonthlyPct: "appraisal",
     leaseUpMonths: "approved-policy",
@@ -109,7 +159,83 @@ describe("source data gate", () => {
     expect(fields).not.toContain("salesPaceMonthlyPct");
     expect(fields).not.toContain("leaseUpMonths");
     expect(fields).not.toContain("basementCostMultiplier");
-    expect(fields).toHaveLength(11);
+    expect(fields).toHaveLength(17);
+  });
+
+  it("requires independent evidence only for active Stage 2 revenue pools", () => {
+    const areaScenario: Scenario = {
+      ...scenario,
+      program: {
+        ...scenario.program,
+        areaContract: {
+          schemaVersion: "stage2-finance-area-2026.1",
+          source: "stage2-planning",
+          sourceScenarioId: scenario.id,
+          sourceScenarioVersion: 1,
+          constructionAreaSqm: 100,
+          aboveGroundAreaSqm: 100,
+          basementAreaSqm: 0,
+          farAreaSqm: 100,
+          gradeFootprintAreaSqm: 50,
+          parkingAreaSqm: 0,
+          commonAreaSqm: 20,
+          saleableAreaSqm: 50,
+          rentableAreaSqm: 30,
+          revenueAreas: {
+            residentialSaleSqm: 50,
+            retailSaleSqm: 0,
+            officeSaleSqm: 0,
+            residentialLeaseSqm: 0,
+            retailLeaseSqm: 0,
+            officeLeaseSqm: 30,
+          },
+          providedParkingSpaces: 0,
+          requiredParkingSpaces: 0,
+          materialAdjustmentCostManwon: 0,
+        },
+      },
+    };
+    const fields = requiredSourceFields(areaScenario);
+
+    expect(fields).toContain("residentialSalePricePerSqM");
+    expect(fields).toContain("officeRentPerSqMMonth");
+    expect(fields).not.toContain("salePricePerSqM");
+    expect(fields).not.toContain("rentPerSqMMonth");
+    expect(fields).not.toContain("retailSalePricePerSqM");
+    expect(fields).not.toContain("retailRentPerSqMMonth");
+  });
+
+  it("uses generic source prices as fallback and lets pool evidence override", () => {
+    const applied = applyFinancialSources(parcel, scenario, {
+      salePricePerSqM: validRecord("salePricePerSqM", 5_000_000),
+      rentPerSqMMonth: validRecord("rentPerSqMMonth", 20_000),
+      residentialSalePricePerSqM: validRecord(
+        "residentialSalePricePerSqM",
+        7_000_000,
+      ),
+      retailRentPerSqMMonth: validRecord(
+        "retailRentPerSqMMonth",
+        30_000,
+      ),
+    });
+
+    expect(applied.scenario.revenuePricing?.pools.residentialSale).toMatchObject({
+      baseUnitPriceWon: 7_000_000,
+      sourceField: "residentialSalePricePerSqM",
+      sourceStatus: "source-backed",
+    });
+    expect(applied.scenario.revenuePricing?.pools.retailSale.unitPriceWon).toBe(
+      5_000_000,
+    );
+    expect(applied.scenario.revenuePricing?.pools.residentialLease.unitPriceWon).toBe(
+      20_000,
+    );
+    expect(applied.scenario.revenuePricing?.pools.retailLease).toMatchObject({
+      baseUnitPriceWon: 30_000,
+      unitPriceWon: 36_000,
+      sourceField: "retailRentPerSqMMonth",
+      sourceStatus: "source-backed",
+    });
   });
 
   it("requires sales pace and lease-up evidence only when those inputs affect the ledger", () => {
@@ -129,6 +255,50 @@ describe("source data gate", () => {
     const leaseFields = requiredSourceFields(leaseScenario);
     expect(leaseFields).not.toContain("salesPaceMonthlyPct");
     expect(leaseFields).toContain("leaseUpMonths");
+    expect(leaseFields).toEqual(
+      expect.arrayContaining([
+        "takeoutLtv",
+        "takeoutInterestRate",
+        "takeoutAmortizationYears",
+        "takeoutLoanTermYears",
+        "takeoutPaymentDeferralMonths",
+        "takeoutInterestOnlyMonths",
+        "takeoutRateResetMonths",
+        "takeoutDsraMonths",
+        "takeoutMinDscr",
+        "takeoutLoanCommitmentManwon",
+        "takeoutFeeRate",
+      ]),
+    );
+  });
+
+  it("requires variable-rate path evidence only when rate resets are enabled", () => {
+    const fixedScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+    };
+    const fixedFields = requiredSourceFields(fixedScenario);
+
+    expect(fixedFields).not.toContain("takeoutAnnualRateChange");
+    expect(fixedFields).not.toContain("takeoutRateFloor");
+    expect(fixedFields).not.toContain("takeoutRateCap");
+
+    const variableScenario: Scenario = {
+      ...fixedScenario,
+      assumptions: {
+        ...fixedScenario.assumptions,
+        takeoutRateResetMonths: 12,
+      },
+    };
+    const variableFields = requiredSourceFields(variableScenario);
+
+    expect(variableFields).toEqual(
+      expect.arrayContaining([
+        "takeoutAnnualRateChange",
+        "takeoutRateFloor",
+        "takeoutRateCap",
+      ]),
+    );
   });
 
   it("provides plain-language evidence guidance for every financial field", () => {
@@ -174,14 +344,224 @@ describe("source data gate", () => {
     for (const field of requiredSourceFields(scenario)) {
       records[field] = validRecord(
         field,
-        scenario.assumptions[field as keyof typeof scenario.assumptions] ??
-          parcel.acquiredPrice,
+        field === "acquisitionPrice"
+          ? parcel.acquiredPrice
+          : field === "equityCommitmentManwon"
+            ? 200_000
+            : scenario.assumptions[
+                field as keyof typeof scenario.assumptions
+              ],
       );
     }
     const gate = buildSourceDataGate(scenario, records);
     expect(gate.status).toBe("source-backed");
     expect(gate.coveragePct).toBe(100);
     expect(gate.missingFields).toEqual([]);
+  });
+
+  it("does not accept a zero equity commitment as verified funding", () => {
+    const zeroCommitment = validRecord("equityCommitmentManwon", 0);
+    expect(validateFinancialSource(zeroCommitment)).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        "확인 자기자본 한도는 0보다 커야 합니다.",
+      ]),
+    });
+  });
+
+  it("does not certify missing take-out terms or a zero commitment", () => {
+    expect(validateFinancialSource(validRecord("takeoutLtv", 0))).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        "장기대출 최대 LTV은(는) 0보다 커야 합니다.",
+      ]),
+    });
+    expect(
+      validateFinancialSource(validRecord("takeoutLoanCommitmentManwon", 0)),
+    ).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        "장기대출 확약액은(는) 0보다 커야 합니다.",
+      ]),
+    });
+    expect(validateFinancialSource(validRecord("takeoutFeeRate", 0)).valid).toBe(
+      true,
+    );
+    expect(
+      validateFinancialSource(
+        validRecord("takeoutPaymentDeferralMonths", 0),
+      ).valid,
+    ).toBe(true);
+    expect(
+      validateFinancialSource(validRecord("takeoutDsraMonths", 0)).valid,
+    ).toBe(true);
+  });
+
+  it("passes an all-lease case only after take-out terms are source-backed", () => {
+    const leaseScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+    };
+    const takeoutValues: Partial<Record<FinancialSourceField, number>> = {
+      takeoutLtv: 60,
+      takeoutInterestRate: 5.2,
+      takeoutAmortizationYears: 25,
+      takeoutLoanTermYears: 5,
+      takeoutMinDscr: 1.3,
+      takeoutLoanCommitmentManwon: 100_000,
+      takeoutFeeRate: 1,
+    };
+    const records: FinancialSourceMap = {};
+    for (const field of requiredSourceFields(leaseScenario)) {
+      records[field] = validRecord(
+        field,
+        field === "acquisitionPrice"
+          ? parcel.acquiredPrice
+          : field === "equityCommitmentManwon"
+            ? 200_000
+            : takeoutValues[field] ??
+              leaseScenario.assumptions[
+                field as keyof typeof leaseScenario.assumptions
+              ],
+      );
+    }
+
+    const gate = buildSourceDataGate(leaseScenario, records);
+    expect(gate.status).toBe("source-backed");
+    expect(gate.validRecords).toHaveLength(gate.requiredFields.length);
+  });
+
+  it("requires hold operating and exit evidence only after a hold period is enabled", () => {
+    const leaseScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+    };
+    expect(requiredSourceFields(leaseScenario)).not.toContain(
+      "holdExitCapRate",
+    );
+
+    const holdScenario: Scenario = {
+      ...leaseScenario,
+      assumptions: {
+        ...leaseScenario.assumptions,
+        holdPeriodYears: 5,
+        holdExitCapRate: 5.5,
+      },
+    };
+    const fields = requiredSourceFields(holdScenario);
+    expect(fields).toEqual(expect.arrayContaining(HOLD_PERIOD_SOURCE_FIELDS));
+    expect(fields).not.toEqual(
+      expect.arrayContaining(TENANT_ROLLOVER_SOURCE_FIELDS),
+    );
+
+    const records: FinancialSourceMap = {};
+    const takeoutValues: Partial<Record<FinancialSourceField, number>> = {
+      takeoutLtv: 60,
+      takeoutInterestRate: 5.2,
+      takeoutAmortizationYears: 25,
+      takeoutLoanTermYears: 5,
+      takeoutMinDscr: 1.3,
+      takeoutLoanCommitmentManwon: 100_000,
+      takeoutFeeRate: 1,
+      holdPeriodYears: 5,
+      holdExitCapRate: 5.5,
+      tenantLeaseTermMonths: 120,
+    };
+    for (const field of fields) {
+      records[field] = validRecord(
+        field,
+        field === "acquisitionPrice"
+          ? parcel.acquiredPrice
+          : field === "equityCommitmentManwon"
+            ? 200_000
+            : takeoutValues[field] ??
+              holdScenario.assumptions[
+                field as keyof typeof holdScenario.assumptions
+              ],
+      );
+    }
+
+    const gate = buildSourceDataGate(holdScenario, records);
+    expect(gate.status).toBe("source-backed");
+    expect(gate.requiredFields).toEqual(expect.arrayContaining(fields));
+  });
+
+  it("requires hold and rollover evidence for a mixed sale-and-lease case", () => {
+    const mixedScenario: Scenario = {
+      ...scenario,
+      program: defaultProgram("officetel", parcel.maxFAR, parcel.maxBCR),
+      assumptions: {
+        ...scenario.assumptions,
+        holdPeriodYears: 5,
+        holdExitCapRate: 5.5,
+        tenantLeaseTermMonths: 36,
+        tenantRenewalProbability: 50,
+      },
+    };
+
+    const fields = requiredSourceFields(mixedScenario);
+    expect(fields).toEqual(expect.arrayContaining(HOLD_PERIOD_SOURCE_FIELDS));
+    expect(fields).toEqual(
+      expect.arrayContaining(TENANT_ROLLOVER_SOURCE_FIELDS),
+    );
+  });
+
+  it("requires only the rollover branch inputs that affect expected cash flow", () => {
+    const baseHold: Scenario = {
+      ...scenario,
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+      assumptions: {
+        ...scenario.assumptions,
+        holdPeriodYears: 5,
+        holdExitCapRate: 5.5,
+        tenantLeaseTermMonths: 24,
+      },
+    };
+    const allRenew = requiredSourceFields({
+      ...baseHold,
+      assumptions: {
+        ...baseHold.assumptions,
+        tenantRenewalProbability: 100,
+      },
+    });
+    const allReplace = requiredSourceFields({
+      ...baseHold,
+      assumptions: {
+        ...baseHold.assumptions,
+        tenantRenewalProbability: 0,
+      },
+    });
+
+    expect(allRenew).toEqual(
+      expect.arrayContaining([
+        "tenantRenewalProbability",
+        "renewalRentAdjustmentRate",
+        "renewalRentFreeMonths",
+      ]),
+    );
+    expect(allRenew).not.toContain("replacementDowntimeMonths");
+    expect(allReplace).toEqual(
+      expect.arrayContaining([
+        "tenantRenewalProbability",
+        "replacementDowntimeMonths",
+        "replacementRentFreeMonths",
+        "replacementTenantImprovementPerSqM",
+        "replacementLeasingCommissionRate",
+      ]),
+    );
+    expect(allReplace).not.toContain("renewalRentAdjustmentRate");
+  });
+
+  it("does not certify a zero hold period or exit cap as verified hold terms", () => {
+    expect(
+      validateFinancialSource(validRecord("holdPeriodYears", 0)),
+    ).toMatchObject({ valid: false });
+    expect(
+      validateFinancialSource(validRecord("holdExitCapRate", 0)),
+    ).toMatchObject({ valid: false });
+    expect(
+      validateFinancialSource(validRecord("tenantLeaseTermMonths", 0)),
+    ).toMatchObject({ valid: false });
   });
 
   it("keeps manual values calculable while blocking handoff until an upload-required source has its original file", () => {

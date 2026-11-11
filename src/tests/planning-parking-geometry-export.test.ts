@@ -104,7 +104,8 @@ describe("shared parking geometry export", () => {
       generatedAt: "2026-08-02T00:00:00.000Z",
     });
 
-    expect(parking.validation.status).toBe("pass");
+    expect(parking.validation.status).toBe("review");
+    expect(parking.circulation.approvalStatus).toBe("unverified");
     expect(parking.layout.stalls.length).toBeGreaterThanOrEqual(2);
     expect(parking.layout.aisleShape).toHaveLength(4);
     expect(parking.parkingGeometryHash).toBe(repeated.parkingGeometryHash);

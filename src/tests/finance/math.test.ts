@@ -20,6 +20,7 @@ import {
   annualizeIRR,
   dscr,
   annualMortgagePayment,
+  monthlyMortgagePayment,
   equityMultiple,
 } from "../../lib/finance/math";
 
@@ -120,6 +121,18 @@ describe("annualMortgagePayment", () => {
   it("zero-rate falls back to straight-line", () => {
     const result = annualMortgagePayment(1000, 0, 10);
     expect(result.toNumber()).toBe(100);
+  });
+});
+
+describe("monthlyMortgagePayment", () => {
+  it("computes a level monthly payment from an annual nominal rate", () => {
+    const result = monthlyMortgagePayment(100_000, 0.05, 30);
+    expect(result.toNumber()).toBeCloseTo(536.82, 1);
+  });
+
+  it("zero-rate falls back to straight-line monthly principal", () => {
+    const result = monthlyMortgagePayment(1200, 0, 10);
+    expect(result.toNumber()).toBe(10);
   });
 });
 

@@ -2,13 +2,16 @@ import type {
   CadastralContextSnapshot,
   CadastralParcelFeature,
 } from "@/lib/geo/cadastral-context";
-import { buildCadastralLineworkPackage } from "@/lib/planning/cadastral-linework-export";
+import { cadastralFrontageIdentity, cadastralTargetTopologyScope } from "@/lib/geo/cadastral-context";
+import { localParcelPolygons, type Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { assertCadastralExportSnapshot, buildCadastralLineworkPackage, cadastralDxfIdentity, cadastralDxfAppIdTable, parcelExportProvenance } from "@/lib/planning/cadastral-linework-export";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { parkingGeometryParts } from "@/lib/planning/parking-geometry-parts";
 import { createStoredZip } from "@/lib/planning/sketchup-dae-export";
 import type { SketchupExportPackageSnapshot } from "@/lib/planning/sketchup-export-package";
 import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
-export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v3" as const;
+export const PLANNING_CAD_EXPORT_VERSION = "planning-cad-export-v4" as const;
 
 interface CadLayerDefinition {
   name: string;
@@ -22,6 +25,7 @@ interface CadEntity {
   layer: string;
   points: LocalPlanPoint[];
   closed: boolean;
+  identity?: Record<string, unknown>;
 }
 
 export interface PlanningCadExportResult {
@@ -60,6 +64,7 @@ function dxfPolyline(entity: CadEntity): string {
     output += dxfPair(10, point.x.toFixed(6));
     output += dxfPair(20, (-point.z).toFixed(6));
   }
+  if (entity.identity) output += cadastralDxfIdentity(entity.identity);
   return output;
 }
 
@@ -256,11 +261,14 @@ function buildCadEntities(input: {
   const entities: CadEntity[] = [];
   const { planning, parking, context } = input.basePackage;
 
-  entities.push({
-    layer: "PG_PARCEL",
-    points: input.cadastral.targetParcel.polygon,
-    closed: true,
-  });
+  const parcelPolygons = localParcelPolygons(planning.parcel);
+  for (const [polygonIndex, polygon] of parcelPolygons.entries()) {
+    const identity = { pnu: input.cadastral.targetParcel.pnu, polygonIndex };
+    entities.push({ layer: "PG_PARCEL", points: polygon.outer, closed: true, identity: { ...identity, ringIndex: 0 } });
+    for (const [holeIndex, hole] of polygon.holes.entries()) {
+      entities.push({ layer: "PG_PARCEL_HOLES", points: hole, closed: true, identity: { ...identity, ringIndex: holeIndex + 1 } });
+    }
+  }
 
   for (const floor of planning.building.floors) {
     entities.push({
@@ -270,30 +278,30 @@ function buildCadEntities(input: {
     });
   }
 
-  if (parking) {
-    for (const stall of parking.layout.stalls) {
+  for (const part of parking ? parkingGeometryParts(parking.layout) : []) {
+    for (const stall of part.stalls) {
       entities.push({
         layer: "PG_PARKING_STALLS",
         points: stall.corners,
         closed: true,
       });
     }
-    if (parking.layout.aisleShape.length >= 3) {
+    if (part.aisleShape.length >= 3) {
       entities.push({
         layer: "PG_PARKING_AISLE",
-        points: parking.layout.aisleShape,
+        points: part.aisleShape,
         closed: true,
       });
     }
-    if (parking.layout.coreShape.length >= 3) {
+    if (part.coreShape.length >= 3) {
       entities.push({
         layer: "PG_PARKING_CORE",
-        points: parking.layout.coreShape,
+        points: part.coreShape,
         closed: true,
       });
     }
-    for (const column of parking.layout.columns) {
-      const half = 0.18;
+    for (const column of part.columns) {
+      const half = (parking?.circulation.profile?.columnWidthM ?? 0.4) / 2;
       entities.push({
         layer: "PG_PARKING_COLUMNS_REFERENCE",
         points: [
@@ -305,10 +313,12 @@ function buildCadEntities(input: {
         closed: true,
       });
     }
-    if (parking.layout.entryPath.length >= 2) {
+    for (const path of part.entryPaths) {
+      if (!path.points.some((point, index) => index > 0 &&
+        Math.hypot(point.x - path.points[index - 1].x, point.z - path.points[index - 1].z) >= 1e-6)) continue;
       entities.push({
         layer: "PG_PARKING_ACCESS_REFERENCE",
-        points: parking.layout.entryPath,
+        points: path.points,
         closed: false,
       });
     }
@@ -328,21 +338,22 @@ function buildCadEntities(input: {
   }
 
   for (const parcel of input.cadastral.adjacentParcels) {
-    entities.push({
-      layer: "PG_ADJACENT_PARCELS",
-      points: parcel.polygon,
-      closed: true,
-    });
+    for (const polygon of localParcelPolygons(parcel)) {
+      entities.push({ layer: "PG_ADJACENT_PARCELS", points: polygon.outer, closed: true });
+      for (const hole of polygon.holes) {
+        entities.push({ layer: "PG_ADJACENT_PARCELS_HOLES", points: hole, closed: true });
+      }
+    }
   }
   for (const parcel of input.cadastral.roadParcels) {
-    entities.push({
-      layer:
-        parcel.jimokCode === "UPIS-UQ151"
-          ? "PG_ROAD_BOUNDARY_UPIS"
-          : "PG_ROAD_PARCELS_CADASTRAL",
-      points: parcel.polygon,
-      closed: true,
-    });
+    const layer = parcelExportProvenance(parcel).boundarySource === "upis-planned-road"
+      ? "PG_ROAD_BOUNDARY_UPIS" : "PG_ROAD_PARCELS_CADASTRAL";
+    for (const polygon of localParcelPolygons(parcel)) {
+      entities.push({ layer, points: polygon.outer, closed: true });
+      for (const hole of polygon.holes) {
+        entities.push({ layer: `${layer}_HOLES`, points: hole, closed: true });
+      }
+    }
   }
   for (const road of planning.roads) {
     entities.push({
@@ -356,17 +367,19 @@ function buildCadEntities(input: {
       layer: "PG_FRONTAGE",
       points: frontage.frontage,
       closed: false,
+      identity: cadastralFrontageIdentity(frontage),
     });
     for (const sample of frontage.widthSamples) {
       entities.push({
         layer: "PG_ROAD_WIDTH_SAMPLES",
         points: [sample.from, sample.to],
         closed: false,
+        identity: cadastralFrontageIdentity(frontage),
       });
     }
   }
 
-  entities.push(...northEntities(planning.parcel.polygon), ...originEntities());
+  entities.push(...northEntities(parcelPolygons.flatMap((polygon) => polygon.outer)), ...originEntities());
   return entities.filter((entity) => entity.points.length >= 2);
 }
 
@@ -385,11 +398,17 @@ export function buildPlanningCadDxf(input: {
     );
   }
 
+  assertCadastralExportSnapshot(input.cadastral);
   const entities = buildCadEntities(input);
   const definitions = [
     ...baseLayerDefinitions(),
     ...planningFloorLayers(input.basePackage),
   ];
+  for (const layer of baseLayerDefinitions().filter((layer) => [
+    "PG_PARCEL", "PG_ADJACENT_PARCELS", "PG_ROAD_PARCELS_CADASTRAL", "PG_ROAD_BOUNDARY_UPIS",
+  ].includes(layer.name))) {
+    definitions.push({ ...layer, name: `${layer.name}_HOLES`, purpose: `${layer.purpose} - interior exclusion rings` });
+  }
   const usedLayerNames = new Set(entities.map((entity) => entity.layer));
   const layers = definitions.filter((layer) => usedLayerNames.has(layer.name));
   const entityCountByLayer: Record<string, number> = {};
@@ -417,7 +436,7 @@ export function buildPlanningCadDxf(input: {
     tables += dxfPair(62, layer.defaultVisible ? layer.color : -layer.color);
     tables += dxfPair(6, "CONTINUOUS");
   }
-  tables += dxfPair(0, "ENDTAB") + dxfPair(0, "ENDSEC");
+  tables += dxfPair(0, "ENDTAB") + cadastralDxfAppIdTable() + dxfPair(0, "ENDSEC");
 
   let entitySection = dxfPair(0, "SECTION") + dxfPair(2, "ENTITIES");
   for (const entity of entities) entitySection += dxfPolyline(entity);
@@ -477,6 +496,8 @@ function buildReadme(input: {
       ),
     "",
     "정확도 원칙",
+    "- 대상·인접 필지·도로의 모든 분리 도형과 내부 홀(*_HOLES)을 보존합니다. 내부 홀은 대지 면적에서 제외됩니다.",
+    "- 건물 층별 외곽은 단일 연속 평면입니다. 다동 배치·합필 가능성·공식 경계 승인은 별도 확인해야 합니다.",
     "- PG_PROPOSED_MASS_*는 잠긴 대표안 Geometry Snapshot의 실제 층별 외곽선입니다.",
     "- PG_PARKING_STALLS와 PG_PARKING_AISLE은 화면·SketchUp과 같은 Parking Geometry Hash 좌표입니다.",
     "- PG_PARKING_COLUMNS_REFERENCE는 구조설계 확정 기둥이 아닌 주차 효율 검토용 참고점입니다.",
@@ -492,7 +513,8 @@ function buildReadme(input: {
 export function buildPlanningCadPackage(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: CadastralParcelFeature[];
 }): PlanningCadExportResult {
   const deliveryAudit = buildSiteDeliveryAudit({
@@ -507,12 +529,13 @@ export function buildPlanningCadPackage(input: {
     );
   }
 
-  const cad = buildPlanningCadDxf(input);
   const linework = buildCadastralLineworkPackage({
     snapshot: input.cadastral,
     targetBoundary: input.targetBoundary,
+    targetBoundaryPolygons: input.targetBoundaryPolygons,
     sourceParcels: input.sourceParcels,
   });
+  const cad = buildPlanningCadDxf(input);
   const base = safeFilename(
     `PARCELGRID-${input.basePackage.projectId}-${input.basePackage.planningGeometryHash}-CAD`
   );
@@ -531,6 +554,11 @@ export function buildPlanningCadPackage(input: {
       parkingGeometryHash: input.basePackage.parkingGeometryHash,
       contextGeometryHash: input.basePackage.contextGeometryHash,
       cadastralHash: input.cadastral.cadastralHash,
+      sourceBinding: "validated-snapshot",
+      topologyScope: { target: cadastralTargetTopologyScope(input.cadastral.targetParcel), neighbors: "all-components-and-holes" },
+      targetParcel: input.cadastral.targetParcel,
+      frontageIdentityScope: "snapshot-ring-order",
+      frontages: input.cadastral.frontages,
       coordinateSystem: {
         unit: "meter",
         eastAxis: "+X",
@@ -603,7 +631,8 @@ export function buildPlanningCadPackage(input: {
 export function downloadPlanningCadPackage(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: CadastralParcelFeature[];
 }): PlanningCadExportResult {
   const result = buildPlanningCadPackage(input);

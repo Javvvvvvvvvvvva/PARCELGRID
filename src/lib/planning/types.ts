@@ -1,4 +1,21 @@
 import type { RegulatoryConstraintSet } from "@/lib/regulatory/constraints";
+import type { QuantityCostPlan } from "./quantity-cost-contract";
+import type {
+  FinancialRevenuePricingSnapshot,
+  FinancialRevenueProjectionSnapshot,
+} from "@/lib/finance/types";
+import type {
+  ParkingExclusiveAreaStatus,
+  ParkingRequirementComponent,
+  ParkingRuleSnapshot,
+} from "@/lib/regulatory/parking-rules";
+import type {
+  SunlightDaylightInput,
+  SunlightInputStatus,
+  SunlightLegalUse,
+  SunlightNorthBoundaryInput,
+  SunlightRegulationResult,
+} from "@/lib/regulatory/sunlight-rules";
 
 export type PlanningScenarioOrigin =
   | "algorithm-safe"
@@ -8,6 +25,30 @@ export type PlanningScenarioOrigin =
   | "legacy";
 
 export type PlanningScenarioStatus = "draft" | "saved" | "archived";
+
+export interface PlanningDwellingSaleBand {
+  minExclusiveSqm: number;
+  /** Upper bound is exclusive; null is unbounded. */
+  maxExclusiveSqm: number | null;
+  unitPriceWon: number;
+  source: string;
+  /** Source observation adopted by a user, not an appraisal or confirmed future sale price. */
+  marketObservation?: import("@/lib/finance/dwelling-market").DwellingMarketObservation;
+}
+
+export interface PlanningDwellingProgram {
+  modelVersion: "dwelling-program-2026.1";
+  baseNetRatio: number;
+  extraCommonAreaPerSplitSqm: number;
+  minimumCommonAreaSqm: number;
+  baselineDwellingCount: number;
+  /** 기준 세대수를 초과하는 주방·욕실·배관 등의 순증 비용, 기본 단가와 중복 산입하지 않는다. */
+  additionalDwellingCostWon: number;
+  costEvidenceStatus: "assumed" | "user-input" | "quoted";
+  costSource?: string;
+  /** User-entered final prices by exclusive area, never an automatic small-unit premium. */
+  salePriceBands?: PlanningDwellingSaleBand[];
+}
 
 export type FloorUseType =
   | "residential"
@@ -37,6 +78,9 @@ export interface FloorZone {
   saleableAreaSqm?: number;
   /** 실제 임대 산정 면적. 없으면 revenueModel=lease인 구역의 전체 면적을 사용한다. */
   rentableAreaSqm?: number;
+  /** 주차 법규 산정용 주거 전용면적. 수익면적과 별개의 설계 입력이다. */
+  parkingExclusiveAreaSqm?: number;
+  parkingExclusiveAreaStatus?: ParkingExclusiveAreaStatus;
 }
 
 export interface FloorProgram {
@@ -50,6 +94,8 @@ export interface FloorProgram {
   /** 북측 방향 후퇴량. 실제 법규 판정은 별도 엔진에서 수행한다. */
   northSetbackM: number;
   zones: FloorZone[];
+  /** Geometry screening only; never silently replaces revenue or legal exclusive areas. */
+  interiorLayout?: import("./interior-layout").InteriorDraft;
 }
 
 export type ParkingStrategy =
@@ -119,6 +165,9 @@ export interface PlanningParking {
   coreAreaSqm?: number;
   /** 기둥과 구조 여유로 감소하는 개략 주차 효율. */
   columnLossPct?: number;
+  vehicleProfile?: import("./vehicle-circulation").VehicleProfile;
+  /** Assumed entrance location along the observed frontage, not a licensed curb opening. */
+  entryOffsetRatio?: number;
 }
 
 export type PlanningFacadeMaterial =
@@ -191,6 +240,10 @@ export interface PlanningRecommendationRejectionReason {
  */
 export interface PlanningRecommendationMetadata {
   engineVersion: string;
+  /** 생성 당시 전체 입력·자료 버전. 없는 구형 추천은 재계산 전 현재 추천으로 표시하지 않는다. */
+  inputBasis?: string;
+  /** 추천 후 저장안이 편집됐는지 확인한다. */
+  generatedScenarioVersion?: number;
   objective: PlanningRecommendationObjective;
   generatedAt: string;
   evaluatedCandidates: number;
@@ -217,19 +270,28 @@ export interface PlanningRecommendationMetadata {
  */
 export interface PlanningEconomicsAssumptions {
   version: string;
+  /** 용도×처분별 기준단가와 보정축. 없으면 구형 공통 단가 필드를 사용한다. */
+  revenuePricing?: FinancialRevenuePricingSnapshot;
   constructionCostPerSqmWon: number;
   /** 지하층 공사비 가중치. 예: 1.25 = 지상 기준의 125%. */
   basementCostMultiplier: number;
   softCostRatePct: number;
   contingencyRatePct: number;
+  acquisitionTaxManwon: number;
+  acquisitionOtherCostManwon: number;
+  tenantRelocationCostManwon: number;
   /** Stage 2용 개략 금융비율. 상세 PF 이자는 Stage 3에서 계산한다. */
   financingCostRatePct: number;
+  pfUpfrontFeeRatePct: number;
+  trustFeeManwon: number;
+  ltcTargetPct: number;
   residentialSalePricePerSqmWon: number;
   commercialSalePricePerSqmWon: number;
   residentialRentPerSqmMonthWon: number;
   retailRentPerSqmMonthWon: number;
   officeRentPerSqmMonthWon: number;
   vacancyRatePct: number;
+  operatingExpenseRatePct: number;
   capRatePct: number;
 }
 
@@ -240,12 +302,22 @@ export interface PlanningEconomicsAssumptions {
 export interface PlanningEconomicsPreview {
   status: "not-calculated" | "estimated" | "stale";
   acquisitionCostManwon: number;
+  acquisitionTaxManwon?: number;
+  acquisitionOtherCostManwon?: number;
   demolitionCostManwon: number;
+  tenantRelocationCostManwon?: number;
   constructionCostManwon: number;
   /** 재료 증감 전 기본 공사비. 구버전 저장값에는 없을 수 있다. */
   baseConstructionCostManwon?: number;
   /** 기준 외벽 단가 대비 선택 사양 증감액. */
   materialAdjustmentCostManwon?: number;
+  additionalDwellingCostManwon?: number;
+  /** 기본 공사비 포함액을 차감한 상세 수량 원가 증감액. */
+  quantityCostAdjustmentManwon?: number;
+  quantityCostStatus?: "absent" | "ready" | "missing" | "stale" | "conflict";
+  /** 이 계산에 사용한 수량 계획·단가·포함액 전체 입력 기준. */
+  quantityCostInputBasis?: string;
+  residentialFallbackUnitPriceWon?: number;
   /** 재료비 계산에 사용한 외벽 순면적. */
   facadeAreaSqm?: number;
   /** 외벽 면적·단가의 근거 상태. */
@@ -254,6 +326,9 @@ export interface PlanningEconomicsPreview {
   softCostManwon: number;
   contingencyCostManwon: number;
   financingCostManwon: number;
+  interestEstimateManwon?: number;
+  pfFeeManwon?: number;
+  trustFeeManwon?: number;
   totalCostManwon: number;
   saleRevenueManwon: number;
   capitalizedLeaseValueManwon: number;
@@ -261,6 +336,19 @@ export interface PlanningEconomicsPreview {
   expectedAnnualNoiManwon: number;
   profitManwon: number;
   profitMarginPct: number;
+  costInputs?: {
+    constructionCostPerSqmWon: number;
+    basementCostMultiplier: number;
+    softCostRatePct: number;
+    contingencyRatePct: number;
+    financingCostRatePct: number;
+    acquisitionTaxManwon: number;
+    acquisitionOtherCostManwon: number;
+    tenantRelocationCostManwon: number;
+    pfUpfrontFeeRatePct: number;
+    trustFeeManwon: number;
+    ltcTargetPct: number;
+  };
   assumptionsVersion?: string;
   calculatedAt?: string;
 }
@@ -280,6 +368,9 @@ export interface PlanningScenario {
 
   /** 계획안의 대표 용도. 실제 구성은 floorPrograms[].zones[]가 기준이다. */
   primaryUse: "single-house" | "multi-family" | "retail" | "mixed" | "office";
+  /** 건축법상 세부 용도를 확인한 경우에만 입력한다. primaryUse와 법적 용도는 다를 수 있다. */
+  sunlightLegalUse?: SunlightLegalUse;
+  sunlightLegalUseStatus?: SunlightInputStatus;
   floorPrograms: FloorProgram[];
   placement: PlanningPlacement;
   parking: PlanningParking;
@@ -290,6 +381,12 @@ export interface PlanningScenario {
   geometrySource?: PlanningGeometrySource;
   /** 기존 저장 계획안은 값이 없을 수 있으며 미선택 계획 매스로 처리한다. */
   materials?: PlanningMaterialSelection;
+  /** 자동 생성 당시 면적 분할 가정과 현재 세대수에 적용할 증설 비용 기준. */
+  dwellingProgram?: PlanningDwellingProgram;
+  quantityCost?: QuantityCostPlan;
+  constructionQuote?: import("./construction-quote").ConstructionQuote;
+  egressPlan?: import("./egress-core").EgressPlan;
+  layoutFinanceHistory?: import("./layout-finance-state").LayoutFinanceApplication[];
   checks: PlanningCheck[];
   economicsPreview: PlanningEconomicsPreview;
   recommendation?: PlanningRecommendationMetadata;
@@ -315,6 +412,19 @@ export interface PlanningScenarioSummary {
 }
 
 export interface PlanningCalculationParcel {
+  /** 관할 주차 조례를 선택하는 주소. 없거나 미등록 지역이면 국가 참고값만 사용한다. */
+  address?: string;
+  /** 주차 규칙 적용 기준일 YYYY-MM-DD. 생략하면 계산 시점의 현행 규칙을 사용한다. */
+  parkingRuleAsOf?: string;
+  zoning?: string;
+  /** VWorld 용도지역은 public-observation, 원문 대조 또는 전문가 확인은 그에 맞는 상태를 사용한다. */
+  zoningStatus?: SunlightInputStatus;
+  /** 일조·채광 규칙 적용 기준일 YYYY-MM-DD. */
+  sunlightRuleAsOf?: string;
+  /** 북측 인접대지·공지·실제 이격에 관한 확인된 입력. */
+  sunlightNorthBoundary?: SunlightNorthBoundaryInput;
+  /** 공동주택 채광방향·동간거리에 관한 확인된 입력. */
+  sunlightDaylight?: SunlightDaylightInput;
   lotAreaSqm: number;
   maxFARPct: number;
   maxBCRPct: number;
@@ -336,6 +446,10 @@ export interface PlanningParkingAssessment {
   exemptPossible: boolean;
   basis: string[];
   reference: string[];
+  decisionGrade: boolean;
+  warnings: string[];
+  rule: ParkingRuleSnapshot;
+  components: ParkingRequirementComponent[];
 }
 
 export interface PlanningScenarioMetrics extends PlanningScenarioSummary {
@@ -360,6 +474,9 @@ export interface PlanningScenarioCalculation {
   scenarioId: string;
   metrics: PlanningScenarioMetrics;
   parking: PlanningParkingAssessment;
+  sunlight: SunlightRegulationResult;
   checks: PlanningCheck[];
   economicsPreview: PlanningEconomicsPreview;
+  /** Stage 2/3가 공유하는 여섯 수익 풀의 단가·NOI·가치 스냅샷. */
+  revenueProjection: FinancialRevenueProjectionSnapshot;
 }

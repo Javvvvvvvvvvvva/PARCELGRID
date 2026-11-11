@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { LngLat } from "@/lib/finance/buildable-area";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
 import {
   buildParkingSequenceRecommendation,
   type ParkingSequenceRecommendationKind,
@@ -17,6 +18,7 @@ interface PlanningParkingSequencePanelProps {
   calculation: PlanningScenarioCalculation;
   geometry: PlanningGeometrySnapshot;
   boundary?: LngLat[];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   roads?: Array<{ name: string | null; points: [number, number][] }>;
   onCreateAlternative: (
     strategy: "surface" | "piloti",
@@ -125,6 +127,7 @@ export function PlanningParkingSequencePanel({
   calculation,
   geometry,
   boundary,
+  boundaryPolygons,
   roads,
   onCreateAlternative,
   onEditProgram,
@@ -136,9 +139,10 @@ export function PlanningParkingSequencePanel({
         calculation,
         geometry,
         boundary,
+        boundaryPolygons,
         roads,
       }),
-    [scenario, calculation, geometry, boundary, roads]
+    [scenario, calculation, geometry, boundary, boundaryPolygons, roads]
   );
   const recommendedOption =
     result.kind === "surface"
@@ -214,9 +218,10 @@ export function PlanningParkingSequencePanel({
         />
         <StepCard
           number={2}
-          title="요구 주차"
+          title={calculation.parking.decisionGrade ? "확인 요구 주차" : "예비 요구 주차"}
           value={`${result.requiredCars}대 · 주거 ${result.residentialUnits}세대`}
-          detail="현재 층별 용도·면적으로 계산한 요구 대수입니다. 제공 대수를 임의 입력한 값과 구분합니다."
+          detail={`${calculation.parking.rule.jurisdictionName} · ${calculation.parking.rule.id}${calculation.parking.warnings[0] ? ` · ${calculation.parking.warnings[0]}` : ""}`}
+          tone={calculation.parking.decisionGrade ? "positive" : "warning"}
         />
         <StepCard
           number={3}

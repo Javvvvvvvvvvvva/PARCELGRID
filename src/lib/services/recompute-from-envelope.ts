@@ -9,6 +9,7 @@
  * 실거래(comps)는 기존 data에서 보존 (시나리오 무관).
  */
 
+import { transactionEvidenceComplete } from "@/lib/integrations/molit-evidence";
 import type { Parcel, Scenario, BuildingProgram } from "@/lib/finance/types";
 import type { EnvelopePlan } from "@/lib/stores/project-store";
 import type { ProjectComputed, ComputeOptions } from "@/lib/services/compute-project";
@@ -79,7 +80,7 @@ export function recomputeFromEnvelope(
   // ─── 매각 단가 실거래 자동 보정 (Comparable Scoring — C 설계) ───
   // 같은동 +40 · 준공15년 +30 · 20년 +15 가중 → 상위 8건 중앙값.
   // 참고 사례 목록은 saleEst.cases (화면 표시용 — 알고리즘 분석 근거).
-  const saleEst = estimateSalePriceFromComps(prev?.comps ?? []);
+  const saleEst = estimateSalePriceFromComps(transactionEvidenceComplete(prev?.transactionEvidence?.filter(item => item.type === "house")) ? prev?.comps ?? [] : []);
   if (saleEst) {
     assumptions.salePricePerSqM = saleEst.salePricePerSqM;
     console.log(
@@ -134,10 +135,12 @@ export function recomputeFromEnvelope(
   );
 
   // 실거래 보존
-  if (prev && prev.comps && prev.comps.length > 0) {
+  if (prev) {
     return {
       ...computed,
       comps: prev.comps,
+      transactionEvidence: prev.transactionEvidence,
+      dwellingMarket: prev.dwellingMarket,
       scenarioComparison,
       saleEstimate: saleEst ?? undefined,
     };

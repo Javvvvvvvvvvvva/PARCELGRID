@@ -9,8 +9,20 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools, persist } from "zustand/middleware";
+import { createJSONStorage, devtools, persist } from "zustand/middleware";
+import { sessionLocalStorage } from "@/lib/auth/client-session";
 import type { AssumptionSet } from "@/lib/finance/types";
+import type { FinancialRevenuePoolKey } from "@/lib/finance/types";
+import {
+  buildRevenuePricingDraftKey,
+  REVENUE_PRICING_INPUT_VERSION,
+  type RevenuePoolPricingDraft,
+  type RevenuePricingDraftContract,
+} from "@/lib/finance/revenue-contract";
+import {
+  buildExpertTaxContractKey,
+  type ExpertTaxInputContract,
+} from "@/lib/finance/after-tax-ledger";
 import type {
   FinancialSourceMap,
   FinancialSourceRecord,
@@ -20,6 +32,7 @@ import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-pl
 import type { PlanningScenario } from "@/lib/planning/types";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import { protectLockedPlanningGeometryPatch } from "@/lib/planning/geometry-source";
 import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
@@ -28,6 +41,13 @@ import {
   planningEconomicsAssumptionsFromLegacy,
 } from "@/lib/planning/scenario-calculator";
 import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
+import { applySpatialValidationToCalculation, calculatePlanningSpatialValidation } from "@/lib/planning/scenario-spatial-validation";
+import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-geometry";
+import { assessPlanningAnalysisReference, createAnalysisReferenceSelection } from "@/lib/planning/analysis-reference";
+import {
+  buildRepresentativeParcelBasisHash,
+  representativeParcelBasisInvalidationReason,
+} from "@/lib/planning/representative-basis";
 import {
   clonePlanningScenario,
   touchPlanningScenario,
@@ -100,6 +120,25 @@ interface ProjectStore {
     field: FinancialSourceRecord["field"]
   ) => void;
 
+  /** 계획안별 용도×처분 기준단가와 명시적 보정 입력. */
+  revenuePricingDrafts: Record<string, RevenuePricingDraftContract>;
+  setRevenuePoolPricingDraft: (
+    projectId: string,
+    scenarioId: string,
+    pool: FinancialRevenuePoolKey,
+    patch: RevenuePoolPricingDraft,
+  ) => void;
+  resetRevenuePricingDraft: (projectId: string, scenarioId: string) => void;
+
+  /** 계획안·처분전략별 세무 전문가 입력과 납부·환급 일정. */
+  expertTaxContracts: Record<string, ExpertTaxInputContract>;
+  setExpertTaxContract: (contract: ExpertTaxInputContract) => void;
+  removeExpertTaxContract: (
+    projectId: string,
+    scenarioId: string,
+    strategy: ExpertTaxInputContract["strategy"]
+  ) => void;
+
   /** Stage 3에서 명시적으로 저장한 보고서용 계산 스냅샷. */
   stage3FeasibilitySnapshots: Record<string, Stage3FeasibilitySnapshot>;
   saveStage3FeasibilitySnapshot: (
@@ -117,6 +156,8 @@ interface ProjectStore {
   representativePlanningScenarioId: string | null;
   /** 대표안 확정 시 잠긴 실제 계획 매스. 3D·계산·SketchUp export의 기준이다. */
   representativeGeometrySnapshot: PlanningGeometrySnapshot | null;
+  /** 대표안 확정 당시 법규·경계·도로 입력의 불변 식별자. */
+  representativeParcelBasisHash: string | null;
   /** 대표안 확정이 거부된 최근 기하 검증 사유. */
   geometryValidationError: string | null;
   setPlanningScenarios: (scenarios: PlanningScenario[]) => void;
@@ -135,7 +176,7 @@ interface ProjectStore {
   duplicatePlanningScenario: (id: string, name?: string) => string | null;
   selectPlanningScenario: (id: string | null) => void;
   /** 기하 검증 통과 시에만 대표안과 geometry snapshot을 함께 확정한다. */
-  setRepresentativePlanningScenarioId: (id: string | null) => boolean;
+  setRepresentativePlanningScenarioId: (id: string | null, purpose?: "verified-reference" | "preliminary-analysis") => boolean;
   clearPlanningScenarios: () => void;
 
   activeScenarioId: string | null;
@@ -146,6 +187,7 @@ function representativeInvalidation(message: string) {
   return {
     representativePlanningScenarioId: null,
     representativeGeometrySnapshot: null,
+    representativeParcelBasisHash: null,
     geometryValidationError: message,
   };
 }
@@ -158,12 +200,16 @@ export const useProjectStore = create<ProjectStore>()(
         setData: (data) =>
           set((state) => {
             const snapshot = state.representativeGeometrySnapshot;
-            if (snapshot && snapshot.projectId !== data.parcel.id) {
+            const invalidationReason =
+              representativeParcelBasisInvalidationReason({
+                snapshotProjectId: snapshot?.projectId,
+                storedBasisHash: state.representativeParcelBasisHash,
+                nextParcel: data.parcel,
+              });
+            if (invalidationReason) {
               return {
                 data,
-                ...representativeInvalidation(
-                  "부지가 변경되어 대표 계획안 Geometry Snapshot을 다시 확정해야 합니다."
-                ),
+                ...representativeInvalidation(invalidationReason),
               };
             }
             return { data };
@@ -251,6 +297,68 @@ export const useProjectStore = create<ProjectStore>()(
             };
           }),
 
+        revenuePricingDrafts: {},
+        setRevenuePoolPricingDraft: (
+          projectId,
+          scenarioId,
+          pool,
+          patch,
+        ) =>
+          set((state) => {
+            const key = buildRevenuePricingDraftKey(projectId, scenarioId);
+            const current = state.revenuePricingDrafts[key];
+            const currentPool = current?.pools[pool] ?? {};
+            return {
+              revenuePricingDrafts: {
+                ...state.revenuePricingDrafts,
+                [key]: {
+                  version: REVENUE_PRICING_INPUT_VERSION,
+                  projectId,
+                  scenarioId,
+                  pools: {
+                    ...(current?.pools ?? {}),
+                    [pool]: {
+                      ...currentPool,
+                      ...patch,
+                      adjustments: {
+                        ...(currentPool.adjustments ?? {}),
+                        ...(patch.adjustments ?? {}),
+                      },
+                    },
+                  },
+                  updatedAt: new Date().toISOString(),
+                },
+              },
+            };
+          }),
+        resetRevenuePricingDraft: (projectId, scenarioId) =>
+          set((state) => {
+            const next = { ...state.revenuePricingDrafts };
+            delete next[buildRevenuePricingDraftKey(projectId, scenarioId)];
+            return { revenuePricingDrafts: next };
+          }),
+
+        expertTaxContracts: {},
+        setExpertTaxContract: (contract) =>
+          set((state) => ({
+            expertTaxContracts: {
+              ...state.expertTaxContracts,
+              [buildExpertTaxContractKey(
+                contract.projectId,
+                contract.scenarioId,
+                contract.strategy
+              )]: contract,
+            },
+          })),
+        removeExpertTaxContract: (projectId, scenarioId, strategy) =>
+          set((state) => {
+            const next = { ...state.expertTaxContracts };
+            delete next[
+              buildExpertTaxContractKey(projectId, scenarioId, strategy)
+            ];
+            return { expertTaxContracts: next };
+          }),
+
         stage3FeasibilitySnapshots: {},
         saveStage3FeasibilitySnapshot: (snapshot) =>
           set((state) => ({
@@ -275,6 +383,7 @@ export const useProjectStore = create<ProjectStore>()(
         selectedPlanningScenarioId: null,
         representativePlanningScenarioId: null,
         representativeGeometrySnapshot: null,
+        representativeParcelBasisHash: null,
         geometryValidationError: null,
         setPlanningScenarios: (planningScenarios) =>
           set((state) => {
@@ -294,6 +403,9 @@ export const useProjectStore = create<ProjectStore>()(
                 : null,
               representativeGeometrySnapshot: representativeStillExists
                 ? state.representativeGeometrySnapshot
+                : null,
+              representativeParcelBasisHash: representativeStillExists
+                ? state.representativeParcelBasisHash
                 : null,
               geometryValidationError: representativeStillExists
                 ? state.geometryValidationError
@@ -385,6 +497,9 @@ export const useProjectStore = create<ProjectStore>()(
               representativeGeometrySnapshot: removedRepresentative
                 ? null
                 : state.representativeGeometrySnapshot,
+              representativeParcelBasisHash: removedRepresentative
+                ? null
+                : state.representativeParcelBasisHash,
               geometryValidationError: removedRepresentative
                 ? null
                 : state.geometryValidationError,
@@ -406,11 +521,12 @@ export const useProjectStore = create<ProjectStore>()(
         },
         selectPlanningScenario: (selectedPlanningScenarioId) =>
           set({ selectedPlanningScenarioId }),
-        setRepresentativePlanningScenarioId: (id) => {
+        setRepresentativePlanningScenarioId: (id, purpose = "verified-reference") => {
           if (id == null) {
             set({
               representativePlanningScenarioId: null,
               representativeGeometrySnapshot: null,
+              representativeParcelBasisHash: null,
               geometryValidationError: null,
             });
             return true;
@@ -429,7 +545,7 @@ export const useProjectStore = create<ProjectStore>()(
             );
             return false;
           }
-          if (!parcel.boundary || parcel.boundary.length < 3) {
+          if (!hasParcelBoundary(parcel)) {
             set(
               representativeInvalidation(
                 "대지 경계 GIS 데이터가 없어 Geometry Snapshot을 만들 수 없습니다."
@@ -444,8 +560,15 @@ export const useProjectStore = create<ProjectStore>()(
             )?._raw.assumptions ??
             state.data?.scenarios[0]?._raw.assumptions ??
             defaultAssumptions();
-          const calculation = calculatePlanningScenario(scenario, {
+          const baseCalculation = calculatePlanningScenario(scenario, {
             parcel: {
+              address: parcel.address,
+              zoning: parcel.zoning,
+              zoningStatus:
+                parcel.inputProvenance?.zoning === "vworld-land-use"
+                  ? "public-observation"
+                  : "user-entered",
+              sunlightRuleAsOf: new Date().toISOString().slice(0, 10),
               lotAreaSqm: parcel.lotArea,
               maxFARPct: parcel.maxFAR,
               maxBCRPct: parcel.maxBCR,
@@ -461,10 +584,14 @@ export const useProjectStore = create<ProjectStore>()(
             ),
             calculatedAt: new Date().toISOString(),
           });
+          const calculation = applySpatialValidationToCalculation(baseCalculation, calculatePlanningSpatialValidation(
+            parcel.boundary, parcel.zoning ?? "", scenario, parcel.roads, parcel.setback,
+            baseCalculation.sunlight, baseCalculation.metrics.roofAllowanceM, parcel.boundaryPolygons,
+          ));
           const readiness = assessRepresentativeCheckReadiness(
             calculation.checks
           );
-          if (!readiness.ready) {
+          if (purpose !== "preliminary-analysis" && !readiness.ready) {
             const firstBlocker = readiness.blockers[0];
             set(
               representativeInvalidation(
@@ -490,10 +617,13 @@ export const useProjectStore = create<ProjectStore>()(
             projectId: calculatedScenario.projectId ?? parcel.id,
             scenario: calculatedScenario,
             boundary: parcel.boundary,
+            boundaryPolygons: parcel.boundaryPolygons,
             lotAreaSqm: parcel.lotArea,
             zoning: parcel.zoning ?? "",
             roads: parcel.roads,
             setback: parcel.setback,
+            sunlight: calculation.sunlight,
+            roofAllowanceM: calculation.metrics.roofAllowanceM,
           }).snapshot;
           if (!geometry.validation.representativeEligible) {
             const firstFailure = geometry.validation.issues.find(
@@ -508,6 +638,26 @@ export const useProjectStore = create<ProjectStore>()(
             return false;
           }
 
+          if (purpose === "preliminary-analysis") {
+            const parking = buildPlanningParkingGeometry({ scenario: calculatedScenario, planning: geometry,
+              requiredCars: calculation.parking.requiredCars, boundary: parcel.boundary,
+              boundaryPolygons: parcel.boundaryPolygons, roads: parcel.roads });
+            const input = { scenario: calculatedScenario, parcel, calculation, geometry, parking };
+            const assessment = assessPlanningAnalysisReference(input);
+            if (!assessment.ready) {
+              set(representativeInvalidation(`예비 분석 채택 미완료: ${assessment.blockers[0]?.message}`));
+              return false;
+            }
+            try {
+              const selection = createAnalysisReferenceSelection(input, new Date().toISOString());
+              if (!selection) return false;
+              geometry.analysisReference = selection;
+            } catch {
+              set(representativeInvalidation("예비 분석 입력의 연결값을 생성하지 못했습니다."));
+              return false;
+            }
+          }
+
           let nextData: ProjectComputed | null = null;
           try {
             nextData = recomputeFromPlanningScenarios(
@@ -518,6 +668,10 @@ export const useProjectStore = create<ProjectStore>()(
               {
                 startDate: parcel.acquired,
                 calculateMaxAcquisition: true,
+                geometryHashes: {
+                  [id]: geometry.geometryHash,
+                },
+                financialSources: state.financialSources[parcel.id],
               }
             );
           } catch (error) {
@@ -544,6 +698,8 @@ export const useProjectStore = create<ProjectStore>()(
             planningScenarios: nextPlanningScenarios,
             representativePlanningScenarioId: id,
             representativeGeometrySnapshot: geometry,
+            representativeParcelBasisHash:
+              buildRepresentativeParcelBasisHash(parcel),
             geometryValidationError: null,
           });
           return true;
@@ -554,6 +710,7 @@ export const useProjectStore = create<ProjectStore>()(
             selectedPlanningScenarioId: null,
             representativePlanningScenarioId: null,
             representativeGeometrySnapshot: null,
+            representativeParcelBasisHash: null,
             geometryValidationError: null,
             activeScenarioId: null,
           }),
@@ -564,6 +721,8 @@ export const useProjectStore = create<ProjectStore>()(
       }),
       {
         name: "parcelgrid-envelope",
+        storage: createJSONStorage(() => sessionLocalStorage),
+        skipHydration: true,
         partialize: (state) => ({
           envelopePlan: state.envelopePlan,
           planningScenarios: state.planningScenarios,
@@ -572,10 +731,13 @@ export const useProjectStore = create<ProjectStore>()(
             state.representativePlanningScenarioId,
           representativeGeometrySnapshot:
             state.representativeGeometrySnapshot,
+          representativeParcelBasisHash: state.representativeParcelBasisHash,
           activeScenarioId: state.activeScenarioId,
           draftAssumptions: state.draftAssumptions,
           draftAcquisitionPrices: state.draftAcquisitionPrices,
           financialSources: state.financialSources,
+          revenuePricingDrafts: state.revenuePricingDrafts,
+          expertTaxContracts: state.expertTaxContracts,
           stage3FeasibilitySnapshots: state.stage3FeasibilitySnapshots,
         }),
       }

@@ -1,5 +1,7 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 /**
  * Stage 1 — 현황 분석 (Existing Property Analysis)
  *
@@ -7,6 +9,7 @@
  * 신축 가능 규모와 미래 계획은 Stage 2 계획 스튜디오에서 별도로 계산한다.
  */
 
+import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -43,6 +46,7 @@ import { num, pyeong, won } from "@/lib/utils/format";
 import type { CompVM } from "@/lib/adapters/view-model";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 
 const ExistingBuildingMass = dynamic(
   () =>
@@ -128,7 +132,7 @@ export default function StatusPage({
 
   const [compMarkers, setCompMarkers] = useState<CompMarker[]>([]);
   useEffect(() => {
-    if (!layers.comps || compsForMap.length === 0) {
+    if (!layers.comps || compsForMap.length === 0 || !parcel?.address) {
       setCompMarkers([]);
       return;
     }
@@ -136,9 +140,9 @@ export default function StatusPage({
     fetch("/api/parcels/comps-geocode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ addresses: compsForMap.map((c) => c.address) }),
+      body: JSON.stringify({ addresses: compsForMap.map((c) => c.address), contextAddress: parcel.address, contextLat: parcel.lat, contextLng: parcel.lng }),
     })
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error("실거래 위치 조회 실패"); return r.json(); })
       .then((res: { coords: ({ lat: number; lng: number } | null)[] }) => {
         if (cancelled || !res.coords) return;
         const markers: CompMarker[] = [];
@@ -164,7 +168,7 @@ export default function StatusPage({
     return () => {
       cancelled = true;
     };
-  }, [compsForMap, layers.comps]);
+  }, [compsForMap, layers.comps, parcel?.address, parcel?.lat, parcel?.lng]);
 
   const newBuildCount = useMemo(
     () =>
@@ -223,11 +227,11 @@ export default function StatusPage({
     ? "사용자 토지 정보 · Kakao 주소 · MOLIT 건축물대장"
     : "VWorld · 공시지가 · 건축물대장";
   const boundarySource =
-    parcel.inputProvenance?.geometry === "user-geojson"
-      ? "사용자 GeoJSON 경계"
-      : parcel.boundary
-        ? "VWorld 필지 경계"
-        : "필지 경계 없음";
+    !hasParcelBoundary(parcel)
+      ? "필지 경계 없음"
+      : parcel.inputProvenance?.geometry === "user-geojson"
+        ? "사용자 GeoJSON 경계"
+        : parcel.inputProvenance?.geometry === "vworld-cadastral" ? "VWorld 필지 경계" : "시드·기존 경계 · 출처 미확인";
   const farUtilization =
     ratios && parcel.maxFAR > 0 ? (ratios.farPct / parcel.maxFAR) * 100 : null;
   const purpose = main
@@ -247,7 +251,7 @@ export default function StatusPage({
   const overviewText = ratios
     ? farDecisionGrade && bcrDecisionGrade
       ? `현재 건폐율은 원문 확인 상한까지 ${bcrHeadroom?.toFixed(1)}%p 남아 있고, 용적률은 확인 상한의 ${farUtilization?.toFixed(0)}%를 사용하고 있습니다. 실제 신축 가능 규모는 Stage 2에서 일조·도로·주차를 함께 검토합니다.`
-      : `현재 건물 비율은 계산됐지만 건폐율·용적률 숫자는 전국 시행령 참고 상한입니다. 관할 조례·지구단위계획 원문을 확인하기 전에는 법정 여유로 확정하지 않습니다.`
+      : `현재 건물 비율은 계산됐지만 건폐율·용적률 숫자는 출처 확인이 필요한 검토값입니다. 관할 조례·지구단위계획 원문을 확인하기 전에는 법정 여유로 확정하지 않습니다.`
     : buildingStatus === "confirmed-empty"
       ? "건축물대장상 등록 건물이 없는 것으로 조회됐습니다. 실제 빈 토지 여부와 멸실 상태를 현장에서 확인한 뒤 Stage 2에서 가능 규모를 검토합니다."
       : "건축물대장 응답이 없어 기존 건물 유무와 비율을 확정할 수 없습니다. 원문과 현장 현황을 확인한 뒤 Stage 2 검토를 진행합니다.";
@@ -429,12 +433,12 @@ export default function StatusPage({
           <OverviewMetric
             label="건폐율"
             value={ratios ? `${ratios.bcrPct.toFixed(1)}%` : "—"}
-            sub={`${bcrDecisionGrade ? "원문 확인 상한" : "전국 상한 참고"} ${parcel.maxBCR}%`}
+            sub={`${bcrDecisionGrade ? "원문 확인 상한" : "원문 미확인 검토값"} ${parcel.maxBCR}%`}
           />
           <OverviewMetric
             label="용적률"
             value={ratios ? `${ratios.farPct.toFixed(1)}%` : "—"}
-            sub={`${farDecisionGrade ? "원문 확인 상한" : "전국 상한 참고"} ${parcel.maxFAR}%`}
+            sub={`${farDecisionGrade ? "원문 확인 상한" : "원문 미확인 검토값"} ${parcel.maxFAR}%`}
           />
           <OverviewMetric
             label="데이터 상태"
@@ -488,19 +492,19 @@ export default function StatusPage({
                 sub={
                   farDecisionGrade && bcrDecisionGrade
                     ? "원문 확인 상한 대비 · 실제 신축 가능량은 Stage 2 검토"
-                    : "전국 상한 참고 대비 · 필지별 법정 여유로 확정하지 않음"
+                    : "입력 검토값 대비 · 필지별 법정 여유로 확정하지 않음"
                 }
               />
             </>
           ) : (
             <>
               <DataRow
-                label={bcrDecisionGrade ? "건폐율 확인 상한" : "건폐율 전국 상한 참고"}
+                label={bcrDecisionGrade ? "건폐율 확인 상한" : "건폐율 원문 미확인 검토값"}
                 value={`${parcel.maxBCR}%`}
                 sub="기존 건물 비율 미확인"
               />
               <DataRow
-                label={farDecisionGrade ? "용적률 확인 상한" : "용적률 전국 상한 참고"}
+                label={farDecisionGrade ? "용적률 확인 상한" : "용적률 원문 미확인 검토값"}
                 value={`${parcel.maxFAR}%`}
                 sub="기존 건물 비율 미확인"
               />
@@ -514,11 +518,12 @@ export default function StatusPage({
           <DataRow
             label="도로 데이터"
             value={parcel.roads && parcel.roads.length > 0 ? `${parcel.roads.length}개 중심선` : "추가 확인 필요"}
-            sub={manualParcel ? "VWorld 비활성 · 도로 원문 별도 확인" : "도로 폭은 현재 데이터에 포함되지 않음"}
+            sub={manualParcel ? "수동 등록 · 도로 데이터 미확보" : "도로 폭은 현재 데이터에 포함되지 않음"}
           />
         </Panel>
 
         <Panel title="② 기존 건축물" source="MOLIT 건축물대장">
+          <BuildingRegistryEvidencePanel info={currentBuilding} />
           {main ? (
             <>
               <div
@@ -611,6 +616,7 @@ export default function StatusPage({
         >
           <ExistingBuildingMass
             boundary={parcel.boundary}
+            boundaryPolygons={parcel.boundaryPolygons}
             currentBuilding={currentBuilding}
             lotArea={parcel.lotArea}
             height={390}
@@ -691,6 +697,7 @@ export default function StatusPage({
         {marketInsight && (
           <MarketSnapshotPanel
             insight={marketInsight}
+            transactionEvidence={data.transactionEvidence}
             stationLookupStatus={stationLookupStatus}
           />
         )}
@@ -735,6 +742,7 @@ export default function StatusPage({
             showRoads
             roads={parcel.roads}
             boundary={parcel.boundary}
+            boundaryPolygons={parcel.boundaryPolygons}
             focusSubject
             zoomLevel={4}
             maxZoomOutLevel={4}
@@ -914,7 +922,7 @@ function Stage1ReadingGuide({
         <ReadingCard
           step="2"
           title="아직 확정하지 않는 것"
-          body={`건폐율 ${maxBCR}%·용적률 ${maxFAR}%는 전국 시행령 참고 상한입니다. 필지별 원문 확인 전에는 법정 상한으로 확정하지 않으며 실제 층수·면적·주차 가능 대수를 뜻하지 않습니다.`}
+          body={`건폐율 ${maxBCR}%·용적률 ${maxFAR}%는 출처 확인이 필요한 검토값입니다. 필지별 원문 확인 전에는 법정 상한으로 확정하지 않으며 실제 층수·면적·주차 가능 대수를 뜻하지 않습니다.`}
         />
         <ReadingCard
           step="3"

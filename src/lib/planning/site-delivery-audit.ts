@@ -1,9 +1,12 @@
 import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import { cadastralTargetPolygonsMatch, validateCadastralTarget, validateCadastralFrontageIdentities } from "@/lib/geo/cadastral-context";
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import type { ContextGeometrySnapshot } from "@/lib/planning/sketchup-export-package";
+import { localParcelPolygons, parcelRings } from "@/lib/geo/parcel-topology";
+import { localParcelIntersectionArea, validateLocalParcelTopology } from "@/lib/geo/parcel-topology-geometry";
 
-export const SITE_DELIVERY_AUDIT_VERSION = "site-delivery-audit-v2" as const;
+export const SITE_DELIVERY_AUDIT_VERSION = "site-delivery-audit-v3" as const;
 
 export type SiteDeliveryCheckStatus = "pass" | "review" | "fail";
 
@@ -40,39 +43,7 @@ function openRing(points: LocalPlanPoint[]): LocalPlanPoint[] {
   return first.x === last.x && first.z === last.z ? points.slice(0, -1) : points;
 }
 
-const EXPORT_COORDINATE_TOLERANCE_M = 0.000001;
 const EXPORT_ORIGIN_TOLERANCE_DEG = 0.000000001;
-
-function pointMatches(
-  first: LocalPlanPoint,
-  second: LocalPlanPoint
-): boolean {
-  return (
-    Math.abs(first.x - second.x) <= EXPORT_COORDINATE_TOLERANCE_M &&
-    Math.abs(first.z - second.z) <= EXPORT_COORDINATE_TOLERANCE_M
-  );
-}
-
-function ringsMatch(
-  first: LocalPlanPoint[],
-  second: LocalPlanPoint[]
-): boolean {
-  const a = openRing(first);
-  const b = openRing(second);
-  if (a.length !== b.length) return false;
-  if (a.length === 0) return true;
-
-  return b.some((candidate, startIndex) => {
-    if (!pointMatches(a[0], candidate)) return false;
-    return [1, -1].some((direction) =>
-      a.every((point, index) => {
-        const otherIndex =
-          (startIndex + direction * index + b.length * 2) % b.length;
-        return pointMatches(point, b[otherIndex]);
-      })
-    );
-  });
-}
 
 function coordinateSystemsMatch(
   first: PlanningGeometrySnapshot["coordinateSystem"],
@@ -191,14 +162,15 @@ function maxCoordinateAbs(input: {
   cadastral: CadastralContextSnapshot;
 }): number {
   const points: LocalPlanPoint[] = [
-    ...input.planning.parcel.polygon,
+    ...parcelRings(localParcelPolygons(input.planning.parcel)).flat(),
+    ...parcelRings(localParcelPolygons(input.cadastral.targetParcel)).flat(),
     ...input.planning.building.floors.flatMap((floor) => floor.shape),
     ...input.planning.roads.flatMap((road) => road.points),
     ...input.context.buildings.flatMap((building) =>
       building.polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes].flat())
     ),
-    ...input.cadastral.adjacentParcels.flatMap((parcel) => parcel.polygon),
-    ...input.cadastral.roadParcels.flatMap((parcel) => parcel.polygon),
+    ...input.cadastral.adjacentParcels.flatMap((parcel) => parcelRings(localParcelPolygons(parcel)).flat()),
+    ...input.cadastral.roadParcels.flatMap((parcel) => parcelRings(localParcelPolygons(parcel)).flat()),
   ];
   return points.reduce(
     (maximum, point) => Math.max(maximum, Math.abs(point.x), Math.abs(point.z)),
@@ -212,6 +184,10 @@ export function buildSiteDeliveryAudit(input: {
   cadastral: CadastralContextSnapshot;
 }): SiteDeliveryAudit {
   const checks: SiteDeliveryCheck[] = [];
+  const deadline = performance.now() + 2_000;
+  const checkDeadline = () => {
+    if (performance.now() >= deadline) throw new DOMException("Site delivery audit deadline exceeded", "TimeoutError");
+  };
   checks.push({
     id: "planning-geometry",
     status: input.planning.validation.exportable ? "pass" : "fail",
@@ -252,17 +228,20 @@ export function buildSiteDeliveryAudit(input: {
       : "계획·주변 건물·지적 데이터의 원점 또는 좌표축이 달라 export를 차단했습니다.",
   });
 
-  const parcelBoundaryMatches = ringsMatch(
-    input.planning.parcel.polygon,
-    input.cadastral.targetParcel.polygon
-  );
+  let parcelBoundaryMatches = false;
+  try {
+    parcelBoundaryMatches = validateCadastralTarget(input.planning.parcel, checkDeadline)
+      && validateCadastralTarget(input.cadastral.targetParcel, checkDeadline)
+      && cadastralTargetPolygonsMatch(localParcelPolygons(input.planning.parcel), localParcelPolygons(input.cadastral.targetParcel), checkDeadline);
+    checkDeadline();
+  } catch { parcelBoundaryMatches = false; }
   checks.push({
     id: "export-target-parcel",
     status: parcelBoundaryMatches ? "pass" : "fail",
-    label: "대상 필지 외곽",
+    label: "대상 필지 전체 경계",
     message: parcelBoundaryMatches
-      ? "화면·SketchUp·CAD가 동일한 대상 필지 외곽선을 사용합니다."
-      : "계획과 지적 export의 대상 필지 외곽선이 달라 export를 차단했습니다.",
+      ? "화면·SketchUp·CAD가 동일한 대상 필지의 모든 조각과 내부 제외 경계를 사용합니다."
+      : "계획과 지적 export의 대상 필지 외곽선이 달라 export를 차단했습니다. 전체 조각·내부 홀·경계 식별 순서를 확인하세요.",
   });
 
   checks.push({
@@ -292,20 +271,48 @@ export function buildSiteDeliveryAudit(input: {
         : "접도면 또는 반대편 도로 경계를 자동 검증하지 못했습니다.",
   });
 
-  const roadOverlapFloorIds = input.planning.building.aboveGroundFloors
-    .filter((floor) =>
-      input.cadastral.roadParcels.some((road) =>
-        polygonsHaveAreaOverlap(floor.shape, road.polygon)
-      )
-    )
-    .map((floor) => floor.id);
+  const failures = input.cadastral.validation.issues.filter(issue => issue.severity === "fail");
+  const isIntrusion = (code: string) => code === "cadastral-road-mass-intrusion" || code === "planned-road-mass-intrusion";
+  const hasKnownIntrusion = failures.some(issue => isIntrusion(issue.code));
+  // An intrusion rejects the plan, but does not invalidate the measured source topology.
+  let topologyValid = failures.every(issue => isIntrusion(issue.code))
+    && (hasKnownIntrusion || (input.cadastral.validation.usable && input.cadastral.validation.status !== "fail"));
+  const roadOverlapFloorIds: string[] = [];
+  try {
+    topologyValid = topologyValid && parcelBoundaryMatches && [...input.cadastral.roadParcels, ...input.cadastral.adjacentParcels]
+      .every(parcel => {
+        checkDeadline();
+        const valid = validateLocalParcelTopology(localParcelPolygons(parcel), checkDeadline);
+        checkDeadline();
+        return valid;
+      });
+    topologyValid = topologyValid && validateCadastralFrontageIdentities(input.cadastral, checkDeadline);
+    if (topologyValid) for (const floor of input.planning.building.aboveGroundFloors) {
+      checkDeadline();
+      if (input.cadastral.roadParcels.some(road => {
+        checkDeadline();
+        const overlap = localParcelIntersectionArea([{ outer: floor.shape, holes: [] }], localParcelPolygons(road));
+        checkDeadline();
+        return overlap > 1e-8;
+      })) {
+        roadOverlapFloorIds.push(floor.id);
+      }
+    }
+    checkDeadline();
+  } catch { topologyValid = false; }
+  checks.push({ id: "context-topology", status: topologyValid ? "pass" : "fail", label: "전체 지적 경계",
+    message: topologyValid ? "모든 조각과 내부 제외 영역을 포함해 지적 경계를 검사했습니다."
+      : "지적 경계 또는 전체 도형 검사가 불완전합니다. 단일 외곽선으로 대체하지 않고 export를 차단합니다." });
   checks.push({
     id: "road-overlap",
-    status: roadOverlapFloorIds.length > 0 ? "review" : "pass",
+    status: !topologyValid || hasKnownIntrusion ? "fail" : roadOverlapFloorIds.length > 0 ? "review" : "pass",
     label: "계획 매스·도로 경계",
     message:
-      roadOverlapFloorIds.length > 0
+      !topologyValid ? "전체 경계의 중첩 검사를 완료하지 못했습니다."
+      : roadOverlapFloorIds.length > 0
         ? `${roadOverlapFloorIds.length}개 지상층 외곽이 도로 경계와 면적으로 겹칩니다. UPIS/지적 좌표 정합과 계획 배치를 재검토해야 합니다.`
+        : hasKnownIntrusion
+          ? "지적 검사에서 계획 매스의 도로 침범이 확인되어 export를 차단합니다."
         : "지상 계획 매스와 조회된 도로 경계 사이에 면적 중첩이 없습니다.",
   });
 
@@ -330,7 +337,8 @@ export function buildSiteDeliveryAudit(input: {
         : "모든 포함 주변 건물의 등록 높이가 확인됐습니다.",
   });
 
-  const maxCoordinateAbsM = maxCoordinateAbs(input);
+  let maxCoordinateAbsM = Number.POSITIVE_INFINITY;
+  try { maxCoordinateAbsM = maxCoordinateAbs(input); } catch { /* Malformed authoritative topology remains a failure. */ }
   const coordinatesFinite = Number.isFinite(maxCoordinateAbsM);
   checks.push({
     id: "coordinate-contract",

@@ -5,6 +5,11 @@ import {
 } from "@/lib/finance/sale-price-from-comps";
 
 describe("sale price estimate audit metadata", () => {
+  it("does not use known cancelled whole-building sales or individual villas", () => {
+    const house = { type: "단독다가구", pricePerPyeong: 1000, buildYear: 2022 };
+    expect(estimateSalePriceFromComps([house, house, { ...house, cancellationStatus: "cancelled" }], 2026)).toBeNull();
+    expect(estimateSalePriceFromComps([house, house, { ...house, type: "연립다세대" }], 2026)).toBeNull();
+  });
   it("records its unvalidated scoring status and reference year", () => {
     const result = estimateSalePriceFromComps(
       [

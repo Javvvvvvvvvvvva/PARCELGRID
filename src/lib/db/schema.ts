@@ -23,6 +23,7 @@ import {
   uuid,
   text,
   integer,
+  bigint,
   numeric,
   boolean,
   timestamp,
@@ -72,7 +73,7 @@ export const orgs = pgTable("orgs", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** Users (future organization/role authentication compatible). */
+/** Users and their live organization authorization state. */
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: uuid("org_id")
@@ -81,7 +82,12 @@ export const users = pgTable("users", {
   email: text("email").notNull(),
   name: text("name"),
   image: text("image"),
-  role: text("role").notNull().default("member"), // owner | admin | analyst | viewer
+  role: text("role").notNull().default("viewer"),
+  reviewerRolesJson: jsonb("reviewer_roles_json")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   emailIdx: uniqueIndex("users_email_idx").on(t.email),
@@ -283,23 +289,75 @@ export const reports = pgTable(
   })
 );
 
-/** Generic audit log — append-only. */
+/** Generic audit log — append-only and hash-chained per organization. */
 export const auditLog = pgTable(
   "audit_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id").notNull(),
-    actorId: uuid("actor_id"),
+    orgId: uuid("org_id")
+      .references(() => orgs.id, { onDelete: "restrict" })
+      .notNull(),
+    ordinal: bigint("ordinal", { mode: "number" }).notNull(),
+    actorId: uuid("actor_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    actorName: text("actor_name").notNull(),
+    actorOrganization: text("actor_organization").notNull(),
+    actorEmail: text("actor_email").notNull(),
+    actorRole: text("actor_role").notNull(),
     action: text("action").notNull(), // "scenario.update", "report.sign", ...
     resourceType: text("resource_type").notNull(),
     resourceId: text("resource_id").notNull(),
     payload: jsonb("payload"),
+    payloadHash: text("payload_hash").notNull(),
+    previousHash: text("previous_hash").notNull(),
+    entryHash: text("entry_hash").notNull(),
+    eventVersion: text("event_version").notNull().default("audit-chain-2026.1"),
+    requestId: uuid("request_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     orgIdx: index("audit_org_idx").on(t.orgId, t.createdAt),
+    orgOrdinalIdx: uniqueIndex("audit_org_ordinal_idx").on(t.orgId, t.ordinal),
+    entryHashIdx: uniqueIndex("audit_entry_hash_idx").on(t.entryHash),
     resourceIdx: index("audit_resource_idx").on(t.resourceType, t.resourceId),
   })
+);
+
+/** Immutable, organization-scoped project workspace versions. */
+export const projectWorkspaceVersions = pgTable(
+  "project_workspace_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id")
+      .references(() => orgs.id, { onDelete: "restrict" })
+      .notNull(),
+    projectId: text("project_id").notNull(),
+    revision: integer("revision").notNull(),
+    schemaVersion: text("schema_version").notNull(),
+    payload: jsonb("payload").notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    auditEntryHash: text("audit_entry_hash").notNull(),
+    savedBy: text("saved_by").notNull(),
+    createdBy: uuid("created_by")
+      .references(() => users.id, { onDelete: "restrict" })
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    projectRevisionIdx: uniqueIndex("workspace_project_revision_idx").on(
+      t.orgId,
+      t.projectId,
+      t.revision,
+    ),
+    projectLatestIdx: index("workspace_project_latest_idx").on(
+      t.orgId,
+      t.projectId,
+      t.createdAt,
+    ),
+    payloadHashIdx: index("workspace_payload_hash_idx").on(t.payloadHash),
+    auditHashIdx: uniqueIndex("workspace_audit_hash_idx").on(t.auditEntryHash),
+  }),
 );
 
 // ─────────────────────────── Relations ───────────────────────────

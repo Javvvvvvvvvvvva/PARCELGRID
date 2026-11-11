@@ -3,6 +3,10 @@ import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
+import {
+  evaluateSunlightRegulation,
+  toSunlightGeometryProfile,
+} from "@/lib/regulatory/sunlight-rules";
 
 const ORIGIN: LngLat = [127, 37];
 
@@ -67,7 +71,7 @@ describe("buildable-area true-north sunlight envelope", () => {
       Math.abs(y - (8.5 - 0.2 * x)) < 0.03
     );
 
-    expect(translatedNorthLine.length).toBeGreaterThanOrEqual(2);
+    expect(translatedNorthLine.length, JSON.stringify(result)).toBeGreaterThanOrEqual(2);
     const [a, b] = translatedNorthLine;
     expect((b[1] - a[1]) / (b[0] - a[0])).toBeCloseTo(-0.2, 2);
   });
@@ -87,6 +91,60 @@ describe("buildable-area true-north sunlight envelope", () => {
       1.5,
       5.2,
       6.7,
+    ]);
+  });
+
+  it("uses cumulative actual floor heights and adds roof allowance only at the top", () => {
+    const boundary = lngLatRing([
+      [0, 0],
+      [30, 0],
+      [30, 30],
+      [0, 30],
+    ]);
+    const sunlight = evaluateSunlightRegulation({
+      context: { jurisdictionCode: "KR-11", asOf: "2026-09-08" },
+      zoning: "제2종일반주거지역",
+      zoningStatus: "source-backed",
+      buildingHeightM: 11,
+      floorsAbove: 3,
+      legalUse: "detached-house",
+      legalUseStatus: "source-backed",
+      northBoundary: {
+        adjacentZoning: "제2종일반주거지역",
+        adjacentZoningStatus: "source-backed",
+        separatorType: "none",
+        separatorStatus: "source-backed",
+      },
+      daylight: {
+        sameLotBuildingCount: 1,
+        sameLotBuildingCountStatus: "source-backed",
+      },
+    });
+    const result = calcBuildableArea(
+      boundary,
+      0,
+      3,
+      3.2,
+      true,
+      [0, 0, 0, 0],
+      {
+        sunlightProfile: toSunlightGeometryProfile(sunlight),
+        floorHeightsM: [3.6, 3, 3],
+        floorLevels: [1, 2, 3],
+        roofAllowanceM: 1.4,
+      }
+    );
+
+    expect(result.requiredSetbackMaxHeight).toBe(5.5);
+    expect(result.stepped3D.map((step) => step.heightM)).toEqual([
+      3.6,
+      6.6,
+      11,
+    ]);
+    expect(result.stepped3D.map((step) => step.requiredSetbackM)).toEqual([
+      1.5,
+      1.5,
+      5.5,
     ]);
   });
 });

@@ -1,3 +1,4 @@
+import { transactionEvidenceComplete } from "@/lib/integrations/molit-evidence";
 import type { Parcel, Scenario } from "@/lib/finance/types";
 import {
   computeProject,
@@ -33,7 +34,9 @@ export function commitStage3FeasibilitySnapshot(
   return {
     ...computed,
     comps: previous.comps,
-    saleEstimate: previous.saleEstimate,
+    transactionEvidence: previous.transactionEvidence,
+    dwellingMarket: previous.dwellingMarket,
+    saleEstimate: transactionEvidenceComplete(previous.transactionEvidence) ? previous.saleEstimate : undefined,
     // Stage 2의 구형 권장/최대 비교는 현재 Stage 3 대표안과 기준이 다르다.
     scenarioComparison: undefined,
   };

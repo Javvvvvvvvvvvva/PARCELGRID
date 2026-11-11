@@ -31,6 +31,12 @@ export function defaultRevenueModelForUse(useType: FloorUseType): PlanningRevenu
   return "non-revenue";
 }
 
+export function isRevenueBearingUse(useType: FloorUseType): boolean {
+  return (
+    useType === "residential" || useType === "retail" || useType === "office"
+  );
+}
+
 export function resolveZoneRevenueModel(zone: FloorZone): PlanningRevenueModel {
   return zone.revenueModel ?? defaultRevenueModelForUse(zone.useType);
 }
@@ -140,16 +146,25 @@ export function clonePlanningScenario(
     origin: "custom",
     status: "draft",
     baseScenarioId: source.id,
+    egressPlan: undefined,
+    layoutFinanceHistory: undefined,
+    quantityCost: undefined,
+    constructionQuote: undefined,
+    dwellingProgram: source.dwellingProgram ? {
+      ...source.dwellingProgram,
+      salePriceBands: source.dwellingProgram.salePriceBands?.map((band) => structuredClone(band)),
+    } : undefined,
     version: 1,
     createdAt: timestamp,
     updatedAt: timestamp,
     floorPrograms: source.floorPrograms.map((floor) => ({
       ...floor,
       id: uid("floor"),
+      interiorLayout: undefined,
       zones: floor.zones.map((zone) => ({ ...zone, id: uid("zone") })),
     })),
     placement: { ...source.placement },
-    parking: { ...source.parking },
+    parking: { ...source.parking, vehicleProfile: source.parking.vehicleProfile ? { ...source.parking.vehicleProfile } : undefined },
     geometrySource: {
       ...resolvePlanningGeometrySource(source),
       locked: false,
@@ -234,10 +249,10 @@ export function summarizePlanningScenario(
       }
 
       const revenueModel = resolveZoneRevenueModel(zone);
-      if (revenueModel === "sale") {
+      if (revenueModel === "sale" && isRevenueBearingUse(zone.useType)) {
         saleableAreaSqm += Math.min(area, Math.max(0, zone.saleableAreaSqm ?? area));
       }
-      if (revenueModel === "lease") {
+      if (revenueModel === "lease" && isRevenueBearingUse(zone.useType)) {
         rentableAreaSqm += Math.min(area, Math.max(0, zone.rentableAreaSqm ?? area));
       }
     }

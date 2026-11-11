@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
-import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
+import { CADASTRAL_CONTEXT_VERSION, type CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import { PLANNING_GEOMETRY_VERSION, type PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
 import type { ContextGeometrySnapshot } from "@/lib/planning/sketchup-export-package";
 import {
   buildSiteDeliveryAudit,
@@ -47,7 +47,7 @@ function planning(): PlanningGeometrySnapshot {
     selfIntersects: false,
   };
   return {
-    version: "planning-geometry-v2",
+    version: PLANNING_GEOMETRY_VERSION,
     projectId: "delivery-audit",
     scenarioId: "scenario-1",
     scenarioVersion: 1,
@@ -115,7 +115,7 @@ function context(): ContextGeometrySnapshot {
 
 function cadastral(roadPolygon: Array<{ x: number; z: number }>): CadastralContextSnapshot {
   return {
-    version: "cadastral-context-v2",
+    version: CADASTRAL_CONTEXT_VERSION,
     projectId: "delivery-audit",
     generatedAt: "2026-07-15T00:00:00.000Z",
     cadastralHash: "CAD-TEST0001",

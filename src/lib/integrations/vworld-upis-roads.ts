@@ -1,4 +1,8 @@
 import type { CadastralParcelFeature } from "@/lib/geo/cadastral-context";
+import { createProviderDeadline } from "@/lib/http/provider-deadline";
+import { z } from "zod";
+import { parseContextFeatureGeometry } from "./vworld-cadastral-context";
+import { fetchVworldJson } from "./vworld-response";
 
 const KEY = process.env.VWORLD_API_KEY;
 const DATA_BASE = "https://api.vworld.kr/req/data";
@@ -20,7 +24,7 @@ interface RawUpisRoadResponse {
     error?: { code?: string; text?: string };
     result?: {
       featureCollection?: {
-        features?: RawUpisRoadFeature[];
+        features?: unknown;
       };
     };
   };
@@ -30,85 +34,40 @@ function property(
   properties: Record<string, unknown>,
   ...keys: string[]
 ): unknown {
+  let value: unknown;
   for (const key of keys) {
-    if (properties[key] != null) return properties[key];
-    const lower = key.toLowerCase();
-    if (properties[lower] != null) return properties[lower];
-    const upper = key.toUpperCase();
-    if (properties[upper] != null) return properties[upper];
+    for (const alias of new Set([key, key.toLowerCase(), key.toUpperCase()])) {
+      const candidate = properties[alias];
+      if (candidate == null) continue;
+      if (value !== undefined && value !== candidate) throw new Error("V-World UPIS road property aliases conflict");
+      value = candidate;
+    }
   }
-  return undefined;
+  return value;
 }
 
 function text(value: unknown): string {
-  return value == null ? "" : String(value).trim();
+  if (value == null) return "";
+  if (typeof value !== "string" || value.length > 500) throw new Error("V-World UPIS road text property invalid");
+  return value.trim();
 }
 
 function numberValue(value: unknown): number {
+  if (value == null || value === "") return 0;
+  if (typeof value !== "number" && (typeof value !== "string" || !/^\d+(?:\.\d+)?$/.test(value.trim()))) {
+    throw new Error("V-World UPIS road numeric property invalid");
+  }
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function openRing(ring: [number, number][]): [number, number][] {
-  if (ring.length <= 1) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function outerRings(feature: RawUpisRoadFeature): [number, number][][] {
-  const geometry = feature.geometry;
-  if (!geometry?.coordinates) return [];
-  if (geometry.type === "Polygon") {
-    const coordinates = geometry.coordinates as number[][][];
-    const ring = openRing((coordinates[0] ?? []) as [number, number][]);
-    return ring.length >= 3 ? [ring] : [];
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > Number.MAX_SAFE_INTEGER) {
+    throw new Error("V-World UPIS road numeric property invalid");
   }
-  if (geometry.type === "MultiPolygon") {
-    const coordinates = geometry.coordinates as number[][][][];
-    return coordinates
-      .map((polygon) => openRing((polygon[0] ?? []) as [number, number][]))
-      .filter((ring) => ring.length >= 3);
-  }
-  return [];
+  return parsed;
 }
 
-function polygonAreaSqm(ring: [number, number][]): number {
-  if (ring.length < 3) return 0;
-  const centerLat = ring.reduce((sum, point) => sum + point[1], 0) / ring.length;
-  const lngScale = 111_000 * Math.cos((centerLat * Math.PI) / 180);
-  const origin = ring[0];
-  let sum = 0;
-  for (let index = 0; index < ring.length; index += 1) {
-    const current = ring[index];
-    const next = ring[(index + 1) % ring.length];
-    const currentX = (current[0] - origin[0]) * lngScale;
-    const currentY = (current[1] - origin[1]) * 111_000;
-    const nextX = (next[0] - origin[0]) * lngScale;
-    const nextY = (next[1] - origin[1]) * 111_000;
-    sum += currentX * nextY - nextX * currentY;
-  }
-  return Math.abs(sum) / 2;
-}
-
-function centroid(ring: [number, number][]): { lng: number; lat: number } {
-  return {
-    lng: ring.reduce((sum, point) => sum + point[0], 0) / ring.length,
-    lat: ring.reduce((sum, point) => sum + point[1], 0) / ring.length,
-  };
-}
-
-function distanceM(
-  a: { lng: number; lat: number },
-  b: { lng: number; lat: number }
-): number {
-  const latM = (b.lat - a.lat) * 111_000;
-  const lngM =
-    (b.lng - a.lng) * 111_000 * Math.cos((a.lat * Math.PI) / 180);
-  return Math.hypot(latM, lngM);
-}
+const featuresSchema = z.array(z.object({
+  geometry: z.unknown(),
+  properties: z.record(z.string(), z.unknown()),
+})).max(200);
 
 export interface UpisRoadSummary {
   presentSn: string;
@@ -133,17 +92,21 @@ export function parseUpisRoadFeatures(input: {
   center: { lng: number; lat: number };
   radiusM: number;
   maxCount: number;
+  signal?: AbortSignal;
+  outerDeadline?: number;
 }): ParsedUpisRoadResult {
-  const parcels: CadastralParcelFeature[] = [];
-  const summaries: UpisRoadSummary[] = [];
-  const seen = new Set<string>();
+  const budget = createProviderDeadline(12_000, input.signal, input.outerDeadline);
+  budget.check();
+  const parsed = featuresSchema.safeParse(input.features);
+  if (!parsed.success) throw new Error("V-World UPIS road features invalid");
+  const candidates: Array<{ parcel: CadastralParcelFeature; summary: UpisRoadSummary }> = [];
+  const seen = new Map<string, string>();
 
-  for (const feature of input.features) {
-    const properties = feature.properties ?? {};
+  for (const [index, feature] of parsed.data.entries()) {
+    budget.check();
+    const properties = feature.properties;
     const presentSn = text(property(properties, "present_sn", "PRESENT_SN"));
-    if (!presentSn || seen.has(presentSn)) continue;
-    const rings = outerRings(feature);
-    if (rings.length === 0) continue;
+    if (!presentSn) throw new Error("V-World UPIS road identity missing");
 
     const label = text(property(properties, "dgm_nm", "DGM_NM"));
     const grade = text(property(properties, "grad_se", "GRAD_SE"));
@@ -154,30 +117,27 @@ export function parseUpisRoadFeatures(input: {
     const declaredAreaSqm = numberValue(property(properties, "dgm_ar", "DGM_AR"));
     const declaredLengthM = numberValue(property(properties, "dgm_lt", "DGM_LT"));
 
-    let acceptedParts = 0;
-    rings.forEach((ring, partIndex) => {
-      const ringCenter = centroid(ring);
-      const distance = distanceM(input.center, ringCenter);
-      if (distance > input.radiusM * 1.6) return;
-      const measuredArea = polygonAreaSqm(ring);
-      if (!Number.isFinite(measuredArea) || measuredArea <= 0.5) return;
-      const id = `UPIS-${presentSn}-${partIndex + 1}`;
-      parcels.push({
-        pnu: id,
+    const signature = JSON.stringify(input.features[index]);
+    const previous = seen.get(presentSn);
+    if (previous !== undefined) {
+      if (previous !== signature) throw new Error("V-World UPIS road duplicate identity conflict");
+      continue;
+    }
+    seen.set(presentSn, signature);
+    const geometry = parseContextFeatureGeometry(feature.geometry, input.center, budget.check);
+    if (geometry.distanceM > input.radiusM * 1.6) continue;
+    candidates.push({
+      parcel: {
+        // Keep the former first-part identifier while retaining the whole source feature.
+        pnu: `UPIS-${presentSn}-1`,
         jibun: label || `${grade}${roadType ? ` ${roadType}류` : ""}`.trim() || "도시계획 도로",
         jimok: "도로",
         jimokCode: "UPIS-UQ151",
-        lotAreaSqm: Math.round(measuredArea * 100) / 100,
-        boundary: ring,
-        distanceM: Math.round(distance * 10) / 10,
+        ...geometry,
+        boundary: geometry.boundary.slice(0, -1),
         boundarySource: "upis-planned-road",
-      });
-      acceptedParts += 1;
-    });
-
-    if (acceptedParts > 0) {
-      seen.add(presentSn);
-      summaries.push({
+      },
+      summary: {
         presentSn,
         label,
         grade,
@@ -187,15 +147,16 @@ export function parseUpisRoadFeatures(input: {
         executionCode,
         declaredAreaSqm,
         declaredLengthM,
-        featurePartCount: acceptedParts,
-      });
-    }
+        featurePartCount: geometry.polygons.length,
+      },
+    });
   }
 
-  parcels.sort((a, b) => a.distanceM - b.distanceM);
+  const selected = candidates.sort((a, b) => a.parcel.distanceM - b.parcel.distanceM).slice(0, input.maxCount);
+  budget.check();
   return {
-    parcels: parcels.slice(0, input.maxCount),
-    summaries,
+    parcels: selected.map(candidate => candidate.parcel),
+    summaries: selected.map(candidate => candidate.summary),
   };
 }
 
@@ -203,8 +164,11 @@ export async function fetchUpisRoadBoundaries(input: {
   center: { lng: number; lat: number };
   radiusM?: number;
   maxCount?: number;
+  signal?: AbortSignal;
+  outerDeadline?: number;
 }): Promise<ParsedUpisRoadResult> {
   if (!KEY) return { parcels: [], summaries: [] };
+  const budget = createProviderDeadline(12_000, input.signal, input.outerDeadline);
   const radiusM = input.radiusM ?? 120;
   const maxCount = input.maxCount ?? 40;
   const latBuffer = radiusM / 111_000;
@@ -231,26 +195,19 @@ export async function fetchUpisRoadBoundaries(input: {
   url.searchParams.set("crs", "EPSG:4326");
   url.searchParams.set("domain", DOMAIN);
 
-  const response = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) {
-    throw new Error(`V-World UPIS road HTTP ${response.status}`);
-  }
-  const raw = (await response.json()) as RawUpisRoadResponse;
-  if (raw.response?.status === "ERROR") {
-    throw new Error(
-      `V-World UPIS road ${raw.response.error?.code ?? "ERROR"}: ${
-        raw.response.error?.text ?? "unknown error"
-      }`
-    );
-  }
-  if (raw.response?.status !== "OK") return { parcels: [], summaries: [] };
+  const raw = (await fetchVworldJson(url.toString(), {
+    envelope: "data", signal: budget.signal, outerDeadline: budget.deadline,
+  })) as RawUpisRoadResponse;
+  budget.check();
+  if (raw.response?.status === "NOT_FOUND") return { parcels: [], summaries: [] };
+  if (raw.response?.status !== "OK") throw new Error("V-World UPIS road response invalid");
 
   return parseUpisRoadFeatures({
-    features: raw.response.result?.featureCollection?.features ?? [],
+    features: raw.response.result?.featureCollection?.features as RawUpisRoadFeature[],
     center: input.center,
     radiusM,
     maxCount,
+    signal: budget.signal,
+    outerDeadline: budget.deadline,
   });
 }

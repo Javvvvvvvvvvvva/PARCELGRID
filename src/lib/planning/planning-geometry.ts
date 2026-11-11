@@ -1,20 +1,25 @@
+import { planningEnvelopeSteps } from "@/lib/planning/envelope-steps";
 import { calcBuildableArea, type LngLat } from "@/lib/finance/buildable-area";
-import {
-  analyzeFrontage,
-  legalEdgeSetbacksFromFrontage,
-} from "@/lib/geo/road-frontage";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import type { LocalParcelPolygon, Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { localParcelArea } from "@/lib/geo/parcel-topology-geometry";
+import { resolvePlanningParcel } from "./planning-parcel";
 import {
   buildPlanningMassModel,
-  polygonAreaSqm,
   type LocalPlanPoint,
-  type PlanningEnvelopeStep,
   type PlanningFloorMass,
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
 import type { PlanningScenario } from "@/lib/planning/types";
+import { polygonSelfIntersects } from "@/lib/geo/planar-ring";
+export { polygonSelfIntersects, segmentsIntersect } from "@/lib/geo/planar-ring";
 import { resolvePlanningGeometrySource } from "@/lib/planning/geometry-source";
+import {
+  toSunlightGeometryProfile,
+  type SunlightRegulationResult,
+} from "@/lib/regulatory/sunlight-rules";
 
-export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v2" as const;
+export const PLANNING_GEOMETRY_VERSION = "planning-geometry-v6" as const;
 export const GEOMETRY_AREA_PASS_TOLERANCE_PCT = 0.1;
 export const GEOMETRY_AREA_REVIEW_TOLERANCE_PCT = 0.5;
 
@@ -46,10 +51,12 @@ export interface PlanningGeometryFloor extends PlanningFloorMass {
 }
 
 export interface PlanningGeometrySnapshot {
+  analysisReference?: import("./analysis-reference-contract").AnalysisReferenceSelection;
   version: typeof PLANNING_GEOMETRY_VERSION;
   projectId: string;
   scenarioId: string;
   scenarioVersion: number;
+  scenarioInputBasis?: string;
   scenarioName: string;
   generatedAt: string;
   geometryHash: string;
@@ -62,6 +69,8 @@ export interface PlanningGeometrySnapshot {
     originLngLat: [number, number];
   };
   parcel: {
+    /** Authoritative full region. polygon is populated only for a single hole-free component. */
+    polygons?: LocalParcelPolygon[];
     polygon: LocalPlanPoint[];
     officialAreaSqm: number;
     measuredAreaSqm: number;
@@ -98,6 +107,7 @@ export interface PlanningGeometryBuildResult {
   snapshot: PlanningGeometrySnapshot;
   model: PlanningMassModel;
   groundShape: LocalPlanPoint[];
+  groundPolygons: LocalParcelPolygon[];
   extent: number;
   warnings: string[];
 }
@@ -105,11 +115,14 @@ export interface PlanningGeometryBuildResult {
 export interface BuildPlanningGeometryInput {
   projectId: string;
   scenario: PlanningScenario;
-  boundary: LngLat[];
+  boundary?: LngLat[];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   lotAreaSqm: number;
   zoning: string;
   roads?: PlanningGeometryRoadInput[];
   setback?: PlanningGeometrySetbackInput;
+  sunlight?: SunlightRegulationResult;
+  roofAllowanceM?: number;
   generatedAt?: string;
 }
 
@@ -166,67 +179,6 @@ function lineToLocalMeters(
   });
 }
 
-function orientation(
-  a: LocalPlanPoint,
-  b: LocalPlanPoint,
-  c: LocalPlanPoint
-): number {
-  return (b.z - a.z) * (c.x - b.x) - (b.x - a.x) * (c.z - b.z);
-}
-
-function onSegment(
-  a: LocalPlanPoint,
-  b: LocalPlanPoint,
-  c: LocalPlanPoint
-): boolean {
-  const epsilon = 1e-8;
-  return (
-    Math.min(a.x, c.x) - epsilon <= b.x &&
-    b.x <= Math.max(a.x, c.x) + epsilon &&
-    Math.min(a.z, c.z) - epsilon <= b.z &&
-    b.z <= Math.max(a.z, c.z) + epsilon
-  );
-}
-
-function segmentsIntersect(
-  p1: LocalPlanPoint,
-  q1: LocalPlanPoint,
-  p2: LocalPlanPoint,
-  q2: LocalPlanPoint
-): boolean {
-  const epsilon = 1e-8;
-  const o1 = orientation(p1, q1, p2);
-  const o2 = orientation(p1, q1, q2);
-  const o3 = orientation(p2, q2, p1);
-  const o4 = orientation(p2, q2, q1);
-
-  if (o1 * o2 < -epsilon && o3 * o4 < -epsilon) return true;
-  if (Math.abs(o1) <= epsilon && onSegment(p1, p2, q1)) return true;
-  if (Math.abs(o2) <= epsilon && onSegment(p1, q2, q1)) return true;
-  if (Math.abs(o3) <= epsilon && onSegment(p2, p1, q2)) return true;
-  if (Math.abs(o4) <= epsilon && onSegment(p2, q1, q2)) return true;
-  return false;
-}
-
-export function polygonSelfIntersects(points: LocalPlanPoint[]): boolean {
-  if (points.length < 4) return false;
-  for (let i = 0; i < points.length; i += 1) {
-    const a1 = points[i];
-    const a2 = points[(i + 1) % points.length];
-    for (let j = i + 1; j < points.length; j += 1) {
-      const b1 = points[j];
-      const b2 = points[(j + 1) % points.length];
-      const adjacent =
-        i === j ||
-        (i + 1) % points.length === j ||
-        i === (j + 1) % points.length;
-      if (adjacent) continue;
-      if (segmentsIntersect(a1, a2, b1, b2)) return true;
-    }
-  }
-  return false;
-}
-
 function areaStatus(absDifferencePct: number): "pass" | "review" | "fail" {
   if (absDifferencePct <= GEOMETRY_AREA_PASS_TOLERANCE_PCT) return "pass";
   if (absDifferencePct <= GEOMETRY_AREA_REVIEW_TOLERANCE_PCT) return "review";
@@ -243,8 +195,46 @@ function stableGeometryHash(value: unknown): string {
   return `PG-${(hash >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
 }
 
+export function planningGeometryInputBasis(scenario: PlanningScenario): string {
+  const { rotationDeg, offsetXM, offsetZM, roadSetbackM, northSetbackM } = scenario.placement;
+  return stableGeometryHash({
+    id: scenario.id, projectId: scenario.projectId,
+    // Preserve the original field order even after canonical JSON/JSONB storage.
+    placement: { rotationDeg, offsetXM, offsetZM, roadSetbackM, northSetbackM },
+    floors: scenario.floorPrograms.map(f => ({
+      id: f.id, level: f.level, floorHeightM: f.floorHeightM,
+      footprintScalePct: f.footprintScalePct, northSetbackM: f.northSetbackM,
+      gross: f.zones.reduce((sum, z) => sum + z.areaSqm, 0),
+    })),
+  });
+}
+
 function canonicalPoint(point: LocalPlanPoint): [number, number] {
   return [round(point.x), round(point.z)];
+}
+
+/** Deterministic model identity, not a cryptographic signature or an approval. */
+export function planningGeometryContentHash(input: {
+  projectId: string; scenarioId: string; origin: [number, number]; polygons: LocalParcelPolygon[];
+  parcelAvailable: boolean; officialAreaSqm: number; zoning: string;
+  floors: Pick<PlanningGeometryFloor, "id" | "level" | "baseHeightM" | "topHeightM" | "programAreaSqm" | "visualAreaSqm" | "shape">[];
+  roads: Pick<PlanningGeometrySnapshot["roads"][number], "name" | "points">[];
+}): string {
+  return stableGeometryHash({
+    version: PLANNING_GEOMETRY_VERSION,
+    projectId: input.projectId,
+    scenarioId: input.scenarioId,
+    origin: input.origin.map(value => round(value, 8)),
+    parcel: input.polygons.map(part => ({ outer: part.outer.map(canonicalPoint), holes: part.holes.map(ring => ring.map(canonicalPoint)) })),
+    parcelAvailable: input.parcelAvailable,
+    officialAreaSqm: input.officialAreaSqm,
+    zoning: input.zoning,
+    floors: input.floors.map(floor => ({
+      id: floor.id, level: floor.level, baseHeightM: round(floor.baseHeightM), topHeightM: round(floor.topHeightM),
+      programAreaSqm: round(floor.programAreaSqm), visualAreaSqm: round(floor.visualAreaSqm), shape: floor.shape.map(canonicalPoint),
+    })),
+    roads: input.roads.map(road => ({ name: road.name, points: road.points.map(canonicalPoint) })),
+  });
 }
 
 function floorFarArea(floor: PlanningScenario["floorPrograms"][number]): number {
@@ -426,9 +416,12 @@ export function buildPlanningGeometry(
   input: BuildPlanningGeometryInput
 ): PlanningGeometryBuildResult {
   const { scenario, boundary } = input;
-  const origin = planningRingCentroid(boundary);
-  const groundShape = planningRingToLocalMeters(boundary, origin);
-  const groundFloors = scenario.floorPrograms.filter((floor) => floor.level > 0);
+  const parcel = resolvePlanningParcel(input);
+  const { origin, polygons: groundPolygons } = parcel;
+  const groundShape = parcel.simple ? groundPolygons[0].outer : [];
+  const groundFloors = scenario.floorPrograms
+    .filter((floor) => floor.level > 0)
+    .sort((a, b) => a.level - b.level);
   const maxFloor = Math.max(1, ...groundFloors.map((floor) => floor.level));
   const averageFloorHeight =
     groundFloors.length > 0
@@ -437,13 +430,13 @@ export function buildPlanningGeometry(
           0
         ) / groundFloors.length
       : 3;
-  const frontage =
-    input.roads && input.roads.length > 0
-      ? analyzeFrontage(boundary, input.roads)
-      : null;
+  const frontage = parcel.available ? analyzeParcelFrontage(parcel.source, input.roads ?? [], origin) : null;
   // 법적 최대 외곽선과 사용자의 설계 여유거리를 분리한다. parcel.setback은
   // 배치 대안용 값이며 법규 외곽선을 임의로 3/1.5/3m 축소하지 않는다.
-  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
+  const edgeSetbacksByPolygon = frontage?.edgeSetbacksByPolygon;
+  const sunlightProfile = input.sunlight
+    ? toSunlightGeometryProfile(input.sunlight)
+    : undefined;
 
   const buildable = calcBuildableArea(
     boundary,
@@ -451,7 +444,15 @@ export function buildPlanningGeometry(
     maxFloor,
     averageFloorHeight,
     /주거/.test(input.zoning),
-    edgeSetbacks
+    undefined,
+    {
+      polygons: parcel.source,
+      edgeSetbacksByPolygon,
+      sunlightProfile,
+      floorHeightsM: groundFloors.map((floor) => floor.floorHeightM),
+      floorLevels: groundFloors.map((floor) => floor.level),
+      roofAllowanceM: input.roofAllowanceM,
+    }
   );
   const basementBuildable = calcBuildableArea(
     boundary,
@@ -459,41 +460,11 @@ export function buildPlanningGeometry(
     1,
     3,
     false,
-    edgeSetbacks
+    undefined,
+    { polygons: parcel.source, edgeSetbacksByPolygon }
   );
 
-  const fallbackRing = buildable.buildable2DRing ?? boundary;
-  const firstStep = buildable.stepped3D.find((step) => step.ringLngLat);
-  const basementRing = basementBuildable.buildable2DRing ?? boundary;
-  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map(
-    (floor) => {
-      const step =
-        floor.level > 0
-          ? buildable.stepped3D.find(
-              (candidate) => candidate.floor === floor.level
-            )
-          : undefined;
-      const ring =
-        floor.level < 0
-          ? basementRing
-          : step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
-      const shape = planningRingToLocalMeters(ring, origin);
-      return {
-        level: floor.level,
-        shape,
-        envelopeAreaSqm:
-          floor.level < 0
-            ? polygonAreaSqm(shape)
-            : step?.floorPlateSqm ?? polygonAreaSqm(shape),
-        requiredSetbackM:
-          floor.level < 0 ? 0 : step?.requiredSetbackM ?? 0,
-        envelopeAvailable:
-          floor.level < 0
-            ? Boolean(basementBuildable.buildable2DRing)
-            : Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
-      };
-    }
-  );
+  const envelopeSteps = planningEnvelopeSteps(scenario.floorPrograms, buildable, basementBuildable, origin);
 
   const model = buildPlanningMassModel(
     scenario.floorPrograms,
@@ -524,7 +495,7 @@ export function buildPlanningGeometry(
     0
   );
   const officialArea = nonNegative(input.lotAreaSqm);
-  const measuredArea = polygonAreaSqm(groundShape);
+  const measuredArea = localParcelArea(groundPolygons);
   const preliminaryFarPct =
     officialArea > 0 ? (preliminaryFarAreaSqm / officialArea) * 100 : 0;
   const preliminaryBcrPct =
@@ -537,33 +508,27 @@ export function buildPlanningGeometry(
         100
       : 0;
   const baseValidation = buildValidation(floors, officialArea, measuredArea);
+  if (!parcel.available) baseValidation.issues.push({ code: "parcel-topology-unavailable", severity: "fail",
+    message: "전체 대지 경계가 없거나 유효하지 않아 형상 검증을 보류했습니다. 외곽선 일부로 대체하지 않았습니다." });
+  if (parcel.available && !frontage) baseValidation.issues.push({ code: "parcel-frontage-unavailable", severity: "review",
+    message: "도로 접면 계산을 완료하지 못했습니다. 전체 경계에 기본 이격을 적용했으며 도로측 완화는 확인되지 않았습니다." });
   const roads = (input.roads ?? []).map((road) => ({
     name: road.name,
     points: lineToLocalMeters(road.points, origin),
     source: "VWorld road centerline" as const,
   }));
 
-  const hashPayload = {
-    version: PLANNING_GEOMETRY_VERSION,
+  const geometryHash = planningGeometryContentHash({
     projectId: input.projectId,
     scenarioId: scenario.id,
-    origin: origin.map((value) => round(value, 8)),
-    parcel: groundShape.map(canonicalPoint),
-    floors: floors.map((floor) => ({
-      id: floor.id,
-      level: floor.level,
-      baseHeightM: round(floor.baseHeightM),
-      topHeightM: round(floor.topHeightM),
-      programAreaSqm: round(floor.programAreaSqm),
-      visualAreaSqm: round(floor.visualAreaSqm),
-      shape: floor.shape.map(canonicalPoint),
-    })),
-    roads: roads.map((road) => ({
-      name: road.name,
-      points: road.points.map(canonicalPoint),
-    })),
-  };
-  const geometryHash = stableGeometryHash(hashPayload);
+    origin,
+    polygons: groundPolygons,
+    parcelAvailable: parcel.available,
+    officialAreaSqm: officialArea,
+    zoning: input.zoning,
+    floors,
+    roads,
+  });
   const validation = applyGeometrySourceValidation(
     baseValidation,
     scenario,
@@ -575,6 +540,7 @@ export function buildPlanningGeometry(
     projectId: input.projectId,
     scenarioId: scenario.id,
     scenarioVersion: scenario.version,
+    scenarioInputBasis: planningGeometryInputBasis(scenario),
     scenarioName: scenario.name,
     generatedAt,
     geometryHash,
@@ -588,6 +554,7 @@ export function buildPlanningGeometry(
     },
     parcel: {
       polygon: groundShape,
+      polygons: groundPolygons,
       officialAreaSqm: officialArea,
       measuredAreaSqm: measuredArea,
       areaDifferencePct:
@@ -608,8 +575,13 @@ export function buildPlanningGeometry(
     },
     validation,
     sourceNotes: [
-      "대지 경계와 도로 중심선은 VWorld WGS84 좌표를 로컬 미터 좌표로 변환합니다.",
-      "정북일조는 원본 북측 필지 경계를 진남으로 평행 이동한 절대 기준선으로 계산해 측·후면 이격과 중복 적용하지 않습니다.",
+      "모든 대지 조각과 내부 빈 공간을 보존합니다. 층별 단일 연속 평면을 검사하며 다동 배치·합필 가능성·공식 경계·허가는 별도 확인이 필요합니다.",
+      "입력 대지 경계 전체와 도로 중심선을 공통 WGS84 원점의 로컬 미터 좌표로 변환합니다. 입력 출처와 공식 경계 승인은 별도 확인합니다.",
+      input.sunlight
+        ? "정북일조는 " +
+          input.sunlight.rule.id +
+          " 계약과 실제 층고 누적값을 사용하며, 확인된 공지 경계 이동만 반영합니다."
+        : "정북일조는 원본 북측 필지 경계를 진남으로 평행 이동한 참고 기준선으로 계산하며 적용 조건은 별도 확인이 필요합니다.",
       "법적 최대 외곽선은 도로측 추가 0m, 인접대지측 0.5m 검토 기본값을 사용하며 사용자 설계 여유거리와 분리합니다.",
       "대표안과 SketchUp·CAD export는 프로그램 면적과 실제 매스 면적이 허용오차 안에 있을 때만 가능합니다.",
       "기준 이미지와 검증되지 않은 외부 모델은 정확한 평면 좌표와 Geometry Hash가 연결될 때까지 시각 참고자료로만 사용합니다.",
@@ -617,7 +589,7 @@ export function buildPlanningGeometry(
   };
 
   let extent = 10;
-  [...groundShape, ...floors.flatMap((floor) => floor.shape)].forEach((point) => {
+  [...groundPolygons.flatMap(part => [part.outer, ...part.holes].flat()), ...floors.flatMap((floor) => floor.shape)].forEach((point) => {
     extent = Math.max(extent, Math.abs(point.x), Math.abs(point.z));
   });
   extent = Math.max(
@@ -635,7 +607,9 @@ export function buildPlanningGeometry(
       basementFloors,
     },
     groundShape,
+    groundPolygons,
     extent,
-    warnings: buildable.warnings,
+    warnings: [...buildable.warnings, ...model.floors.filter(floor => floor.generationStatus && floor.generationStatus !== "fitted")
+      .map(floor => `${floor.label}: ${floor.generationReason}`)],
   };
 }

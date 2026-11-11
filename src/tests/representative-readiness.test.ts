@@ -26,10 +26,16 @@ const passing = [
 
 describe("representative check readiness", () => {
   it("allows non-critical unknowns after all decision-grade checks pass", () => {
-    expect(assessRepresentativeCheckReadiness(passing)).toEqual({
-      ready: true,
-      blockers: [],
-    });
+    const readiness = assessRepresentativeCheckReadiness(passing);
+
+    expect(readiness.ready).toBe(true);
+    expect(readiness.blockers).toEqual([]);
+    expect(readiness.advisories).toEqual([
+      expect.objectContaining({ code: "floor-count", status: "unknown" }),
+    ]);
+    expect(readiness.blockingFailureCount).toBe(0);
+    expect(readiness.blockingVerificationCount).toBe(0);
+    expect(readiness.advisoryCount).toBe(1);
   });
 
   it("blocks reference-only or unknown core legal checks", () => {
@@ -42,6 +48,8 @@ describe("representative check readiness", () => {
     expect(readiness.blockers).toEqual([
       expect.objectContaining({ code: "far", status: "review" }),
     ]);
+    expect(readiness.blockingFailureCount).toBe(0);
+    expect(readiness.blockingVerificationCount).toBe(1);
   });
 
   it("blocks any failed planning check and missing core checks", () => {
@@ -59,5 +67,23 @@ describe("representative check readiness", () => {
         expect.objectContaining({ code: "height", status: "missing" }),
       ]),
     );
+    expect(readiness.blockingFailureCount).toBe(1);
+    expect(readiness.blockingVerificationCount).toBe(1);
+  });
+
+  it("keeps a failure when duplicate checks report weaker states later", () => {
+    const readiness = assessRepresentativeCheckReadiness([
+      ...passing,
+      check("parking", "fail"),
+      check("parking", "review"),
+    ]);
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "parking", status: "fail" }),
+      ]),
+    );
+    expect(readiness.blockingFailureCount).toBe(1);
   });
 });

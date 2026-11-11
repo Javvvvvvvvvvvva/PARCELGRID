@@ -1,12 +1,11 @@
 import type { PlanningGeometrySnapshot } from "@/lib/planning/planning-geometry";
-import {
-  planningRingToLocalMeters,
-  polygonSelfIntersects,
-} from "@/lib/planning/planning-geometry";
-import { polygonAreaSqm, type LocalPlanPoint } from "@/lib/planning/planning-massing";
-import { featureCollection, intersect, polygon } from "@turf/turf";
+import { planningRingToLocalMeters } from "@/lib/planning/planning-geometry";
+import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { localParcelPolygons, sourceParcelPolygons, parcelRings, type Wgs84ParcelPolygon, type LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import { localParcelArea, localParcelContainsPoint, localParcelIntersectionArea, validateLocalParcelTopology } from "@/lib/geo/parcel-topology-geometry";
+import { parcelProjectionOrigin, projectParcelPolygons } from "@/lib/geo/parcel-envelope";
 
-export const CADASTRAL_CONTEXT_VERSION = "cadastral-context-v2" as const;
+export const CADASTRAL_CONTEXT_VERSION = "cadastral-context-v3" as const;
 export const CADASTRAL_ROAD_CONTACT_TOLERANCE_M = 0.75;
 export const CADASTRAL_ROAD_NEAR_TOLERANCE_M = 2;
 /** 접도 경계는 도로 경계와 10도 이내로 평행해야 한다. */
@@ -23,6 +22,8 @@ export interface CadastralParcelFeature {
   jimokCode: string;
   lotAreaSqm: number;
   boundary: [number, number][];
+  /** Authoritative topology; legacy boundary is populated only for a single ring. */
+  polygons?: Wgs84ParcelPolygon[];
   distanceM: number;
   /** 생략된 과거·테스트 데이터는 연속지적도로 취급한다. */
   boundarySource?: RoadBoundarySource;
@@ -37,6 +38,8 @@ export interface LocalCadastralParcel {
   measuredAreaSqm: number;
   distanceM: number;
   polygon: LocalPlanPoint[];
+  /** All components and holes; legacy polygon is empty for complex topology. */
+  polygons?: LocalParcelPolygon[];
   /** 하위 호환용 데이터셋 표기. 실제 경계 역할은 boundarySource가 기준이다. */
   source: "VWorld LP_PA_CBND_BUBUN";
   boundarySource?: RoadBoundarySource;
@@ -54,6 +57,12 @@ export interface CadastralRoadFrontage {
   roadParcelPnu: string;
   roadParcelJibun: string;
   targetEdgeIndex: number;
+  /** Zero-based snapshot identities; ring 0 is outer, rings 1+ are holes. */
+  targetPolygonIndex?: number;
+  targetRingIndex?: number;
+  roadPolygonIndex?: number;
+  roadRingIndex?: number;
+  roadEdgeIndex?: number;
   frontage: [LocalPlanPoint, LocalPlanPoint];
   frontageLengthM: number;
   boundaryGapM: number;
@@ -104,6 +113,9 @@ export interface CadastralContextSnapshot {
   targetParcel: {
     pnu: string;
     polygon: LocalPlanPoint[];
+    /** Authoritative full region; polygon is empty for complex topology. */
+    polygons?: LocalParcelPolygon[];
+    measuredAreaSqm?: number;
   };
   adjacentParcels: LocalCadastralParcel[];
   roadParcels: LocalCadastralParcel[];
@@ -152,6 +164,81 @@ function openRing(points: LocalPlanPoint[]): LocalPlanPoint[] {
   return first.x === last.x && first.z === last.z ? points.slice(0, -1) : points;
 }
 
+export function cadastralTargetTopologyScope(target: CadastralContextSnapshot["targetParcel"]): "single-ring" | "all-components-and-holes" {
+  const polygons = localParcelPolygons(target);
+  return polygons.length === 1 && polygons[0].holes.length === 0 ? "single-ring" : "all-components-and-holes";
+}
+
+/** Complex target order binds component/ring/edge identities; legacy rings allow equivalent winding. */
+export function cadastralTargetPolygonsMatch(
+  first: LocalParcelPolygon[], second: LocalParcelPolygon[], checkDeadline: () => void,
+): boolean {
+  if (first.length !== second.length || first.length === 0) return false;
+  const simple = first.length === 1 && first[0].holes.length === 0 && second[0].holes.length === 0;
+  const pointMatches = (a: LocalPlanPoint, b: LocalPlanPoint) =>
+    Math.abs(a.x - b.x) <= 1e-6 && Math.abs(a.z - b.z) <= 1e-6;
+  const ringsMatch = (firstRing: LocalPlanPoint[], secondRing: LocalPlanPoint[]) => {
+    checkDeadline();
+    const a = openRing(firstRing), b = openRing(secondRing);
+    if (a.length !== b.length || a.length < 3) return false;
+    if (!simple) return a.every((point, index) => pointMatches(point, b[index]));
+    return b.some((point, start) => pointMatches(a[0], point) && [1, -1].some(direction =>
+      a.every((value, index) => pointMatches(value, b[(start + direction * index + b.length) % b.length]))));
+  };
+  return first.every((part, index) => ringsMatch(part.outer, second[index].outer)
+    && part.holes.length === second[index].holes.length
+    && part.holes.every((ring, ringIndex) => ringsMatch(ring, second[index].holes[ringIndex])));
+}
+
+export function validateCadastralTarget(
+  target: { polygon: LocalPlanPoint[]; polygons?: LocalParcelPolygon[] }, checkDeadline: () => void,
+): boolean {
+  const polygons = localParcelPolygons(target);
+  if (!validateLocalParcelTopology(polygons, checkDeadline)) return false;
+  if (target.polygons === undefined) return true;
+  if (polygons.length !== 1 || polygons[0].holes.length > 0) return target.polygon.length === 0;
+  return cadastralTargetPolygonsMatch(polygons, [{ outer: target.polygon, holes: [] }], checkDeadline);
+}
+
+export function cadastralFrontageIdentity(frontage: CadastralRoadFrontage) {
+  return {
+    roadParcelPnu: frontage.roadParcelPnu,
+    targetPolygonIndex: frontage.targetPolygonIndex,
+    targetRingIndex: frontage.targetRingIndex,
+    targetEdgeIndex: frontage.targetEdgeIndex,
+    roadPolygonIndex: frontage.roadPolygonIndex,
+    roadRingIndex: frontage.roadRingIndex,
+    roadEdgeIndex: frontage.roadEdgeIndex,
+  };
+}
+
+export function validateCadastralFrontageIdentities(snapshot: CadastralContextSnapshot, checkDeadline: () => void): boolean {
+  const targets = localParcelPolygons(snapshot.targetParcel);
+  return snapshot.frontages.every(frontage => {
+    checkDeadline();
+    const road = snapshot.roadParcels.find(parcel => parcel.pnu === frontage.roadParcelPnu);
+    if (!road) return false;
+    const roads = localParcelPolygons(road);
+    const indexes = [frontage.targetPolygonIndex, frontage.targetRingIndex, frontage.roadPolygonIndex, frontage.roadRingIndex, frontage.roadEdgeIndex];
+    // Old single-ring snapshots did not carry component identities.
+    if (indexes.every(index => index === undefined)) return targets.length === 1 && targets[0].holes.length === 0;
+    if (![...indexes, frontage.targetEdgeIndex].every(index => Number.isInteger(index) && index! >= 0)) return false;
+    const target = targets[frontage.targetPolygonIndex!], roadPart = roads[frontage.roadPolygonIndex!];
+    if (!target || !roadPart) return false;
+    const targetRing = [target.outer, ...target.holes][frontage.targetRingIndex!];
+    const roadRing = [roadPart.outer, ...roadPart.holes][frontage.roadRingIndex!];
+    if (!targetRing || !roadRing) return false;
+    const ring = openRing(targetRing);
+    if (frontage.targetEdgeIndex >= ring.length || frontage.roadEdgeIndex! >= openRing(roadRing).length) return false;
+    const candidate = findFrontageCandidate(targetRing, roadRing, checkDeadline);
+    if (!candidate || candidate.targetEdgeIndex !== frontage.targetEdgeIndex || candidate.roadEdgeIndex !== frontage.roadEdgeIndex) return false;
+    return frontage.frontage.length === 2 && frontage.frontage.every((point, index) => {
+      const expected = ring[(frontage.targetEdgeIndex + index) % ring.length];
+      return Math.abs(point.x - expected.x) <= 1e-6 && Math.abs(point.z - expected.z) <= 1e-6;
+    });
+  });
+}
+
 function canonicalPoint(point: LocalPlanPoint): [number, number] {
   return [round(point.x), round(point.z)];
 }
@@ -184,16 +271,6 @@ function normalize(vector: LocalPlanPoint): LocalPlanPoint | null {
   const length = Math.hypot(vector.x, vector.z);
   if (length < 1e-9) return null;
   return { x: vector.x / length, z: vector.z / length };
-}
-
-function polygonCentroid(points: LocalPlanPoint[]): LocalPlanPoint {
-  const ring = openRing(points);
-  if (ring.length === 0) return { x: 0, z: 0 };
-  const sum = ring.reduce(
-    (acc, point) => ({ x: acc.x + point.x, z: acc.z + point.z }),
-    { x: 0, z: 0 }
-  );
-  return { x: sum.x / ring.length, z: sum.z / ring.length };
 }
 
 function pointToSegmentDistance(
@@ -277,73 +354,38 @@ function closestSegmentPoints(
 
 function polygonClearance(
   firstPolygon: LocalPlanPoint[],
-  secondPolygon: LocalPlanPoint[]
+  secondPolygons: LocalParcelPolygon[],
+  checkDeadline: () => void,
 ): { distanceM: number; first: LocalPlanPoint; second: LocalPlanPoint } | null {
   const first = openRing(firstPolygon);
-  const second = openRing(secondPolygon);
-  if (first.length < 3 || second.length < 3) return null;
+  if (first.length < 3) return null;
 
   let best: { distanceM: number; first: LocalPlanPoint; second: LocalPlanPoint } | null =
     null;
-  for (let firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
+  let comparisons = 0;
+  for (const secondRing of parcelRings(secondPolygons)) {
+    const second = openRing(secondRing);
+    for (let firstIndex = 0; firstIndex < first.length; firstIndex += 1) {
     const a = first[firstIndex];
     const b = first[(firstIndex + 1) % first.length];
     for (let secondIndex = 0; secondIndex < second.length; secondIndex += 1) {
+      if (++comparisons % 1024 === 0) checkDeadline();
       const c = second[secondIndex];
       const d = second[(secondIndex + 1) % second.length];
       const candidate = closestSegmentPoints(a, b, c, d);
       if (!best || candidate.distanceM < best.distanceM) best = candidate;
       if (candidate.distanceM <= 1e-9) return candidate;
     }
+    }
   }
 
-  if (pointInPolygon(first[0], second)) {
+  if (localParcelContainsPoint(secondPolygons, first[0])) {
     return { distanceM: 0, first: first[0], second: first[0] };
   }
-  if (pointInPolygon(second[0], first)) {
-    return { distanceM: 0, first: second[0], second: second[0] };
+  for (const part of secondPolygons) {
+    if (pointInPolygon(part.outer[0], first)) return { distanceM: 0, first: part.outer[0], second: part.outer[0] };
   }
   return best;
-}
-
-function closedCoordinates(points: LocalPlanPoint[]): [number, number][] {
-  const ring = openRing(points).map((point) => [point.x, point.z] as [number, number]);
-  return ring.length > 0 ? [...ring, ring[0]] : [];
-}
-
-function coordinateRingArea(points: number[][]): number {
-  if (points.length < 4) return 0;
-  let area = 0;
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    area += current[0] * next[1] - next[0] * current[1];
-  }
-  return Math.abs(area) / 2;
-}
-
-function polygonIntersectionAreaSqm(
-  first: LocalPlanPoint[],
-  second: LocalPlanPoint[]
-): number {
-  const firstRing = closedCoordinates(first);
-  const secondRing = closedCoordinates(second);
-  if (firstRing.length < 4 || secondRing.length < 4) return 0;
-  try {
-    const result = intersect(
-      featureCollection([polygon([firstRing]), polygon([secondRing])])
-    );
-    if (!result) return 0;
-    if (result.geometry.type === "Polygon") {
-      return coordinateRingArea(result.geometry.coordinates[0]);
-    }
-    return result.geometry.coordinates.reduce(
-      (sum, coordinates) => sum + coordinateRingArea(coordinates[0]),
-      0
-    );
-  } catch {
-    return 0;
-  }
 }
 
 function pointInPolygon(point: LocalPlanPoint, polygon: LocalPlanPoint[]): boolean {
@@ -391,9 +433,10 @@ function rayPolygonIntersections(
 function roadIntervalAlongRay(
   origin: LocalPlanPoint,
   direction: LocalPlanPoint,
-  polygon: LocalPlanPoint[]
+  polygons: LocalParcelPolygon[]
 ): { gapM: number; widthM: number; from: LocalPlanPoint; to: LocalPlanPoint } | null {
-  const hits = rayPolygonIntersections(origin, direction, polygon);
+  const allHits = parcelRings(polygons).flatMap(ring => rayPolygonIntersections(origin, direction, ring)).sort((a, b) => a - b);
+  const hits = allHits.filter((value, index) => index === 0 || Math.abs(value - allHits[index - 1]) > 1e-5);
   if (hits.length === 0) return null;
   const bounds = [0, ...hits];
   for (let index = 0; index < bounds.length - 1; index += 1) {
@@ -401,7 +444,7 @@ function roadIntervalAlongRay(
     const end = bounds[index + 1];
     if (end - start < 1e-5) continue;
     const midpoint = add(origin, multiply(direction, (start + end) / 2));
-    if (!pointInPolygon(midpoint, polygon)) continue;
+    if (!localParcelContainsPoint(polygons, midpoint, true)) continue;
     const gapM = start;
     const widthM = end - start;
     return {
@@ -416,6 +459,7 @@ function roadIntervalAlongRay(
 
 interface FrontageCandidate {
   targetEdgeIndex: number;
+  roadEdgeIndex: number;
   targetStart: LocalPlanPoint;
   targetEnd: LocalPlanPoint;
   gapM: number;
@@ -426,11 +470,13 @@ interface FrontageCandidate {
 
 function findFrontageCandidate(
   targetPolygon: LocalPlanPoint[],
-  roadPolygon: LocalPlanPoint[]
+  roadPolygon: LocalPlanPoint[],
+  checkDeadline: () => void,
 ): FrontageCandidate | null {
   const target = openRing(targetPolygon);
   const road = openRing(roadPolygon);
   let best: FrontageCandidate | null = null;
+  let comparisons = 0;
 
   for (let targetIndex = 0; targetIndex < target.length; targetIndex += 1) {
     const targetStart = target[targetIndex];
@@ -441,6 +487,7 @@ function findFrontageCandidate(
     if (!targetUnit || targetLength < 0.5) continue;
 
     for (let roadIndex = 0; roadIndex < road.length; roadIndex += 1) {
+      if (++comparisons % 1024 === 0) checkDeadline();
       const roadStart = road[roadIndex];
       const roadEnd = road[(roadIndex + 1) % road.length];
       const roadVector = subtract(roadEnd, roadStart);
@@ -464,6 +511,7 @@ function findFrontageCandidate(
       if (!best || score < best.score) {
         best = {
           targetEdgeIndex: targetIndex,
+          roadEdgeIndex: roadIndex,
           targetStart,
           targetEnd,
           gapM,
@@ -478,10 +526,27 @@ function findFrontageCandidate(
 }
 
 function buildRoadFrontage(
-  targetPolygon: LocalPlanPoint[],
-  roadParcel: LocalCadastralParcel
+  targetPolygons: LocalParcelPolygon[],
+  roadParcel: LocalCadastralParcel,
+  checkDeadline: () => void,
 ): CadastralRoadFrontage | null {
-  const candidate = findFrontageCandidate(targetPolygon, roadParcel.polygon);
+  const polygons = localParcelPolygons(roadParcel);
+  let candidate: (FrontageCandidate & {
+    targetPolygonIndex: number; targetRingIndex: number; roadPolygonIndex: number; roadRingIndex: number;
+  }) | null = null;
+  for (const [targetPolygonIndex, target] of targetPolygons.entries()) {
+    for (const [targetRingIndex, targetRing] of [target.outer, ...target.holes].entries()) {
+      for (const [roadPolygonIndex, road] of polygons.entries()) {
+        for (const [roadRingIndex, roadRing] of [road.outer, ...road.holes].entries()) {
+          checkDeadline();
+          const found = findFrontageCandidate(targetRing, roadRing, checkDeadline);
+          if (found && (!candidate || found.score < candidate.score)) {
+            candidate = { ...found, targetPolygonIndex, targetRingIndex, roadPolygonIndex, roadRingIndex };
+          }
+        }
+      }
+    }
+  }
   if (!candidate) return null;
 
   const edgeVector = subtract(candidate.targetEnd, candidate.targetStart);
@@ -489,19 +554,18 @@ function buildRoadFrontage(
   if (!edgeUnit) return null;
   const edgeLength = Math.hypot(edgeVector.x, edgeVector.z);
   const midpoint = add(candidate.targetStart, multiply(edgeVector, 0.5));
-  const roadCentroid = polygonCentroid(roadParcel.polygon);
   const leftNormal = { x: -edgeUnit.z, z: edgeUnit.x };
-  const normal = dot(subtract(roadCentroid, midpoint), leftNormal) >= 0
-    ? leftNormal
-    : multiply(leftNormal, -1);
+  const normal = localParcelContainsPoint(targetPolygons, add(midpoint, multiply(leftNormal, 0.001)))
+    ? multiply(leftNormal, -1) : leftNormal;
 
   const ratios = [0.15, 0.3, 0.5, 0.7, 0.85];
   const widthSamples: CadastralRoadWidthSample[] = [];
   const mayVerifyWidth = roadParcel.boundarySource === "continuous-cadastral";
   const plannedGeometryWidths: number[] = [];
   for (const positionRatio of ratios) {
+    checkDeadline();
     const sampleOrigin = add(candidate.targetStart, multiply(edgeVector, positionRatio));
-    const interval = roadIntervalAlongRay(sampleOrigin, normal, roadParcel.polygon);
+    const interval = roadIntervalAlongRay(sampleOrigin, normal, polygons);
     if (!interval) continue;
     if (interval.gapM > CADASTRAL_ROAD_NEAR_TOLERANCE_M || interval.widthM < 0.5) continue;
     if (mayVerifyWidth) {
@@ -541,6 +605,11 @@ function buildRoadFrontage(
     roadParcelPnu: roadParcel.pnu,
     roadParcelJibun: roadParcel.jibun,
     targetEdgeIndex: candidate.targetEdgeIndex,
+    targetPolygonIndex: candidate.targetPolygonIndex,
+    targetRingIndex: candidate.targetRingIndex,
+    roadPolygonIndex: candidate.roadPolygonIndex,
+    roadRingIndex: candidate.roadRingIndex,
+    roadEdgeIndex: candidate.roadEdgeIndex,
     frontage: [candidate.targetStart, candidate.targetEnd],
     frontageLengthM: round(Math.min(edgeLength, candidate.overlapM), 3),
     boundaryGapM: round(avgGap, 3),
@@ -572,8 +641,10 @@ function buildRoadFrontage(
 
 function buildRoadClearance(
   planning: PlanningGeometrySnapshot,
-  roadParcel: LocalCadastralParcel
+  roadParcel: LocalCadastralParcel,
+  checkDeadline: () => void,
 ): RoadClearanceAssessment {
+  const polygons = localParcelPolygons(roadParcel);
   let minimumClearanceM = Number.POSITIVE_INFINITY;
   let intrusionAreaSqm = 0;
   let floorLevel: number | null = null;
@@ -581,12 +652,10 @@ function buildRoadClearance(
   let roadPoint: LocalPlanPoint | null = null;
 
   for (const floor of planning.building.floors) {
+    checkDeadline();
     if (floor.shape.length < 3) continue;
-    const clearance = polygonClearance(floor.shape, roadParcel.polygon);
-    const floorIntrusionAreaSqm = polygonIntersectionAreaSqm(
-      floor.shape,
-      roadParcel.polygon
-    );
+    const clearance = polygonClearance(floor.shape, polygons, checkDeadline);
+    const floorIntrusionAreaSqm = localParcelIntersectionArea([{ outer: floor.shape, holes: [] }], polygons);
     if (floorIntrusionAreaSqm > intrusionAreaSqm) {
       intrusionAreaSqm = floorIntrusionAreaSqm;
       floorLevel = floor.level;
@@ -617,11 +686,15 @@ function buildRoadClearance(
 
 function toLocalParcel(
   feature: CadastralParcelFeature,
-  origin: [number, number]
+  origin: [number, number],
+  checkDeadline: () => void,
 ): LocalCadastralParcel | null {
-  const polygon = openRing(planningRingToLocalMeters(feature.boundary, origin));
-  if (polygon.length < 3 || polygonSelfIntersects(polygon)) return null;
-  const measuredAreaSqm = polygonAreaSqm(polygon);
+  const polygons = sourceParcelPolygons(feature).map(part => ({
+    outer: openRing(planningRingToLocalMeters(part.outer, origin)),
+    holes: part.holes.map(ring => openRing(planningRingToLocalMeters(ring, origin))),
+  }));
+  if (!validateLocalParcelTopology(polygons, checkDeadline)) return null;
+  const measuredAreaSqm = localParcelArea(polygons);
   if (!Number.isFinite(measuredAreaSqm) || measuredAreaSqm <= 0) return null;
   return {
     pnu: feature.pnu,
@@ -631,7 +704,8 @@ function toLocalParcel(
     officialAreaSqm: feature.lotAreaSqm,
     measuredAreaSqm,
     distanceM: feature.distanceM,
-    polygon,
+    polygon: polygons.length === 1 && polygons[0].holes.length === 0 ? polygons[0].outer : [],
+    polygons,
     source: "VWorld LP_PA_CBND_BUBUN",
     boundarySource: feature.boundarySource ?? "continuous-cadastral",
   };
@@ -640,22 +714,66 @@ function toLocalParcel(
 export function buildCadastralContext(input: {
   planning: PlanningGeometrySnapshot;
   targetPnu: string;
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   parcels?: CadastralParcelFeature[] | null;
   generatedAt?: string;
 }): CadastralContextSnapshot {
   const issues: CadastralContextIssue[] = [];
+  const deadline = performance.now() + 2_000;
+  const checkDeadline = () => {
+    if (performance.now() >= deadline) throw new DOMException("Cadastral computation deadline exceeded", "TimeoutError");
+  };
   const origin = input.planning.coordinateSystem.originLngLat;
   const sourceParcels = input.parcels ?? [];
   const localParcels: LocalCadastralParcel[] = [];
+  let targetPolygons: LocalParcelPolygon[] = [];
+  try {
+    checkDeadline();
+    if (input.targetBoundaryPolygons !== undefined || input.targetBoundary !== undefined) {
+      const source = sourceParcelPolygons({ boundary: input.targetBoundary ?? [], polygons: input.targetBoundaryPolygons });
+      parcelProjectionOrigin(source);
+      targetPolygons = projectParcelPolygons(source, origin);
+    } else {
+      const inherited = localParcelPolygons(input.planning.parcel);
+      if (!validateLocalParcelTopology(inherited, checkDeadline)) throw new Error("Invalid inherited target topology");
+      targetPolygons = structuredClone(inherited);
+    }
+    if (!validateLocalParcelTopology(targetPolygons, checkDeadline)) throw new Error("Invalid target topology");
+    checkDeadline();
+  } catch {
+    targetPolygons = [];
+    issues.push({ code: "cadastral-invalid-target", severity: "fail", parcelPnu: input.targetPnu,
+      message: "대상 필지의 전체 경계 검사를 완료하지 못했습니다. 단일 외곽선으로 대체하지 않습니다." });
+  }
+  if (targetPolygons.length && (input.targetBoundaryPolygons !== undefined || input.targetBoundary !== undefined)) {
+    try {
+      if (!validateCadastralTarget(input.planning.parcel, checkDeadline)
+        || !cadastralTargetPolygonsMatch(targetPolygons, localParcelPolygons(input.planning.parcel), checkDeadline)) {
+        throw new Error("Target source differs from planning");
+      }
+      checkDeadline();
+    } catch {
+      issues.push({ code: "cadastral-target-source-mismatch", severity: "fail", parcelPnu: input.targetPnu,
+        message: "대상 필지 원본의 전체 경계 또는 식별 순서가 계획 snapshot과 일치하지 않습니다." });
+    }
+  }
 
   for (const feature of sourceParcels) {
     if (!feature.pnu || feature.pnu === input.targetPnu) continue;
-    const parcel = toLocalParcel(feature, origin);
+    let parcel: LocalCadastralParcel | null = null;
+    try { checkDeadline(); parcel = toLocalParcel(feature, origin, checkDeadline); }
+    catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        issues.push({ code: "cadastral-time-limit", severity: "fail", message: "전체 지적 경계 검사 시간 한도를 초과했습니다. 미검사 필지를 통과로 처리하지 않습니다." });
+        break;
+      }
+    }
     if (parcel) localParcels.push(parcel);
     else {
       issues.push({
         code: "cadastral-invalid-parcel",
-        severity: "review",
+        severity: "fail",
         parcelPnu: feature.pnu,
         message: `${feature.jibun || feature.pnu} 지적 폴리곤이 유효하지 않아 context에서 제외했습니다.`,
       });
@@ -664,17 +782,27 @@ export function buildCadastralContext(input: {
 
   const roadParcels = localParcels.filter((parcel) => parcel.jimok.trim() === "도로");
   const adjacentParcels = localParcels.filter((parcel) => parcel.jimok.trim() !== "도로");
-  const frontages = roadParcels
-    .map((parcel) => buildRoadFrontage(input.planning.parcel.polygon, parcel))
-    .filter((frontage): frontage is CadastralRoadFrontage => frontage !== null)
-    .sort((a, b) => {
+  const frontages: CadastralRoadFrontage[] = [];
+  const roadClearances: RoadClearanceAssessment[] = [];
+  for (const parcel of roadParcels) {
+    try {
+      checkDeadline();
+      const frontage = targetPolygons.length ? buildRoadFrontage(targetPolygons, parcel, checkDeadline) : null;
+      const clearance = buildRoadClearance(input.planning, parcel, checkDeadline);
+      checkDeadline();
+      if (frontage) frontages.push(frontage);
+      roadClearances.push(clearance);
+    } catch {
+      issues.push({ code: "cadastral-topology-calculation-failed", severity: "fail", parcelPnu: parcel.pnu,
+        message: `${parcel.jibun || parcel.pnu} 전체 경계의 폭·충돌 계산을 완료하지 못했습니다. 중첩 없음으로 판정하지 않습니다.` });
+    }
+  }
+  frontages.sort((a, b) => {
       const aVerified = a.status === "verified-cadastral-width" ? 0 : 1;
       const bVerified = b.status === "verified-cadastral-width" ? 0 : 1;
       return aVerified - bVerified || a.boundaryGapM - b.boundaryGapM;
     });
-  const roadClearances = roadParcels
-    .map((parcel) => buildRoadClearance(input.planning, parcel))
-    .sort((a, b) => a.minimumClearanceM - b.minimumClearanceM);
+  roadClearances.sort((a, b) => a.minimumClearanceM - b.minimumClearanceM);
 
   if (sourceParcels.length === 0) {
     issues.push({
@@ -728,19 +856,21 @@ export function buildCadastralContext(input: {
     version: CADASTRAL_CONTEXT_VERSION,
     projectId: input.planning.projectId,
     targetPnu: input.targetPnu,
+    targetPolygons: targetPolygons.map(part => ({ outer: part.outer.map(canonicalPoint), holes: part.holes.map(ring => ring.map(canonicalPoint)) })),
     origin: origin.map((value) => round(value, 8)),
     adjacentParcels: adjacentParcels.map((parcel) => ({
       pnu: parcel.pnu,
       jimok: parcel.jimok,
-      polygon: parcel.polygon.map(canonicalPoint),
+      boundarySource: parcel.boundarySource,
+      polygons: localParcelPolygons(parcel).map(part => ({ outer: part.outer.map(canonicalPoint), holes: part.holes.map(ring => ring.map(canonicalPoint)) })),
     })),
     roadParcels: roadParcels.map((parcel) => ({
       pnu: parcel.pnu,
-      polygon: parcel.polygon.map(canonicalPoint),
+      boundarySource: parcel.boundarySource,
+      polygons: localParcelPolygons(parcel).map(part => ({ outer: part.outer.map(canonicalPoint), holes: part.holes.map(ring => ring.map(canonicalPoint)) })),
     })),
     frontages: frontages.map((frontage) => ({
-      roadParcelPnu: frontage.roadParcelPnu,
-      targetEdgeIndex: frontage.targetEdgeIndex,
+      ...cadastralFrontageIdentity(frontage),
       frontage: frontage.frontage.map(canonicalPoint),
       widthSamples: frontage.widthSamples.map((sample) => ({
         positionRatio: sample.positionRatio,
@@ -758,6 +888,7 @@ export function buildCadastralContext(input: {
       minimumClearanceM: clearance.minimumClearanceM,
       intrusionAreaSqm: clearance.intrusionAreaSqm,
     })),
+    issues: issues.map(issue => ({ code: issue.code, severity: issue.severity, parcelPnu: issue.parcelPnu })),
   };
 
   return {
@@ -768,7 +899,9 @@ export function buildCadastralContext(input: {
     coordinateSystem: input.planning.coordinateSystem,
     targetParcel: {
       pnu: input.targetPnu,
-      polygon: input.planning.parcel.polygon,
+      polygon: targetPolygons.length === 1 && targetPolygons[0].holes.length === 0 ? targetPolygons[0].outer : [],
+      polygons: targetPolygons,
+      measuredAreaSqm: localParcelArea(targetPolygons),
     },
     adjacentParcels,
     roadParcels,
@@ -809,3 +942,5 @@ export function buildCadastralContext(input: {
     ],
   };
 }
+
+export const buildCadastralContextSnapshot = buildCadastralContext;

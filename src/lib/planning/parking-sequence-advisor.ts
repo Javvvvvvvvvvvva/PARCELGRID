@@ -1,5 +1,6 @@
 import type { LngLat } from "@/lib/finance/buildable-area";
-import { analyzeFrontage } from "@/lib/geo/road-frontage";
+import { localParcelPolygons, type Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { resolvePlanningParkingFrontage } from "./planning-parking-geometry";
 import {
   calculateParkingLayout,
   type ParkingLayoutResult,
@@ -57,6 +58,7 @@ export interface ParkingSequenceAdvisorInput {
   calculation: PlanningScenarioCalculation;
   geometry: PlanningGeometrySnapshot;
   boundary?: LngLat[];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   roads?: Array<{ name: string | null; points: [number, number][] }>;
 }
 
@@ -66,15 +68,6 @@ export interface ParkingAlternativePatch {
   patch: Partial<Pick<PlanningScenario, "floorPrograms" | "parking">>;
   removedGroundFloorUnits: number;
   removedGroundFloorAreaSqm: number;
-}
-
-function closedBoundary(boundary: LngLat[]): LngLat[] {
-  const first = boundary[0];
-  const last = boundary[boundary.length - 1];
-  if (!first || !last) return boundary;
-  return first[0] === last[0] && first[1] === last[1]
-    ? boundary
-    : [...boundary, first];
 }
 
 function firstFloorProgram(scenario: PlanningScenario): FloorProgram | null {
@@ -137,55 +130,6 @@ function parkingSettings(
   };
 }
 
-function resolveFrontage(
-  geometry: PlanningGeometrySnapshot,
-  boundary?: LngLat[],
-  roads?: Array<{ name: string | null; points: [number, number][] }>
-): {
-  frontEdge: [
-    PlanningGeometrySnapshot["parcel"]["polygon"][number],
-    PlanningGeometrySnapshot["parcel"]["polygon"][number],
-  ] | null;
-  road: ParkingSequenceRoadStatus;
-} {
-  const frontage =
-    boundary && boundary.length >= 3 && roads?.length
-      ? analyzeFrontage(closedBoundary(boundary), roads)
-      : null;
-  const polygon = geometry.parcel.polygon;
-  if (
-    !frontage ||
-    frontage.frontIndex < 0 ||
-    frontage.frontIndex >= polygon.length
-  ) {
-    return {
-      frontEdge: null,
-      road: {
-        status: "frontage-unknown",
-        roadName: null,
-        source: "none",
-        verifiedWidthM: null,
-        message:
-          "도로 접면 방향을 확인하지 못했습니다. 임의의 6m 도로를 가정하지 않으며 주차 진입은 수동 검토가 필요합니다.",
-      },
-    };
-  }
-  return {
-    frontEdge: [
-      polygon[frontage.frontIndex],
-      polygon[(frontage.frontIndex + 1) % polygon.length],
-    ],
-    road: {
-      status: "frontage-known",
-      roadName: frontage.roadName,
-      source: "VWorld road centerline",
-      verifiedWidthM: null,
-      message:
-        "도로 중심선으로 접면 방향만 확인했습니다. 도로 폭·경계는 지적 도로 자료로 별도 검증해야 합니다.",
-    },
-  };
-}
-
 function optionMessage(
   label: string,
   layout: ParkingLayoutResult | null,
@@ -204,20 +148,30 @@ export function buildParkingSequenceRecommendation(
   input: ParkingSequenceAdvisorInput
 ): ParkingSequenceRecommendation {
   const { scenario, calculation, geometry } = input;
-  const requiredCars = Math.max(0, Math.ceil(calculation.parking.requiredCars));
-  const parcelShape = geometry.parcel.polygon;
-  const firstMass = geometry.building.aboveGroundFloors.find(
+  const requiredCarsValid = Number.isFinite(calculation.parking.requiredCars) && calculation.parking.requiredCars >= 0 && calculation.parking.requiredCars <= 1000;
+  const requiredCars = requiredCarsValid ? Math.ceil(calculation.parking.requiredCars) : 0;
+  const frontage = resolvePlanningParkingFrontage({ ...input, planning: geometry });
+  const inputsValid = frontage.sourceMatched && requiredCarsValid;
+  const parcelShape = inputsValid ? geometry.parcel.polygon : [];
+  const firstMass = inputsValid ? geometry.building.aboveGroundFloors.find(
     (floor) => floor.level === 1
-  );
+  ) : undefined;
   const firstProgram = firstFloorProgram(scenario);
-  const { frontEdge, road } = resolveFrontage(
-    geometry,
-    input.boundary,
-    input.roads
-  );
+  const parcelPolygons = inputsValid ? localParcelPolygons(geometry.parcel) : [];
+  const { frontEdge, candidates: frontages } = frontage;
+  const road: ParkingSequenceRoadStatus = {
+    status: frontage.sourceMatched && frontEdge && requiredCarsValid ? "frontage-known" : "frontage-unknown",
+    roadName: frontage.roadName, source: frontEdge ? "VWorld road centerline" : "none", verifiedWidthM: null,
+    message: !frontage.sourceMatched || !requiredCarsValid
+      ? "전체 대지·도로·계획안 원자료와 형상 또는 요구 주차대수를 확인하지 못해 대안 적용을 보류했습니다."
+      : frontEdge ? "전체 대지의 도로 접근 후보를 반영했습니다. 도로 폭·진입 허가·전문가 승인은 별도 확인이 필요합니다."
+        : "도로 접면 방향을 확인하지 못했습니다. 임의의 6m 도로를 가정하지 않으며 주차 진입은 수동 검토가 필요합니다.",
+  };
   const currentLayout = calculateParkingLayout({
     strategy: scenario.parking.strategy,
     parcelShape,
+    parcelPolygons,
+    frontages,
     buildingShape: firstMass?.shape ?? [],
     pilotiShape: firstMass?.shape ?? [],
     pilotiEnabled: hasPilotiProgram(scenario),
@@ -228,6 +182,8 @@ export function buildParkingSequenceRecommendation(
   const surfaceLayout = calculateParkingLayout({
     strategy: "surface",
     parcelShape,
+    parcelPolygons,
+    frontages,
     buildingShape: firstMass?.shape ?? [],
     requiredCars,
     frontEdge,
@@ -238,6 +194,8 @@ export function buildParkingSequenceRecommendation(
     ? calculateParkingLayout({
         strategy: "piloti",
         parcelShape,
+        parcelPolygons,
+        frontages,
         pilotiShape: firstMass?.shape ?? [],
         pilotiEnabled: true,
         requiredCars,
@@ -250,7 +208,11 @@ export function buildParkingSequenceRecommendation(
   let kind: ParkingSequenceRecommendationKind;
   let title: string;
   let message: string;
-  if (road.status === "frontage-unknown") {
+  if (!inputsValid) {
+    kind = "manual-review";
+    title = "주차 검토 입력을 먼저 확인하세요";
+    message = "계획안과 일치하고 전체 대지 안에 포함된 유효한 1층 형상과 요구 주차대수가 필요합니다. 주차 대안 계산과 적용을 보류했습니다.";
+  } else if (road.status === "frontage-unknown") {
     kind = "manual-review";
     title = "도로 접면을 먼저 확인하세요";
     message =
@@ -295,9 +257,9 @@ export function buildParkingSequenceRecommendation(
     currentLayout,
     surface: {
       strategy: "surface",
-      available: true,
+      available: inputsValid,
       layout: surfaceLayout,
-      message: optionMessage("지상주차", surfaceLayout),
+      message: optionMessage("지상주차", surfaceLayout, inputsValid),
     },
     piloti: {
       strategy: "piloti",

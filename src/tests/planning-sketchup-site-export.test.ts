@@ -102,6 +102,7 @@ describe("SketchUp integrated site export", () => {
         jibun: "소로3류",
         jimok: "도로",
         jimokCode: "UPIS-UQ151",
+        boundarySource: "upis-planned-road" as const,
         lotAreaSqm: 187.5,
         boundary: roadBoundary,
         distanceM: 13,
@@ -133,7 +134,8 @@ describe("SketchUp integrated site export", () => {
       sourceParcels,
     });
 
-    expect(cadastral.summary.primaryWidthAvgM).toBeCloseTo(6.25, 1);
+    expect(cadastral.summary.primaryWidthAvgM).toBeNull();
+    expect(cadastral.summary.primaryPlannedWidthAvgM).toBeCloseTo(6.25, 1);
     expect(result.filename).toMatch(/SITE-/);
     expect(result.modelDaeFilename).toMatch(/-model\.dae$/);
     expect(result.siteDaeFilename).toMatch(/-site-context\.dae$/);

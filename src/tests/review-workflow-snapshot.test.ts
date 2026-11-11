@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildExpertReviewSummary,
+  validateExpertReviewTransition,
   validateExpertReview,
   type ExpertReviewMap,
   type ExpertReviewRecord,
@@ -11,8 +12,17 @@ const DISCIPLINES: HandoffDiscipline[] = [
   "architect",
   "developer",
   "finance-tax",
+  "insurance-risk",
   "sales-marketing",
 ];
+
+const REVIEWER_ROLE = {
+  architect: "architect",
+  developer: "developer",
+  "finance-tax": "tax-advisor",
+  "insurance-risk": "insurance-underwriter",
+  "sales-marketing": "sales-marketing",
+} as const;
 
 function review(
   discipline: HandoffDiscipline,
@@ -23,11 +33,39 @@ function review(
     status: "approved",
     reviewer: "검토자",
     organization: "검토기관",
+    reviewerRole: REVIEWER_ROLE[discipline],
+    requestedBy: "프로젝트 담당자",
+    requestedAt: "2026-08-20",
     evidenceRef: `${discipline}-memo.pdf`,
     notes: "현재 저장본 기준 승인",
     reviewedAt: "2026-08-21",
     updatedAt: "2026-08-21T10:00:00.000Z",
     snapshotKey,
+    attestations: {
+      snapshotReviewed: true,
+      evidenceReviewed: true,
+      preliminaryLimitAcknowledged: true,
+    },
+    history: [
+      {
+        status: "requested",
+        actor: "프로젝트 담당자",
+        occurredAt: "2026-08-20T09:00:00.000Z",
+        snapshotKey,
+      },
+      {
+        status: "in-review",
+        actor: "검토자",
+        occurredAt: "2026-08-21T09:00:00.000Z",
+        snapshotKey,
+      },
+      {
+        status: "approved",
+        actor: "검토자",
+        occurredAt: "2026-08-21T10:00:00.000Z",
+        snapshotKey,
+      },
+    ],
   };
 }
 
@@ -48,7 +86,7 @@ describe("expert review snapshot binding", () => {
     );
 
     expect(summary.ready).toBe(true);
-    expect(summary.approvedCount).toBe(4);
+    expect(summary.approvedCount).toBe(5);
     expect(summary.staleDisciplines).toEqual([]);
   });
 
@@ -77,5 +115,50 @@ describe("expert review snapshot binding", () => {
 
     expect(validation.valid).toBe(false);
     expect(validation.stale).toBe(true);
+  });
+
+  it("rejects a reviewer role that cannot approve the discipline", () => {
+    const validation = validateExpertReview({
+      ...review("insurance-risk"),
+      reviewerRole: "architect",
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors.join(" ")).toContain("보험·리스크");
+  });
+
+  it("requires all approval attestations", () => {
+    const validation = validateExpertReview({
+      ...review("finance-tax"),
+      attestations: {
+        snapshotReviewed: true,
+        evidenceReviewed: false,
+        preliminaryLimitAcknowledged: true,
+      },
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors.join(" ")).toContain("근거자료");
+  });
+
+  it("enforces request, review, then decision transitions", () => {
+    expect(
+      validateExpertReviewTransition("not-requested", "approved").valid
+    ).toBe(false);
+    expect(
+      validateExpertReviewTransition("not-requested", "requested").valid
+    ).toBe(true);
+    expect(
+      validateExpertReviewTransition("requested", "in-review").valid
+    ).toBe(true);
+    expect(
+      validateExpertReviewTransition("in-review", "approved").valid
+    ).toBe(true);
+    expect(
+      validateExpertReviewTransition("changes-requested", "approved").valid
+    ).toBe(false);
+    expect(
+      validateExpertReviewTransition("changes-requested", "requested").valid
+    ).toBe(true);
   });
 });

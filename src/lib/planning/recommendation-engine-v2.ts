@@ -3,18 +3,15 @@ import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
-import {
-  analyzeFrontage,
-  edgeSetbacksFromFrontage,
-} from "@/lib/geo/road-frontage";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { localParcelArea, projectParcelPolygons } from "@/lib/geo/parcel-envelope";
+import { resolvePlanningParcel } from "./planning-parcel";
 import {
   calculateParkingLayout,
+  type ParkingLayoutInput,
   type ParkingLayoutResult,
 } from "@/lib/planning/parking-layout";
-import {
-  polygonAreaSqm,
-  type LocalPlanPoint,
-} from "@/lib/planning/planning-massing";
 import {
   applyPlanningScenarioCalculation,
   calculatePlanningScenario,
@@ -30,6 +27,8 @@ import {
   createFloorProgram,
   createFloorZone,
 } from "@/lib/planning/scenario-utils";
+import { buildDwellingProgram, DEFAULT_DWELLING_PROGRAM, dwellingProgramSummary } from "@/lib/planning/dwelling-program";
+import { screenZoningUse } from "@/lib/regulatory/zoning-use-screening";
 import type {
   PlanningEconomicsAssumptions,
   PlanningRecommendationMetadata,
@@ -40,12 +39,22 @@ import {
   regulatoryConstraintIsDecisionGrade,
   type RegulatoryConstraintSet,
 } from "@/lib/regulatory/constraints";
+import {
+  evaluateSunlightRegulation,
+  toSunlightGeometryProfile,
+  type SunlightDaylightInput,
+  type SunlightInputStatus,
+  type SunlightNorthBoundaryInput,
+} from "@/lib/regulatory/sunlight-rules";
 
 export const PLANNING_RECOMMENDATION_ENGINE_VERSION =
-  "planning-recommendation-v2-stepped-envelope" as const;
+  "planning-recommendation-v5-bounded-search" as const;
+
+export const RECOMMENDATION_SEARCH_BUDGET_MS = 15_000;
 
 const ENVELOPE_UTILIZATION_RATIOS = [0.4, 0.55, 0.7, 0.85, 0.98] as const;
 const UNIT_AREA_OPTIONS = [45, 60, 80] as const;
+const SMALL_DWELLING_AREA_OPTIONS = [20, 26, 30, 45, 60, 80] as const;
 const MAX_GENERATED_FLOORS = 7;
 const MIN_PROGRAM_AREA_SQM = 18;
 const GEOMETRY_BLOCKING_CODES = new Set([
@@ -60,6 +69,12 @@ const GEOMETRY_BLOCKING_CODES = new Set([
 ]);
 
 export interface RecommendationEngineParcel {
+  address?: string;
+  parkingRuleAsOf?: string;
+  sunlightRuleAsOf?: string;
+  zoningStatus?: SunlightInputStatus;
+  sunlightNorthBoundary?: SunlightNorthBoundaryInput;
+  sunlightDaylight?: SunlightDaylightInput;
   lotAreaSqm: number;
   maxFARPct: number;
   maxBCRPct: number;
@@ -69,6 +84,7 @@ export interface RecommendationEngineParcel {
   acquisitionCostManwon: number;
   demolitionCostManwon: number;
   boundary?: LngLat[];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   zoning: string;
   roads?: RoadLine[];
   setback?: SetbackSpec;
@@ -76,6 +92,7 @@ export interface RecommendationEngineParcel {
 
 export interface PlanningRecommendationEngineInput {
   projectId: string;
+  sourceRevision?: string;
   parcel: RecommendationEngineParcel;
   assumptions: PlanningEconomicsAssumptions;
   generatedAt?: string;
@@ -97,6 +114,7 @@ export interface RecommendationCandidateEvaluation {
 
 export interface PlanningRecommendationSet {
   engineVersion: string;
+  searchStatus: "complete" | "incomplete";
   generatedAt: string;
   evaluatedCandidates: number;
   eligibleCandidates: number;
@@ -110,7 +128,8 @@ export interface PlanningRecommendationSet {
 interface SteppedEnvelopeProfile {
   capacitiesSqm: number[];
   warnings: string[];
-  source: "legal-envelope" | "bcr-fallback";
+  source: "legal-envelope" | "bcr-fallback" | "unavailable";
+  calculationIncomplete?: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -120,38 +139,6 @@ function clamp(value: number, min: number, max: number): number {
 function round(value: number, digits = 1): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
-}
-
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length < 2) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function ringCentroid(ring: LngLat[]): LngLat {
-  const points = openRing(ring);
-  if (points.length === 0) return [0, 0];
-  return [
-    points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    points.reduce((sum, point) => sum + point[1], 0) / points.length,
-  ];
-}
-
-function ringToLocalMeters(ring: LngLat[], origin: LngLat): LocalPlanPoint[] {
-  const longitudeScale = Math.cos((origin[1] * Math.PI) / 180);
-  return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - origin[0]) * 111_000 * longitudeScale,
-    z: -(lat - origin[1]) * 111_000,
-  }));
-}
-
-function ringAreaSqm(ring: LngLat[] | undefined, origin: LngLat): number {
-  return ring && ring.length >= 3
-    ? polygonAreaSqm(ringToLocalMeters(ring, origin))
-    : 0;
 }
 
 function maxCandidateFloors(parcel: RecommendationEngineParcel): number {
@@ -195,43 +182,76 @@ export function buildSteppedEnvelopeProfile(
 ): SteppedEnvelopeProfile {
   const maxFootprintSqm =
     parcel.lotAreaSqm * (Math.max(1, parcel.maxBCRPct) / 100);
-  if (!parcel.boundary || parcel.boundary.length < 3) {
+  if (parcel.boundaryPolygons === undefined && !parcel.boundary?.length) {
     return {
       capacitiesSqm: Array.from({ length: floors }, () => maxFootprintSqm),
-      warnings: ["대지 경계가 없어 법정 건폐율 면적을 층별 외곽선 대체값으로 사용했습니다."],
+      warnings: ["대지 경계가 없어 입력 건폐율 면적을 층별 외곽선 대체값으로 사용했습니다."],
       source: "bcr-fallback",
     };
   }
 
-  const frontage = parcel.roads?.length
-    ? analyzeFrontage(parcel.boundary, parcel.roads)
-    : null;
-  const edgeSetbacks = edgeSetbacksFromFrontage(
-    frontage,
-    parcel.setback ?? { road: 0.5, side: 0.5, rear: 0.5 }
+  const region = resolvePlanningParcel(parcel);
+  if (!region.available) {
+    return { capacitiesSqm: Array.from({ length: floors }, () => 0), source: "unavailable",
+      warnings: ["입력한 전체 대지 경계를 확인하지 못해 후보 생성을 보류했습니다. 경계를 건폐율 추정값으로 대체하지 않았습니다."] };
+  }
+  const frontage = analyzeParcelFrontage(region.source, parcel.roads ?? [], region.origin);
+  const setback = parcel.setback ?? { road: 0.5, side: 0.5, rear: 0.5 };
+  const edgeSetbacksByPolygon = region.polygons.map(part => [part.outer, ...part.holes].map(ring => ring.map(() => Math.max(0.5, setback.side))));
+  for (const edge of frontage?.edges ?? []) {
+    edgeSetbacksByPolygon[edge.polygonIndex][edge.ringIndex][edge.edgeIndex] =
+      Math.max(edge.role === "전면" ? 0 : 0.5, edge.role === "전면" ? setback.road : edge.role === "후면" ? setback.rear : setback.side);
+  }
+  const floorHeightsM = Array.from(
+    { length: floors },
+    (_, index) => (index === 0 ? 3.6 : 3)
   );
+  const roofAllowanceM = parcel.roofAllowanceM ?? 1.4;
+  const sunlight = evaluateSunlightRegulation({
+    context: {
+      address: parcel.address,
+      asOf: parcel.sunlightRuleAsOf,
+    },
+    zoning: parcel.zoning,
+    zoningStatus: parcel.zoningStatus,
+    buildingHeightM:
+      floorHeightsM.reduce((sum, height) => sum + height, 0) +
+      roofAllowanceM,
+    floorsAbove: floors,
+    legalUse: "unknown-residential",
+    legalUseStatus: "user-entered",
+    northBoundary: parcel.sunlightNorthBoundary,
+    daylight: {
+      sameLotBuildingCount: 1,
+      sameLotBuildingCountStatus: "source-backed",
+      ...parcel.sunlightDaylight,
+    },
+  });
   const buildable = calcBuildableArea(
     parcel.boundary,
     0.5,
     floors,
     averageFloorHeight(floors),
     /주거/.test(parcel.zoning),
-    edgeSetbacks
-  );
-  const origin = ringCentroid(parcel.boundary);
-  const fallbackArea = Math.min(
-    maxFootprintSqm,
-    ringAreaSqm(buildable.buildable2DRing ?? parcel.boundary, origin)
+    undefined,
+    {
+      polygons: region.source,
+      edgeSetbacksByPolygon,
+      sunlightProfile: toSunlightGeometryProfile(sunlight),
+      floorHeightsM,
+      floorLevels: Array.from({ length: floors }, (_, index) => index + 1),
+      roofAllowanceM,
+    }
   );
   const capacitiesSqm: number[] = [];
-  let previous = fallbackArea;
+  let previous = maxFootprintSqm;
 
   for (let level = 1; level <= floors; level += 1) {
     const step = buildable.stepped3D.find((candidate) => candidate.floor === level);
-    const measured = step?.ringLngLat
-      ? ringAreaSqm(step.ringLngLat, origin)
-      : step?.floorPlateSqm ?? fallbackArea;
-    const capped = Math.max(0, Math.min(maxFootprintSqm, measured || fallbackArea));
+    // A generated floor is one connected footprint, not the sum of disconnected pieces.
+    const parts = step ? projectParcelPolygons(step.polygons, region.origin) : [];
+    const measured = buildable.geometryStatus === "available" ? Math.max(0, ...parts.map(part => localParcelArea([part]))) : 0;
+    const capped = Math.max(0, Math.min(maxFootprintSqm, measured));
     const monotonic = Math.min(previous, capped);
     capacitiesSqm.push(round(monotonic, 3));
     previous = monotonic;
@@ -240,7 +260,8 @@ export function buildSteppedEnvelopeProfile(
   return {
     capacitiesSqm,
     warnings: buildable.warnings,
-    source: "legal-envelope",
+    source: buildable.geometryStatus === "available" ? "legal-envelope" : "unavailable",
+    calculationIncomplete: buildable.geometryStatus !== "available",
   };
 }
 
@@ -296,17 +317,22 @@ function createCandidate(input: {
   unitAreaSqm: number;
   strategy: "surface" | "piloti";
   generatedAt: string;
+  dwellingMix?: "uniform" | "compact-lower";
 }): PlanningScenario | null {
   const piloti = input.strategy === "piloti";
   if (piloti && input.profile.capacitiesSqm.length < 2) return null;
-  const floorPrograms = buildResidentialFloors({
+  const programInput = {
     capacitiesSqm: input.profile.capacitiesSqm,
     utilizationRatio: input.utilizationRatio,
     maxFarAreaSqm:
       input.parcel.lotAreaSqm * (Math.max(1, input.parcel.maxFARPct) / 100),
     unitAreaSqm: input.unitAreaSqm,
     piloti,
-  });
+  };
+  const floorPrograms = input.dwellingMix
+    ? buildDwellingProgram({ ...programInput, targetExclusiveAreaSqm: input.unitAreaSqm, mix: input.dwellingMix })
+    : buildResidentialFloors(programInput);
+  if (!floorPrograms) return null;
   const residentialUnits = floorPrograms.reduce(
     (sum, floor) =>
       sum +
@@ -318,6 +344,18 @@ function createCandidate(input: {
     0
   );
   if (residentialUnits <= 0) return null;
+  if (input.dwellingMix) {
+    if (residentialUnits < 2) return null;
+    const useScreen = screenZoningUse(input.parcel.zoning, "multi-family", {
+      address: input.parcel.address, asOf: input.generatedAt.slice(0, 10),
+      legalUseCode: "BA-A1-2-C",
+      residentialFloors: floorPrograms.filter((floor) => floor.zones.some((zone) => zone.useType === "residential")).length,
+      useAreaSqm: floorPrograms.reduce((sum, floor) => sum + floor.zones.filter((zone) => zone.useType !== "piloti").reduce((subtotal, zone) => subtotal + zone.areaSqm, 0), 0),
+      householdCount: residentialUnits,
+      aboveGroundFloors: floorPrograms.length,
+    });
+    if (!useScreen.autoGeneratable) return null;
+  }
 
   const scenario = createBlankPlanningScenario({
     projectId: input.projectId,
@@ -329,6 +367,12 @@ function createCandidate(input: {
   scenario.updatedAt = input.generatedAt;
   scenario.primaryUse = residentialUnits <= 1 ? "single-house" : "multi-family";
   scenario.floorPrograms = floorPrograms;
+  if (input.dwellingMix) {
+    scenario.primaryUse = "multi-family";
+    scenario.sunlightLegalUse = "multi-unit-house";
+    scenario.sunlightLegalUseStatus = "user-entered";
+    scenario.dwellingProgram = { ...DEFAULT_DWELLING_PROGRAM };
+  }
   scenario.parking = {
     strategy: input.strategy,
     providedCars: 0,
@@ -341,6 +385,10 @@ function createCandidate(input: {
     columnLossPct: piloti ? 8 : 0,
   };
   scenario.description = `${floorPrograms.filter((floor) => floor.level > 0).length}층 · 층별 법규 외곽선 ${Math.round(input.utilizationRatio * 100)}% 사용 · 기준 세대면적 ${input.unitAreaSqm}㎡ · ${piloti ? "필로티" : "지상"} 주차 후보`;
+  if (input.dwellingMix) {
+    const summary = dwellingProgramSummary(floorPrograms);
+    scenario.description = `${floorPrograms.length}층 · ${summary.unitCount}세대 · 전용 ${summary.minExclusiveSqm.toFixed(1)}~${summary.maxExclusiveSqm.toFixed(1)}㎡ · ${input.dwellingMix === "compact-lower" ? "혼합 평형" : "층별 균등 평형"} · 미검증 면적 프로그램`;
+  }
   scenario.economicsPreview.demolitionCostManwon = Math.max(
     0,
     input.parcel.demolitionCostManwon
@@ -348,26 +396,13 @@ function createCandidate(input: {
   return scenario;
 }
 
-function localParcelContext(
-  boundary: LngLat[] | undefined,
-  roads: RoadLine[] | undefined
-): {
-  parcelShape: LocalPlanPoint[];
-  frontEdge: [LocalPlanPoint, LocalPlanPoint] | null;
-} {
-  if (!boundary || boundary.length < 3) {
-    return { parcelShape: [], frontEdge: null };
-  }
-  const parcelShape = ringToLocalMeters(boundary, ringCentroid(boundary));
-  const frontage = roads?.length ? analyzeFrontage(boundary, roads) : null;
-  const frontEdge =
-    frontage && frontage.frontIndex >= 0 && parcelShape.length > frontage.frontIndex
-      ? ([
-          parcelShape[frontage.frontIndex],
-          parcelShape[(frontage.frontIndex + 1) % parcelShape.length],
-        ] as [LocalPlanPoint, LocalPlanPoint])
-      : null;
-  return { parcelShape, frontEdge };
+function localParcelContext(parcel: RecommendationEngineParcel): Pick<ParkingLayoutInput, "parcelShape" | "parcelPolygons" | "frontages" | "frontEdge"> {
+  const region = resolvePlanningParcel(parcel);
+  const frontage = region.available ? analyzeParcelFrontage(region.source, parcel.roads ?? [], region.origin) : null;
+  const primary = frontage?.frontages.reduce<(typeof frontage.frontages)[number] | null>((best, edge) =>
+    !best || edge.roadDistM < best.roadDistM ? edge : best, null);
+  return { parcelShape: region.simple ? region.polygons[0].outer : [], parcelPolygons: region.polygons,
+    frontages: frontage?.frontages ?? [], frontEdge: primary?.edge ?? null };
 }
 
 /**
@@ -395,9 +430,9 @@ function evaluateCandidate(
   scenario: PlanningScenario,
   input: PlanningRecommendationEngineInput,
   context: PlanningCalculationContext,
-  parcelShape: LocalPlanPoint[],
-  frontEdge: [LocalPlanPoint, LocalPlanPoint] | null,
-  spatialCache: Map<string, PlanningSpatialValidation | null>
+  parcelContext: ReturnType<typeof localParcelContext>,
+  spatialCache: Map<string, PlanningSpatialValidation | null>,
+  onIncomplete: () => void,
 ): RecommendationCandidateEvaluation {
   const initial = calculatePlanningScenario(scenario, context);
   const spatialKey = spatialGeometryKey(scenario);
@@ -409,7 +444,10 @@ function evaluateCandidate(
       input.parcel.zoning,
       scenario,
       input.parcel.roads,
-      input.parcel.setback
+      input.parcel.setback,
+      initial.sunlight,
+      initial.metrics.roofAllowanceM,
+      input.parcel.boundaryPolygons
     );
     spatialCache.set(spatialKey, initialSpatial);
   }
@@ -427,14 +465,18 @@ function evaluateCandidate(
   );
   const parkingLayout = calculateParkingLayout({
     strategy: scenario.parking.strategy,
-    parcelShape,
+    ...parcelContext,
     buildingShape: firstMass?.shape ?? [],
     pilotiShape: firstMass?.shape ?? [],
     pilotiEnabled,
     requiredCars: initial.parking.requiredCars,
-    frontEdge,
     parking: scenario.parking,
   });
+  if (parkingLayout.generationStatus === "budget-exhausted"
+    || (parkingLayout.generationStatus === "invalid-input" && Boolean(parcelContext.parcelPolygons?.length))
+    || initialSpatial?.model.floors.some(floor => floor.generationStatus === "budget-exhausted")
+    || initialSpatial?.envelopeSteps.some(step => !step.envelopeAvailable)
+    || (!initialSpatial && Boolean(parcelContext.parcelPolygons?.length))) onIncomplete();
   const withParking: PlanningScenario = {
     ...scenario,
     parking: { ...scenario.parking, providedCars: parkingLayout.capacityCars },
@@ -546,9 +588,25 @@ function recommendation(
 export function generatePlanningRecommendations(
   input: PlanningRecommendationEngineInput
 ): PlanningRecommendationSet {
+  const deadline = performance.now() + RECOMMENDATION_SEARCH_BUDGET_MS;
+  const searchState: { status: PlanningRecommendationSet["searchStatus"] } = { status: "complete" };
+  const expired = () => {
+    if (performance.now() < deadline) return false;
+    searchState.status = "incomplete";
+    return true;
+  };
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const context: PlanningCalculationContext = {
     parcel: {
+      address: input.parcel.address,
+      parkingRuleAsOf:
+        input.parcel.parkingRuleAsOf ?? generatedAt.slice(0, 10),
+      zoning: input.parcel.zoning,
+      zoningStatus: input.parcel.zoningStatus,
+      sunlightRuleAsOf:
+        input.parcel.sunlightRuleAsOf ?? generatedAt.slice(0, 10),
+      sunlightNorthBoundary: input.parcel.sunlightNorthBoundary,
+      sunlightDaylight: input.parcel.sunlightDaylight,
       lotAreaSqm: input.parcel.lotAreaSqm,
       maxFARPct: input.parcel.maxFARPct,
       maxBCRPct: input.parcel.maxBCRPct,
@@ -561,20 +619,28 @@ export function generatePlanningRecommendations(
     assumptions: input.assumptions,
     calculatedAt: generatedAt,
   };
-  const { parcelShape, frontEdge } = localParcelContext(
-    input.parcel.boundary,
-    input.parcel.roads
-  );
+  const parcelContext = localParcelContext(input.parcel);
   const evaluations: RecommendationCandidateEvaluation[] = [];
   const profileWarnings = new Set<string>();
   const spatialCache = new Map<string, PlanningSpatialValidation | null>();
+  const dwellingSearch = input.parcel.lotAreaSqm > 0 && input.parcel.lotAreaSqm <= 330 &&
+    /^(서울특별시|서울)(?:\s|$)/.test(input.parcel.address ?? "") &&
+    (input.parcel.parkingRuleAsOf ?? generatedAt).slice(0, 10) >= "2026-09-08";
+  const uniquePrograms = new Set<string>();
 
-  for (let floors = 1; floors <= maxCandidateFloors(input.parcel); floors += 1) {
+  search: for (let floors = 1; floors <= maxCandidateFloors(input.parcel); floors += 1) {
+    if (expired()) break;
     const profile = buildSteppedEnvelopeProfile(input.parcel, floors);
     profile.warnings.forEach((warning) => profileWarnings.add(warning));
-    for (const utilizationRatio of ENVELOPE_UTILIZATION_RATIOS) {
-      for (const unitAreaSqm of UNIT_AREA_OPTIONS) {
+    if (profile.calculationIncomplete) {
+      searchState.status = "incomplete";
+      break;
+    }
+    for (const utilizationRatio of dwellingSearch ? [...ENVELOPE_UTILIZATION_RATIOS, 1] : ENVELOPE_UTILIZATION_RATIOS) {
+      for (const unitAreaSqm of dwellingSearch ? SMALL_DWELLING_AREA_OPTIONS : UNIT_AREA_OPTIONS) {
         for (const strategy of ["surface", "piloti"] as const) {
+          for (const dwellingMix of dwellingSearch ? ["uniform", "compact-lower"] as const : [undefined]) {
+          if (expired()) break search;
           const candidate = createCandidate({
             projectId: input.projectId,
             parcel: input.parcel,
@@ -583,22 +649,52 @@ export function generatePlanningRecommendations(
             unitAreaSqm,
             strategy,
             generatedAt,
+            dwellingMix,
           });
           if (candidate) {
+            const key = JSON.stringify({ strategy, floors: candidate.floorPrograms.map((floor) => ({ level: floor.level,
+              zones: floor.zones.map((zone) => [zone.useType, round(zone.areaSqm, 5), zone.unitCount]) })) });
+            if (uniquePrograms.has(key)) continue;
+            uniquePrograms.add(key);
             evaluations.push(
               evaluateCandidate(
                 candidate,
                 input,
                 context,
-                parcelShape,
-                frontEdge,
-                spatialCache
+                parcelContext,
+                spatialCache,
+                () => { searchState.status = "incomplete"; },
               )
             );
+            if (searchState.status === "incomplete") break search;
+          }
           }
         }
       }
     }
+  }
+
+  const warnings = [...profileWarnings];
+  if (!parcelContext.parcelPolygons?.length) {
+    warnings.push("대지 경계가 없어 층별 법규 외곽선과 배치를 검증하지 못했습니다.");
+  } else if (!parcelContext.parcelShape?.length) {
+    warnings.push("전체 대지 조각과 내부 빈 공간을 입력으로 검사합니다. 현재 자동 후보는 층별 단일 연속 건물이며 다동 배치·합필 가능 여부·공식 경계·허가는 별도 검토가 필요합니다.");
+  }
+  expired();
+  const searchStatus = searchState.status;
+  if (searchStatus === "incomplete") {
+    return {
+      engineVersion: PLANNING_RECOMMENDATION_ENGINE_VERSION,
+      searchStatus,
+      generatedAt,
+      evaluatedCandidates: evaluations.length,
+      eligibleCandidates: evaluations.filter(candidate => candidate.eligible).length,
+      architecturalFeasibility: null,
+      profitOptimal: null,
+      legalCeilingReference: null,
+      warnings: [...warnings, "전체 후보 탐색 또는 개별 형상·주차 검사를 완료하지 못해 추천 순위와 상한안을 확정하지 않았습니다. 계산 시간·입력 한도를 확인해야 하며 기존 계획은 유지됩니다."],
+      evaluations,
+    };
   }
 
   const eligible = evaluations.filter((candidate) => candidate.eligible);
@@ -629,10 +725,6 @@ export function generatePlanningRecommendations(
   )[0];
   const evaluatedCandidates = evaluations.length;
   const eligibleCandidates = eligible.length;
-  const warnings = [...profileWarnings];
-  if (!input.parcel.boundary?.length) {
-    warnings.push("대지 경계가 없어 층별 법규 외곽선과 배치를 검증하지 못했습니다.");
-  }
   if (!safe || !profit) {
     warnings.push(
       "법규 외곽선과 실제 주차 배치를 모두 통과하는 자동 후보를 찾지 못했습니다. 직접 설계안에서 면적·층수·주차 전략을 조정해야 합니다."
@@ -646,6 +738,7 @@ export function generatePlanningRecommendations(
 
   return {
     engineVersion: PLANNING_RECOMMENDATION_ENGINE_VERSION,
+    searchStatus,
     generatedAt,
     evaluatedCandidates,
     eligibleCandidates,
@@ -666,7 +759,7 @@ export function generatePlanningRecommendations(
               `건축 타당성 ${safe.architectureScore.toFixed(1)}점`,
               `법규·배치 필수 미충족 ${safe.failCount}건`,
               `주차 ${safe.parkingLayout.capacityCars}/${safe.calculation.parking.requiredCars}대`,
-              `법정 용적률의 ${safe.farUtilizationPct.toFixed(1)}% 사용`,
+              `입력 용적률의 ${safe.farUtilizationPct.toFixed(1)}% 사용`,
             ],
           }),
         })
@@ -711,7 +804,7 @@ export function generatePlanningRecommendations(
             evaluation: maximum,
             reasons: [
               `실현 용적률 ${maximum.calculation.metrics.preliminaryFarPct.toFixed(1)}%`,
-              `법정 용적률의 ${maximum.farUtilizationPct.toFixed(1)}% 사용`,
+              `입력 용적률의 ${maximum.farUtilizationPct.toFixed(1)}% 사용`,
               `예비 건폐율 ${maximum.calculation.metrics.preliminaryBcrPct.toFixed(1)}%`,
               `층별 외곽선·배치 미충족 ${maximum.geometryFailCount}건`,
             ],

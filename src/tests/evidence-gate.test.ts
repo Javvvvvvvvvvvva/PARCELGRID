@@ -1,3 +1,4 @@
+import { molitEvidenceFixture } from "./helpers/molit-evidence-fixture";
 import { describe, expect, it } from "vitest";
 import { buildEvidenceGate, buildHandoffBrief } from "@/lib/handoff/evidence-gate";
 
@@ -8,6 +9,7 @@ const input = {
   roadReferenceCount: 2,
   regulatorySourceBacked: false,
   saleCompCount: 5,
+  transactionEvidence: [molitEvidenceFixture()],
   saleEstimateVersion: "experimental-2026.1",
   acquisitionEstimateVersion: "land-v1",
   financeModelVersion: "pre-audit-2026.2",
@@ -15,6 +17,12 @@ const input = {
 };
 
 describe("Stage 4 evidence gate", () => {
+  it("does not accept legacy or partial transaction counts as complete evidence", () => {
+    for (const evidence of [undefined, [molitEvidenceFixture({ status: "partial", failedMonths: [{ month: "202602", issue: "access-denied" }] })]]) {
+      const items = buildEvidenceGate({ ...input, transactionEvidence: evidence }).lanes.flatMap(lane => lane.items);
+      expect(items.find(item => item.id === "sale-comps")?.status).toBe("missing");
+    }
+  });
   it("blocks final handoff while critical external evidence is missing", () => {
     const gate = buildEvidenceGate(input);
     expect(gate.status).toBe("blocked");

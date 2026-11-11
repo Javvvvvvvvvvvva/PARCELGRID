@@ -9,13 +9,19 @@
  *   3. computeProject(parcel, scenarios, { transactions }) → ProjectComputed
  */
 
+import { buildingRegistryEvidenceSchema } from "@/lib/building-registry/types";
+import { transactionEvidenceComplete, type MolitRangeEvidence } from "@/lib/integrations/molit-evidence";
 import { NextRequest, NextResponse } from "next/server";
+import { validateParcelBoundaryInput } from "@/lib/geo/manual-parcel-boundary";
 import { generateScenariosForParcel } from "@/lib/services/generate-scenarios";
 import { computeProject } from "@/lib/services/compute-project";
-import { fetchMolitRange, type MolitTransaction } from "@/lib/integrations/molit";
+import { fetchMolitRangeWithEvidence, type MolitTransaction } from "@/lib/integrations/molit";
 import { estimateSalePriceFromComps } from "@/lib/finance/sale-price-from-comps";
+import { dwellingMarketWindow, koreaDate } from "@/lib/finance/dwelling-market";
 import type { Parcel } from "@/lib/finance/types";
 import { z } from "zod";
+import { requireApiCapability } from "@/lib/auth/request";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -96,13 +102,15 @@ const inputProvenanceSchema = z.object({
 
 const buildingLookupSchema = z
   .object({
+    registry: buildingRegistryEvidenceSchema.optional(),
+    source: z.enum(["building-registry", "vworld-gis"]).optional(),
     hasBuilding: z.boolean(),
-    buildings: z.array(z.record(z.unknown())).max(500),
+    buildings: z.array(z.record(z.string(), z.unknown())).max(500),
     totalBuildingArea: z.number().finite().nonnegative(),
     oldestApprovalDate: z.string().max(40),
     maxAgeYears: z.number().finite().nonnegative(),
     averageAgeYears: z.number().finite().nonnegative(),
-    redevelopmentSignal: z.enum(["vacant", "rebuild", "renovate", "keep"]),
+    redevelopmentSignal: z.enum(["vacant", "rebuild", "renovate", "keep", "unknown"]),
     signalLabel: z.string().max(200),
     signalReasoning: z.string().max(2_000),
   })
@@ -116,7 +124,8 @@ const parcelSchema = z
     lat: z.number().finite().min(-90).max(90).optional(),
     lng: z.number().finite().min(-180).max(180).optional(),
     lotArea: z.number().finite().positive().max(100_000_000),
-    boundary: z.array(coordinateSchema).min(3).max(20_000).optional(),
+    boundary: z.array(coordinateSchema).max(10_000).optional(),
+    boundaryPolygons: z.array(z.object({ outer: z.array(coordinateSchema).min(3).max(10_000), holes: z.array(z.array(coordinateSchema).min(3).max(10_000)).max(3333) })).min(1).max(200).optional(),
     roads: z
       .array(
         z.object({
@@ -173,21 +182,11 @@ const dynamicBodySchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  let body: DynamicBody;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        error: "프로젝트 요청 형식을 읽을 수 없습니다.",
-        nextAction: "주소 등록 단계에서 다시 시작하세요.",
-      },
-      { status: 400 },
-    );
-  }
-
-  const parsed = dynamicBodySchema.safeParse(body);
+  const authorization = await requireApiCapability(req, "analysis.run");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.dynamicProject });
+  if (!input.ok) return input.response;
+  const parsed = dynamicBodySchema.safeParse(input.value);
   if (!parsed.success) {
     return NextResponse.json(
       {
@@ -199,9 +198,16 @@ export async function POST(req: NextRequest) {
       { status: 422 },
     );
   }
-  body = parsed.data as DynamicBody;
+  const body = parsed.data as DynamicBody;
 
   const { parcel, lawdCd, parcelDong } = body;
+
+  try {
+    const geometry = validateParcelBoundaryInput(parcel, { signal: req.signal });
+    Object.assign(parcel, geometry);
+  } catch {
+    return NextResponse.json({ code: "INVALID_PARCEL_GEOMETRY", error: "필지 경계의 형식·교차·내부 제외 영역·계산 한도를 확인하세요." }, { status: 422 });
+  }
 
   try {
     // 1. 용도지역과 부지 규모에 맞는 시나리오 생성
@@ -221,37 +227,19 @@ export async function POST(req: NextRequest) {
     // 2. MOLIT 실거래 가져오기 (병렬 — 4개 유형)
     // lawdCd가 없으면 빈 배열
     let transactions: MolitTransaction[] = [];
+    let transactionEvidence: MolitRangeEvidence[] = [];
     if (lawdCd) {
-      const start = recentYearMonth(12);
-      const end = recentYearMonth(0);
-
-      const fetchType = (type: "land" | "officetel" | "commercial" | "apartment" | "house") =>
-        fetchMolitRange({
-          lawdCd,
-          type,
-          startYearMonth: start,
-          endYearMonth: end,
-        }).catch((err) => {
-          console.warn(`MOLIT ${type} 실패:`, err instanceof Error ? err.message : err);
-          return [] as MolitTransaction[];
-        });
-
-      const [land, officetel, commercial, apartment, house] = await Promise.all([
-        fetchType("land"),
-        fetchType("officetel"),
-        fetchType("commercial"),
-        fetchType("apartment"),
-        fetchType("house"),
-      ]);
-
-      transactions = [...land, ...officetel, ...commercial, ...apartment, ...house];
-      console.log(
-        `MOLIT 거래 ${transactions.length}건 (토지 ${land.length} / 오피스텔 ${officetel.length} / 상업 ${commercial.length} / 아파트 ${apartment.length} / 단독다가구 ${house.length})`
-      );
+      const villaWindow = dwellingMarketWindow(koreaDate());
+      const results = await Promise.all((["land", "officetel", "commercial", "apartment", "house", "villa"] as const).map(type =>
+        fetchMolitRangeWithEvidence({ lawdCd, type, signal: req.signal,
+          startYearMonth: type === "villa" ? villaWindow.startYearMonth : recentYearMonth(12),
+          endYearMonth: type === "villa" ? villaWindow.endYearMonth : recentYearMonth(0) })));
+      transactions = results.flatMap(result => result.transactions);
+      transactionEvidence = results.map(result => result.evidence);
     }
 
     // 2.5 매각 단가 실거래 참고 보정 (recompute와 동일 유틸 — 신축 우선)
-    const saleEst = estimateSalePriceFromComps(
+    const saleEst = transactionEvidenceComplete(transactionEvidence.filter(item => item.type === "house")) ? estimateSalePriceFromComps(
       transactions
         .filter((t) => t.exclusiveArea > 0 && t.priceManwon > 0)
         .map((t) => ({
@@ -262,8 +250,9 @@ export async function POST(req: NextRequest) {
           address: `${t.dongName} ${t.jibun}`.trim(),
           date: t.date,
           priceWon: t.priceManwon * 10_000,
+          cancellationStatus: t.cancellationStatus,
         }))
-    );
+    ) : null;
     if (saleEst) {
       for (const sc of scenarios) {
         sc.assumptions = { ...sc.assumptions, salePricePerSqM: saleEst.salePricePerSqM };
@@ -276,6 +265,7 @@ export async function POST(req: NextRequest) {
     // 3. 시나리오 계산 + 실거래 변환
     const computed = computeProject(parcel, scenarios, {
       transactions,
+      transactionEvidence,
       parcelDong: parcelDong ?? "",
       calculateMaxAcquisition: true, // 역산 활성화 (~100ms)
     });

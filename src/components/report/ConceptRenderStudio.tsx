@@ -1,5 +1,8 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+import { sessionLocalStorage } from "@/lib/auth/client-session";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -11,6 +14,10 @@ import {
   conceptReferenceStorageKey,
   parseConceptReferenceCapture,
 } from "@/lib/ai/concept-reference-cache";
+import {
+  principalHasCapability,
+  useAccessSession,
+} from "@/lib/hooks/use-access-session";
 
 interface ConceptRenderStudioProps {
   projectId: string;
@@ -49,7 +56,6 @@ export default function ConceptRenderStudio({
   );
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [quality, setQuality] = useState<ConceptRenderQuality>("medium");
-  const [uploadKey, setUploadKey] = useState("");
   const [render, setRender] = useState<ConceptRenderMetadata | null>(null);
   const [renderUrl, setRenderUrl] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -63,6 +69,11 @@ export default function ConceptRenderStudio({
     remaining: number;
     resetAt: string;
   } | null>(null);
+  const accessSession = useAccessSession();
+  const canCreateRender = principalHasCapability(
+    accessSession.data,
+    "concept-render.create",
+  );
 
   const endpoint = `/api/projects/${encodeURIComponent(projectId)}/concept-render`;
 
@@ -100,16 +111,11 @@ export default function ConceptRenderStudio({
 
   const loadStoredRender = async (
     metadata: ConceptRenderMetadata,
-    key: string,
     quiet = false,
   ) => {
     try {
       const query = new URLSearchParams({ pathname: metadata.pathname });
-      const response = await fetch(`${endpoint}?${query}`, {
-        headers: key.trim()
-          ? { "x-parcelgrid-upload-key": key.trim() }
-          : undefined,
-      });
+      const response = await fetch(`${endpoint}?${query}`);
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
           | { error?: string }
@@ -131,14 +137,14 @@ export default function ConceptRenderStudio({
 
   useEffect(() => {
     let cancelled = false;
-    const savedRender = window.localStorage.getItem(storageKey(projectId));
+    const savedRender = sessionLocalStorage.getItem(storageKey(projectId));
     if (savedRender) {
       try {
         const parsed = JSON.parse(savedRender) as unknown;
         if (isRenderMetadata(parsed)) {
           setRender(parsed);
           if (!geometryHash || parsed.geometryHash === geometryHash) {
-            void loadStoredRender(parsed, "", true);
+            void loadStoredRender(parsed, true);
           } else {
             replaceRenderUrl(null);
             setNotice(
@@ -147,12 +153,12 @@ export default function ConceptRenderStudio({
           }
         }
       } catch {
-        window.localStorage.removeItem(storageKey(projectId));
+        sessionLocalStorage.removeItem(storageKey(projectId));
       }
     }
 
     const cachedReference = parseConceptReferenceCapture(
-      window.localStorage.getItem(conceptReferenceStorageKey(projectId)),
+      sessionLocalStorage.getItem(conceptReferenceStorageKey(projectId)),
       { projectId, geometryHash }
     );
     if (cachedReference) {
@@ -225,9 +231,6 @@ export default function ConceptRenderStudio({
 
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: uploadKey.trim()
-          ? { "x-parcelgrid-upload-key": uploadKey.trim() }
-          : undefined,
         body: form,
       });
       const payload = (await response.json().catch(() => null)) as
@@ -242,11 +245,11 @@ export default function ConceptRenderStudio({
         throw new Error(payload?.error ?? "콘셉트 렌더 생성에 실패했습니다.");
       }
       setRender(payload.render);
-      window.localStorage.setItem(
+      sessionLocalStorage.setItem(
         storageKey(projectId),
         JSON.stringify(payload.render),
       );
-      await loadStoredRender(payload.render, uploadKey, true);
+      await loadStoredRender(payload.render, true);
       setNotice(
         "기준 이미지 기반 렌더를 생성했습니다. 원본과 형상이 같은지 확인한 뒤 확정하세요.",
       );
@@ -276,7 +279,7 @@ export default function ConceptRenderStudio({
       },
     };
     setRender(next);
-    window.localStorage.setItem(storageKey(projectId), JSON.stringify(next));
+    sessionLocalStorage.setItem(storageKey(projectId), JSON.stringify(next));
     setNotice(
       status === "confirmed"
         ? "원본과 결과의 층수·외곽선·후퇴·배치·카메라 일치를 확인했습니다."
@@ -289,11 +292,7 @@ export default function ConceptRenderStudio({
     setError(null);
     try {
       const query = new URLSearchParams({ pathname: render.pathname });
-      const response = await fetch(`${endpoint}?${query}`, {
-        headers: uploadKey.trim()
-          ? { "x-parcelgrid-upload-key": uploadKey.trim() }
-          : undefined,
-      });
+      const response = await fetch(`${endpoint}?${query}`);
       if (!response.ok) throw new Error("렌더 파일을 불러올 수 없습니다.");
       const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = window.document.createElement("a");
@@ -392,16 +391,6 @@ export default function ConceptRenderStudio({
             <option value="high">High · 최종 콘셉트</option>
           </select>
         </label>
-        <label>
-          <span>로컬 보관함 접근 키 · 공유 서버만</span>
-          <input
-            type="password"
-            value={uploadKey}
-            onChange={(event) => setUploadKey(event.target.value)}
-            autoComplete="off"
-            placeholder="로컬 개발에서는 비워 둠"
-          />
-        </label>
         <label className="concept-prompt">
           <span>외장 디자인 지시</span>
           <textarea
@@ -416,18 +405,23 @@ export default function ConceptRenderStudio({
             onClick={generate}
             disabled={
               working ||
+              !canCreateRender ||
               openAiConfigured === false ||
               !geometryHash ||
               referenceGeometryHash !== geometryHash
             }
             title={
-              referenceGeometryHash === geometryHash
+              !canCreateRender
+                ? "현재 계정에는 AI 렌더 생성 권한이 없습니다"
+                : referenceGeometryHash === geometryHash
                 ? "현재 대표 Geometry 기준으로 생성"
                 : "Stage 2 3D 컨텍스트에서 AI 기준 이미지를 먼저 저장하세요"
             }
           >
             {working
               ? "기준 형상 보존 렌더 생성 중…"
+              : !canCreateRender
+                ? "AI 렌더 생성 권한 없음"
               : openAiConfigured === false
                 ? "OpenAI 키 설정 필요"
                 : "AI 콘셉트 렌더 생성"}
@@ -438,7 +432,7 @@ export default function ConceptRenderStudio({
             <button
               type="button"
               className="secondary"
-              onClick={() => loadStoredRender(render, uploadKey)}
+              onClick={() => loadStoredRender(render)}
               disabled={working}
             >
               저장 렌더 불러오기
@@ -505,10 +499,10 @@ export default function ConceptRenderStudio({
         .concept-studio{margin:24px 0;padding:18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev)}
         .concept-heading{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:14px}.concept-heading h2{margin:5px 0 4px;font-size:17px}.concept-heading p{margin:0;max-width:660px;color:var(--fg-muted);font-size:11px;line-height:1.55}.concept-kicker{font-size:9px;letter-spacing:.14em;color:var(--accent);font-weight:800}.concept-status{font-size:9.5px;color:var(--pos-fg);font-weight:700;white-space:nowrap}
         .concept-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.concept-reference,.concept-output{display:grid;gap:5px}.concept-reference>span,.concept-output>span{font-size:9px;color:var(--fg-muted)}img{width:100%;aspect-ratio:3/2;object-fit:contain;border:1px solid var(--border-faint);border-radius:8px;background:#f4f5f6}.concept-placeholder{display:grid;place-items:center;aspect-ratio:3/2;padding:20px;border:1px dashed var(--border);border-radius:8px;background:var(--bg-soft);color:var(--fg-muted);font-size:10px;text-align:center;line-height:1.55}
-        .concept-controls{display:grid;grid-template-columns:1.1fr .7fr 1.2fr;gap:10px;margin-top:14px}.concept-setup{grid-column:1/-1;margin:0;padding:8px 10px;border-left:3px solid var(--warn);background:var(--warn-soft);color:var(--warn-fg);font-size:10px;line-height:1.5}.concept-setup a{color:inherit;font-weight:800}.concept-controls label{display:grid;gap:5px}.concept-controls label>span{font-size:9.5px;font-weight:700;color:var(--fg-muted)}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);padding:8px;font:inherit;font-size:10px}.concept-prompt{grid-column:1/-1}.concept-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.concept-actions button{min-height:34px;padding:0 12px;border:1px solid var(--fg);border-radius:7px;background:var(--fg);color:var(--bg);font:inherit;font-size:10px;font-weight:800;cursor:pointer}.concept-actions button.secondary{background:var(--bg-elev);color:var(--fg);border-color:var(--border)}.concept-actions button:disabled{opacity:.55;cursor:not-allowed}
+        .concept-controls{display:grid;grid-template-columns:1.1fr .7fr;gap:10px;margin-top:14px}.concept-setup{grid-column:1/-1;margin:0;padding:8px 10px;border-left:3px solid var(--warn);background:var(--warn-soft);color:var(--warn-fg);font-size:10px;line-height:1.5}.concept-setup a{color:inherit;font-weight:800}.concept-controls label{display:grid;gap:5px}.concept-controls label>span{font-size:9.5px;font-weight:700;color:var(--fg-muted)}input,select,textarea{width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--fg);padding:8px;font:inherit;font-size:10px}.concept-prompt{grid-column:1/-1}.concept-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.concept-actions button{min-height:34px;padding:0 12px;border:1px solid var(--fg);border-radius:7px;background:var(--fg);color:var(--bg);font:inherit;font-size:10px;font-weight:800;cursor:pointer}.concept-actions button.secondary{background:var(--bg-elev);color:var(--fg);border-color:var(--border)}.concept-actions button:disabled{opacity:.55;cursor:not-allowed}
         .concept-error,.concept-notice{margin:10px 0 0;padding:8px 10px;border-radius:7px;font-size:10px;line-height:1.5}.concept-error{background:var(--neg-soft);color:var(--neg-fg)}.concept-notice{background:var(--pos-soft);color:var(--pos-fg)}.concept-audit{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0 0}.concept-audit div{min-width:0;padding:8px;background:var(--bg-soft);border-radius:6px}.concept-audit dt{font-size:8.5px;color:var(--fg-muted)}.concept-audit dd{margin:3px 0 0;font-size:9px;font-family:var(--font-mono);overflow-wrap:anywhere}.concept-disclaimer{margin:12px 0 0;color:var(--fg-muted);font-size:9px;line-height:1.5}
         @media(max-width:760px){.concept-grid,.concept-controls{grid-template-columns:1fr}.concept-prompt,.concept-actions{grid-column:1}.concept-audit{grid-template-columns:repeat(2,minmax(0,1fr))}.concept-heading{display:grid}}
-        @media print{.concept-controls,.concept-error,.concept-notice{display:none}.concept-studio{break-inside:avoid}.concept-grid{grid-template-columns:1fr 1fr}}
+        @media print{.concept-controls,.concept-error,.concept-notice{display:none}.concept-studio{break-inside:avoid}.concept-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.concept-reference,.concept-output{min-width:0}.concept-placeholder{min-width:0;overflow-wrap:anywhere}}
       `}</style>
     </section>
   );

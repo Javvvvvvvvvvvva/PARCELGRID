@@ -1,4 +1,6 @@
 import { ShapeUtils, Vector2 } from "three";
+import { localParcelPolygons } from "@/lib/geo/parcel-topology";
+import { parkingGeometryParts } from "@/lib/planning/parking-geometry-parts";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import type {
   SketchupExportPackageSnapshot,
@@ -236,16 +238,20 @@ function contextBuildingMesh(
 
 function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
   const meshes: MeshData[] = [];
-  const parcel = prismMesh({
-    id: "PG_PARCEL-01",
-    name: "Target Parcel",
-    layer: "PG_PARCEL",
-    materialId: MATERIALS.parcel.id,
-    outer: snapshot.planning.parcel.polygon,
-    bottomY: -0.04,
-    topY: 0,
+  const parcelPolygons = localParcelPolygons(snapshot.planning.parcel);
+  parcelPolygons.forEach((polygon, index) => {
+    const parcel = prismMesh({
+      id: `PG_PARCEL-${index + 1}`,
+      name: `Target Parcel ${index + 1}`,
+      layer: "PG_PARCEL",
+      materialId: MATERIALS.parcel.id,
+      outer: polygon.outer,
+      holes: polygon.holes,
+      bottomY: -0.04,
+      topY: 0,
+    });
+    if (parcel) meshes.push(parcel);
   });
-  if (parcel) meshes.push(parcel);
 
   for (const floor of snapshot.planning.building.floors) {
     const mesh = prismMesh({
@@ -260,12 +266,13 @@ function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
     if (mesh) meshes.push(mesh);
   }
 
-  const parking = snapshot.parking;
-  if (parking) {
-    parking.layout.stalls.forEach((stall, index) => {
+  const parkingParts = snapshot.parking ? parkingGeometryParts(snapshot.parking.layout) : [];
+  parkingParts.forEach((part, partIndex) => {
+    const partId = `${partIndex + 1}-${part.id}`;
+    part.stalls.forEach((stall, index) => {
       const mesh = prismMesh({
-        id: `PG_PARKING_STALLS-${index + 1}`,
-        name: `Parking Stall ${index + 1}`,
+        id: `PG_PARKING_STALLS-${partId}-${index + 1}-${stall.id}`,
+        name: `${part.id} Parking Stall ${stall.id}`,
         layer: "PG_PARKING_STALLS",
         materialId: MATERIALS.parkingStall.id,
         outer: stall.corners,
@@ -275,37 +282,37 @@ function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
       if (mesh) meshes.push(mesh);
     });
 
-    if (parking.layout.aisleShape.length >= 3) {
+    if (part.aisleShape.length >= 3) {
       const mesh = prismMesh({
-        id: "PG_PARKING_AISLE-01",
-        name: "Parking Vehicle Aisle",
+        id: `PG_PARKING_AISLE-${partId}`,
+        name: `${part.id} Parking Vehicle Aisle`,
         layer: "PG_PARKING_AISLE",
         materialId: MATERIALS.parkingAisle.id,
-        outer: parking.layout.aisleShape,
+        outer: part.aisleShape,
         bottomY: 0.005,
         topY: 0.02,
       });
       if (mesh) meshes.push(mesh);
     }
 
-    if (parking.layout.coreShape.length >= 3) {
+    if (part.coreShape.length >= 3) {
       const mesh = prismMesh({
-        id: "PG_PARKING_CORE-01",
-        name: "Parking Core Exclusion",
+        id: `PG_PARKING_CORE-${partId}`,
+        name: `${part.id} Parking Core Exclusion`,
         layer: "PG_PARKING_CORE",
         materialId: MATERIALS.parkingCore.id,
-        outer: parking.layout.coreShape,
+        outer: part.coreShape,
         bottomY: 0.03,
         topY: 0.07,
       });
       if (mesh) meshes.push(mesh);
     }
 
-    parking.layout.columns.forEach((column, index) => {
-      const half = 0.18;
+    part.columns.forEach((column, index) => {
+      const half = (snapshot.parking?.circulation.profile?.columnWidthM ?? 0.4) / 2;
       const mesh = prismMesh({
-        id: `PG_PARKING_COLUMNS_REFERENCE-${index + 1}`,
-        name: `Parking Column Reference ${index + 1}`,
+        id: `PG_PARKING_COLUMNS_REFERENCE-${partId}-${index + 1}`,
+        name: `${part.id} Parking Column Reference ${index + 1}`,
         layer: "PG_PARKING_COLUMNS_REFERENCE",
         materialId: MATERIALS.parkingColumn.id,
         outer: [
@@ -320,35 +327,33 @@ function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
       if (mesh) meshes.push(mesh);
     });
 
-    const accessMeshes: Array<MeshData | null> = [];
-    for (let index = 0; index < parking.layout.entryPath.length - 1; index += 1) {
-      const ribbon = ribbonPolygon(
-        parking.layout.entryPath[index],
-        parking.layout.entryPath[index + 1],
-        0.18
-      );
-      if (!ribbon) continue;
-      accessMeshes.push(
-        prismMesh({
-          id: `parking-access-${index}`,
-          name: "Parking Access Reference",
-          layer: "PG_PARKING_ACCESS_REFERENCE",
-          materialId: MATERIALS.parkingAccess.id,
-          outer: ribbon,
-          bottomY: 0.05,
-          topY: 0.075,
-        })
-      );
-    }
-    const accessMesh = mergeMeshes({
-      id: "PG_PARKING_ACCESS_REFERENCE-01",
-      name: "Parking Access Reference",
-      layer: "PG_PARKING_ACCESS_REFERENCE",
-      materialId: MATERIALS.parkingAccess.id,
-      meshes: accessMeshes,
+    part.entryPaths.forEach((path, pathIndex) => {
+      const accessMeshes: Array<MeshData | null> = [];
+      for (let index = 0; index < path.points.length - 1; index += 1) {
+        const ribbon = ribbonPolygon(path.points[index], path.points[index + 1], 0.18);
+        if (!ribbon) continue;
+        accessMeshes.push(
+          prismMesh({
+            id: `parking-access-${index}`,
+            name: "Parking Access Reference",
+            layer: "PG_PARKING_ACCESS_REFERENCE",
+            materialId: MATERIALS.parkingAccess.id,
+            outer: ribbon,
+            bottomY: 0.05,
+            topY: 0.075,
+          })
+        );
+      }
+      const accessMesh = mergeMeshes({
+        id: `PG_PARKING_ACCESS_REFERENCE-${partId}-${pathIndex + 1}`,
+        name: `${part.id} Parking Access Reference ${path.stallId ?? pathIndex + 1}`,
+        layer: "PG_PARKING_ACCESS_REFERENCE",
+        materialId: MATERIALS.parkingAccess.id,
+        meshes: accessMeshes,
+      });
+      if (accessMesh) meshes.push(accessMesh);
     });
-    if (accessMesh) meshes.push(accessMesh);
-  }
+  });
 
   for (const building of snapshot.context.buildings) {
     const mesh = contextBuildingMesh(building);
@@ -382,7 +387,9 @@ function createMeshes(snapshot: SketchupExportPackageSnapshot): MeshData[] {
     if (roadMesh) meshes.push(roadMesh);
   });
 
-  const parcelPoints = snapshot.planning.parcel.polygon;
+  const parcelPoints = parcelPolygons.filter((polygon) => polygon.outer.length >= 3)
+    .flatMap((polygon) => polygon.outer);
+  if (parcelPoints.length === 0) return meshes;
   const minX = Math.min(...parcelPoints.map((point) => point.x));
   const maxX = Math.max(...parcelPoints.map((point) => point.x));
   const minZ = Math.min(...parcelPoints.map((point) => point.z));

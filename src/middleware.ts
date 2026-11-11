@@ -56,5 +56,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
+  // API handlers authorize before reading bounded bodies. Middleware clones and
+  // waits for the full body in Next 15, which would bypass their read deadline.
+  matcher: ["/((?!api(?:/|$)|_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
 };

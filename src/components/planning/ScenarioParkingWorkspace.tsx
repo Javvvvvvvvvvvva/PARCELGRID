@@ -2,7 +2,10 @@
 
 import { useMemo } from "react";
 import { defaultAssumptions } from "@/lib/finance/scenario";
-import { analyzeFrontage } from "@/lib/geo/road-frontage";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import type { LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
+import { parkingGeometryParts } from "@/lib/planning/parking-geometry-parts";
 import {
   calculateParkingLayout,
   type ParkingLayoutResult,
@@ -20,7 +23,6 @@ import type {
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
-import type { LngLat } from "@/lib/finance/buildable-area";
 
 const STRATEGY_LABEL: Record<ParkingStrategy, string> = {
   none: "계획 없음",
@@ -43,33 +45,6 @@ const ACCESS_MODE_LABEL: Record<ParkingLayoutResult["accessMode"], string> = {
   "direct-frontage": "전면 직접진입형",
   mixed: "혼합형",
 };
-
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length < 2) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function ringCentroid(ring: LngLat[]): LngLat {
-  const points = openRing(ring);
-  if (points.length === 0) return [0, 0];
-  return [
-    points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    points.reduce((sum, point) => sum + point[1], 0) / points.length,
-  ];
-}
-
-function ringToLocalMeters(ring: LngLat[], origin: LngLat): LocalPlanPoint[] {
-  const [originLng, originLat] = origin;
-  const longitudeScale = Math.cos((originLat * Math.PI) / 180);
-  return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - originLng) * 111_000 * longitudeScale,
-    z: -(lat - originLat) * 111_000,
-  }));
-}
 
 function boundsForShapes(shapes: LocalPlanPoint[][]) {
   const points = shapes.flat().filter(
@@ -100,9 +75,10 @@ function svgPoint(
 ) {
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanZ = Math.max(1, bounds.maxZ - bounds.minZ);
+  const scale = Math.min(width / spanX, height / spanZ);
   return {
-    x: ((point.x - bounds.minX) / spanX) * width,
-    y: ((point.z - bounds.minZ) / spanZ) * height,
+    x: (width - spanX * scale) / 2 + (point.x - bounds.minX) * scale,
+    y: (height - spanZ * scale) / 2 + (point.z - bounds.minZ) * scale,
   };
 }
 
@@ -121,161 +97,57 @@ function svgPolygon(
 }
 
 function ParkingPlanSvg({
-  layout,
-  frontEdge,
-  parcelShape,
+  layout, frontEdge, parcelShape, parcelPolygons,
 }: {
   layout: ParkingLayoutResult;
   frontEdge: [LocalPlanPoint, LocalPlanPoint] | null;
   parcelShape: LocalPlanPoint[];
+  parcelPolygons?: LocalParcelPolygon[];
 }) {
-  const width = 700;
-  const height = 360;
+  const width = 700, height = 360;
+  const regions = parcelPolygons === undefined ? [{ outer: parcelShape, holes: [] }] : parcelPolygons;
+  const parts = parkingGeometryParts(layout);
   const bounds = boundsForShapes([
-    parcelShape,
-    layout.targetShape,
-    layout.exclusionShape,
-    layout.aisleShape,
-    layout.coreShape,
-    ...layout.stalls.map((stall) => stall.corners),
-    layout.entryPath,
+    ...regions.flatMap(part => [part.outer, ...part.holes]),
+    ...parts.flatMap(part => [part.targetShape, part.exclusionShape, part.aisleShape, part.coreShape,
+      ...part.stalls.map(stall => stall.corners), ...part.entryPaths.map(path => path.points)]),
     frontEdge ?? [],
   ]);
-
+  const points = (shape: LocalPlanPoint[]) => svgPolygon(shape, bounds, width, height);
+  const stallNumbers = new Map(layout.stalls.map((stall, index) => [stall.id, index + 1]));
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      role="img"
-      aria-label="주차 배치 개략도"
-      style={{ width: "100%", height: "100%", display: "block" }}
-    >
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="주차 배치 개략도"
+      style={{ width: "100%", height: "100%", display: "block" }}>
       <rect width={width} height={height} fill="var(--bg-sunken)" />
-      {parcelShape.length >= 3 && (
-        <polygon
-          points={svgPolygon(parcelShape, bounds, width, height)}
-          fill="rgba(148,163,184,0.12)"
-          stroke="var(--fg-muted)"
-          strokeWidth="2"
-        />
-      )}
-      {layout.source === "piloti" && layout.targetShape.length >= 3 && (
-        <polygon
-          points={svgPolygon(layout.targetShape, bounds, width, height)}
-          fill="rgba(20,184,166,0.1)"
-          stroke="#0f766e"
-          strokeWidth="2"
-          strokeDasharray="6 4"
-        />
-      )}
-      {layout.exclusionShape.length >= 3 && (
-        <polygon
-          points={svgPolygon(layout.exclusionShape, bounds, width, height)}
-          fill="rgba(51,65,85,0.35)"
-          stroke="#334155"
-          strokeWidth="2"
-        />
-      )}
-      {layout.aisleShape.length >= 3 && (
-        <polygon
-          points={svgPolygon(layout.aisleShape, bounds, width, height)}
-          fill="rgba(59,130,246,0.09)"
-          stroke="#60a5fa"
-          strokeWidth="1.5"
-          strokeDasharray="7 5"
-        />
-      )}
-      {layout.coreShape.length >= 3 && (
-        <polygon
-          points={svgPolygon(layout.coreShape, bounds, width, height)}
-          fill="rgba(245,158,11,0.28)"
-          stroke="#d97706"
-          strokeWidth="2"
-        />
-      )}
-      {layout.stalls.map((stall, index) => {
-        const center = svgPoint(stall.center, bounds, width, height);
-        return (
-          <g key={stall.id}>
-            <polygon
-              points={svgPolygon(stall.corners, bounds, width, height)}
-              fill={
-                stall.source === "piloti"
-                  ? "rgba(20,184,166,0.24)"
-                  : "rgba(34,197,94,0.22)"
-              }
-              stroke={stall.source === "piloti" ? "#0f766e" : "#15803d"}
-              strokeWidth="1.6"
-            />
-            <text
-              x={center.x}
-              y={center.y + 4}
-              textAnchor="middle"
-              fontSize="12"
-              fontWeight="700"
-              fill="var(--fg)"
-            >
-              {index + 1}
-            </text>
-          </g>
-        );
-      })}
-      {layout.columns.map((column, index) => {
-        const point = svgPoint(column, bounds, width, height);
-        return (
-          <circle
-            key={`column-${index}`}
-            cx={point.x}
-            cy={point.y}
-            r="4"
-            fill="#475569"
-            stroke="#f8fafc"
-            strokeWidth="1"
-          />
-        );
-      })}
-      {layout.entryPath.length >= 2 && (
-        <g>
-          <line
-            x1={svgPoint(layout.entryPath[0], bounds, width, height).x}
-            y1={svgPoint(layout.entryPath[0], bounds, width, height).y}
-            x2={svgPoint(layout.entryPath[1], bounds, width, height).x}
-            y2={svgPoint(layout.entryPath[1], bounds, width, height).y}
-            stroke="#7c3aed"
-            strokeWidth="3"
-            strokeDasharray="8 5"
-            strokeLinecap="round"
-          />
-          <circle
-            cx={svgPoint(layout.entryPath[1], bounds, width, height).x}
-            cy={svgPoint(layout.entryPath[1], bounds, width, height).y}
-            r="4"
-            fill="#7c3aed"
-          />
-        </g>
-      )}
-      {frontEdge && (
-        <line
-          x1={svgPoint(frontEdge[0], bounds, width, height).x}
-          y1={svgPoint(frontEdge[0], bounds, width, height).y}
-          x2={svgPoint(frontEdge[1], bounds, width, height).x}
-          y2={svgPoint(frontEdge[1], bounds, width, height).y}
-          stroke="#dc2626"
-          strokeWidth="5"
-          strokeLinecap="round"
-        />
-      )}
-      <g transform="translate(14 20)">
-        <rect width="222" height="58" rx="8" fill="rgba(255,255,255,0.88)" />
-        <text x="10" y="18" fontSize="12" fontWeight="700" fill="#0f172a">
-          주차 배치 개략도
-        </text>
-        <text x="10" y="37" fontSize="11" fill="#475569">
-          초록/청록: 주차면 · 파랑: 통로 · 보라: 진입
-        </text>
-        <text x="10" y="52" fontSize="11" fill="#475569">
-          점선 청록: 필로티 · 주황: 코어 · 빨강: 도로
-        </text>
-      </g>
+      {regions.map((part, index) => <path key={index}
+        d={[part.outer, ...part.holes].filter(ring => ring.length >= 3).map(ring => `M ${points(ring).split(" ").join(" L ")} Z`).join(" ")}
+        fillRule="evenodd" fill="rgba(148,163,184,0.12)" stroke="var(--fg-muted)" strokeWidth="2" />)}
+      {parts.map(part => <g key={part.id} data-parking-component={part.id}>
+        {part.source === "piloti" && part.targetShape.length >= 3 && <polygon points={points(part.targetShape)}
+          fill="rgba(20,184,166,0.1)" stroke="#0f766e" strokeWidth="2" strokeDasharray="6 4" />}
+        {part.exclusionShape.length >= 3 && <polygon points={points(part.exclusionShape)}
+          fill="rgba(51,65,85,0.35)" stroke="#334155" strokeWidth="2" />}
+        {part.aisleShape.length >= 3 && <polygon points={points(part.aisleShape)}
+          fill="rgba(59,130,246,0.09)" stroke="#60a5fa" strokeWidth="1.5" strokeDasharray="7 5" />}
+        {part.coreShape.length >= 3 && <polygon points={points(part.coreShape)}
+          fill="rgba(245,158,11,0.28)" stroke="#d97706" strokeWidth="2" />}
+        {part.stalls.map(stall => {
+          const center = svgPoint(stall.center, bounds, width, height);
+          return <g key={stall.id}><polygon points={points(stall.corners)}
+            fill={stall.source === "piloti" ? "rgba(20,184,166,0.24)" : "rgba(34,197,94,0.22)"}
+            stroke={stall.source === "piloti" ? "#0f766e" : "#15803d"} strokeWidth="1.6" />
+            <text x={center.x} y={center.y + 4} textAnchor="middle" fontSize="12" fontWeight="700" fill="var(--fg)">{stallNumbers.get(stall.id)}</text></g>;
+        })}
+        {part.columns.map((column, index) => {
+          const point = svgPoint(column, bounds, width, height);
+          return <circle key={index} cx={point.x} cy={point.y} r="4" fill="#475569" stroke="#f8fafc" strokeWidth="1" />;
+        })}
+        {part.entryPaths.map((path, index) => <polyline key={path.stallId ?? index} points={points(path.points)}
+          fill="none" stroke="#7c3aed" strokeWidth="3" strokeDasharray="8 5" strokeLinecap="round" />)}
+        {part.frontage && <polyline points={points(part.frontage.edge)} fill="none" stroke="#dc2626" strokeWidth="5" strokeLinecap="round" />}
+      </g>)}
+      {parts.every(part => !part.frontage) && frontEdge && <polyline points={points(frontEdge)}
+        fill="none" stroke="#dc2626" strokeWidth="5" strokeLinecap="round" />}
     </svg>
   );
 }
@@ -354,6 +226,13 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
     if (!parcel || !scenario) return null;
     return calculatePlanningScenario(scenario, {
       parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus:
+          parcel.inputProvenance?.zoning === "vworld-land-use"
+            ? "public-observation"
+            : "user-entered",
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
@@ -369,17 +248,21 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
   }, [parcel, scenario, assumptions, data?.meta.lastSyncedAt]);
 
   const preview = useMemo(() => {
-    if (!parcel?.boundary || parcel.boundary.length < 3 || !scenario || !calculation) {
+    if (!parcel || !scenario || !calculation) {
       return null;
     }
-    const origin = ringCentroid(parcel.boundary);
-    const parcelShape = ringToLocalMeters(parcel.boundary, origin);
+    const region = resolvePlanningParcel(parcel);
+    if (!region.available) return null;
+    const parcelShape = region.simple ? region.polygons[0].outer : [];
     const spatial = calculatePlanningSpatialValidation(
       parcel.boundary,
       parcel.zoning ?? "",
       scenario,
       parcel.roads,
-      parcel.setback
+      parcel.setback,
+      calculation.sunlight,
+      calculation.metrics.roofAllowanceM,
+      parcel.boundaryPolygons
     );
     const firstMass = spatial?.model.aboveGroundFloors.find(
       (mass) => mass.level === 1
@@ -392,21 +275,12 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
           (zone.useType === "piloti" || zone.useType === "parking")
       )
     );
-    const frontage =
-      parcel.roads && parcel.roads.length > 0
-        ? analyzeFrontage(parcel.boundary, parcel.roads)
-        : null;
-    const frontEdge =
-      frontage &&
-      frontage.frontIndex >= 0 &&
-      parcelShape.length > frontage.frontIndex
-        ? ([
-            parcelShape[frontage.frontIndex],
-            parcelShape[(frontage.frontIndex + 1) % parcelShape.length],
-          ] as [LocalPlanPoint, LocalPlanPoint])
-        : null;
+    const frontage = analyzeParcelFrontage(region.source, parcel.roads ?? [], region.origin);
+    const frontEdge = frontage?.frontages[0]?.edge ?? null;
     const layoutInput = {
       parcelShape,
+      parcelPolygons: region.polygons,
+      frontages: frontage?.frontages ?? [],
       buildingShape: firstMass?.shape ?? [],
       pilotiShape: firstMass?.shape ?? [],
       pilotiEnabled,
@@ -451,7 +325,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
       },
       null
     );
-    return { layout, frontEdge, parcelShape, pilotiEnabled, recommendation };
+    return { layout, frontEdge, parcelShape, parcelPolygons: region.polygons, pilotiEnabled, recommendation };
   }, [parcel, scenario, calculation]);
 
   if (!parcel || !scenario || !calculation || !preview) return null;
@@ -467,7 +341,8 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
     0,
     calculation.parking.requiredCars - layout.capacityCars
   );
-  const requiredCarsConfirmed = calculation.parking.requiredCars > 0;
+  const requiredCarsConfirmed = calculation.parking.decisionGrade;
+  const primaryParkingSource = calculation.parking.rule.sources[0];
   const status = !layout.supportedStrategy || !requiredCarsConfirmed
     ? "review"
     : shortfall > 0
@@ -553,7 +428,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
           <div style={{ display: "grid", gap: 12 }}>
             <div className="parking-metrics">
               <Metric
-                label={requiredCarsConfirmed ? "예상 의무주차" : "예상 의무주차 · 미확정"}
+                label={requiredCarsConfirmed ? "확인 의무주차" : "예비 의무주차"}
                 value={`${calculation.parking.requiredCars}대`}
               />
               <Metric
@@ -590,6 +465,45 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
 
             <div
               style={{
+                paddingTop: 10,
+                borderTop: "1px solid var(--border-faint)",
+                fontSize: 10.5,
+                lineHeight: 1.55,
+                color: "var(--fg-muted)",
+              }}
+            >
+              <strong style={{ color: "var(--fg)" }}>
+                {calculation.parking.rule.jurisdictionName} · 시행{" "}
+                {calculation.parking.rule.effectiveFrom}
+              </strong>
+              <div style={{ marginTop: 2 }}>
+                {calculation.parking.rule.id} ·{" "}
+                {calculation.parking.rule.status === "source-backed"
+                  ? "원문 규칙"
+                  : "국가 참고값"}
+                {primaryParkingSource && (
+                  <>
+                    {" · "}
+                    <a
+                      href={primaryParkingSource.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "var(--accent)", fontWeight: 700 }}
+                    >
+                      원문 열기
+                    </a>
+                  </>
+                )}
+              </div>
+              {calculation.parking.warnings.length > 0 && (
+                <div style={{ marginTop: 3, color: "var(--warn-fg)" }}>
+                  {calculation.parking.warnings.join(" · ")}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
                 minHeight: 360,
                 border: "1px solid var(--border)",
                 borderRadius: 11,
@@ -600,6 +514,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                 layout={layout}
                 frontEdge={preview.frontEdge}
                 parcelShape={preview.parcelShape}
+                parcelPolygons={preview.parcelPolygons}
               />
             </div>
 
@@ -614,8 +529,8 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
                   lineHeight: 1.5,
                 }}
               >
-                현재 용도·세대·면적 입력으로 의무대수가 0대로 계산됐습니다. 이는 법정
-                주차 면제를 확정한 값이 아니므로 용도별 설치기준을 다시 확인하세요.
+                {calculation.parking.warnings.join(" · ") ||
+                  "관할 원문 또는 주거 전용면적이 확인되지 않아 예비 주차대수로 표시합니다."}
               </div>
             )}
 
@@ -823,7 +738,7 @@ export function ScenarioParkingWorkspace({ projectId }: { projectId: string }) {
               />
               <InfoRow label="원시 후보" value={`${layout.rawCandidateCars}대`} />
               <InfoRow label="코어" value={`${num(scenario.parking.coreAreaSqm ?? 10, 1)}㎡`} />
-              <InfoRow label="기둥 표시" value={`${layout.columns.length}개`} />
+              <InfoRow label="기둥 표시" value={`${parkingGeometryParts(layout).reduce((sum, part) => sum + part.columns.length, 0)}개`} />
             </div>
 
             {layout.warnings.length > 0 && (

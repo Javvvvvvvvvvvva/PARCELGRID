@@ -1,5 +1,7 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 /**
  * Kakao 주소 자동완성 입력 — project/new 주소 검색용.
  * 2글자 이상 · 300ms 디바운스 · 키보드 ↑↓ Enter · 클릭 선택.

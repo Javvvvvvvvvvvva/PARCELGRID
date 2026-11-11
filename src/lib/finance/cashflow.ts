@@ -35,8 +35,7 @@ export function generatePFSchedule(input: ScheduleInput): PFSchedule {
   const ledger = buildProjectLedger({
     parcel,
     scenario,
-    revenueSale: result.revenueSale,
-    revenueExit: result.revenueLease + result.revenueRetail,
+    revenueByPool: result.revenueByPool,
     hardCost: result.hardCost,
     softCost: result.softCost,
     contingency: result.contingency,
@@ -112,6 +111,8 @@ function phaseLabel(
 
 function addMonths(date: Date, months: number): Date {
   const next = new Date(date);
+  // Ledger periods are calendar months; the 31st must not overflow a shorter month.
+  next.setUTCDate(1);
   next.setUTCMonth(next.getUTCMonth() + months);
   return next;
 }

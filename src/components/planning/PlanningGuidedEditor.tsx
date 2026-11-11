@@ -18,6 +18,7 @@ import {
   updateFloorProgram,
   updateFloorZone,
 } from "@/lib/planning/floor-program-editor";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 import type {
   FloorUseType,
   PlanningParking,
@@ -25,6 +26,7 @@ import type {
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
 import { num } from "@/lib/utils/format";
+import { dwellingProgramSummary, redistributeDwellingFloor } from "@/lib/planning/dwelling-program";
 
 type GuidedPatch = Partial<
   Pick<
@@ -156,12 +158,7 @@ export function PlanningGuidedEditor({
   const selectedFloor =
     scenario.floorPrograms.find((floor) => floor.id === selectedFloorId) ??
     null;
-  const failCount = calculation.checks.filter(
-    (check) => check.status === "fail"
-  ).length;
-  const reviewCount = calculation.checks.filter(
-    (check) => check.status === "review" || check.status === "unknown"
-  ).length;
+  const readiness = assessRepresentativeCheckReadiness(calculation.checks);
 
   const applyPatch = (patch: GuidedPatch, message: string) => {
     setLastSnapshot(cloneSnapshot(scenario));
@@ -208,6 +205,17 @@ export function PlanningGuidedEditor({
 
   const changeUnits = (delta: number) => {
     if (!selectedFloor) return;
+    if (scenario.dwellingProgram) {
+      const units = dwellingProgramSummary([selectedFloor]).unitCount + delta;
+      const next = redistributeDwellingFloor(selectedFloor, units, scenario.dwellingProgram);
+      if (!next) {
+        setActionMessage("세대별 18㎡ 탐색 하한·공용부 여유 또는 단일 주거 매각층 조건을 만족하지 않습니다. 실내 평면은 별도 검토가 필요합니다.");
+        return;
+      }
+      applyPatch({ floorPrograms: scenario.floorPrograms.map((floor) => floor.id === next.id ? next : floor) },
+        `${selectedFloor.label} ${units}세대의 전용·공용 면적을 재분배했습니다. 주차·비용·매출을 다시 확인하세요.`);
+      return;
+    }
     const target = selectedFloor.zones.find((zone) =>
       ["residential", "retail", "office"].includes(zone.useType)
     );
@@ -275,10 +283,14 @@ export function PlanningGuidedEditor({
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <span className="ui-tag">
-            {failCount > 0 ? `미충족 ${failCount}` : "필수항목 통과"}
+            {readiness.blockingFailureCount > 0
+              ? `대표안 미충족 ${readiness.blockingFailureCount}`
+              : readiness.blockingVerificationCount > 0
+                ? `확정 전 핵심 검증 ${readiness.blockingVerificationCount}`
+                : "대표안 확정 가능"}
           </span>
-          {reviewCount > 0 && (
-            <span className="ui-tag">확인 필요 {reviewCount}</span>
+          {readiness.advisoryCount > 0 && (
+            <span className="ui-tag">참고 확인 {readiness.advisoryCount}</span>
           )}
           <button
             type="button"

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   analyzePlanningRecommendations,
   calculateAcquisitionCapacity,
@@ -26,16 +26,23 @@ const assumptions: PlanningEconomicsAssumptions = {
   version: "recommendation-analysis-v1",
   constructionCostPerSqmWon: 2_000_000,
   basementCostMultiplier: 1.25,
-  softCostRatePct: 10,
-  contingencyRatePct: 5,
-  financingCostRatePct: 2,
+    softCostRatePct: 10,
+    contingencyRatePct: 5,
+    acquisitionTaxManwon: 0,
+    acquisitionOtherCostManwon: 0,
+    tenantRelocationCostManwon: 0,
+    financingCostRatePct: 2,
+    pfUpfrontFeeRatePct: 0,
+    trustFeeManwon: 0,
+    ltcTargetPct: 70,
   residentialSalePricePerSqmWon: 5_500_000,
   commercialSalePricePerSqmWon: 5_000_000,
   residentialRentPerSqmMonthWon: 25_000,
   retailRentPerSqmMonthWon: 50_000,
   officeRentPerSqmMonthWon: 40_000,
-  vacancyRatePct: 5,
-  capRatePct: 5,
+    vacancyRatePct: 5,
+    operatingExpenseRatePct: 20,
+    capRatePct: 5,
 };
 
 function input(acquisitionCostManwon = 20_000) {
@@ -74,8 +81,25 @@ function input(acquisitionCostManwon = 20_000) {
 }
 
 describe("Stage 2 recommendation result analysis", () => {
+  let rawFixture: ReturnType<typeof generatePlanningRecommendations>;
+  let positiveFixture: ReturnType<typeof generatePlanningRecommendationsV2>;
+  let negativeFixture: ReturnType<typeof generatePlanningRecommendationsV2>;
+  beforeAll(() => {
+    // These assertions cover completed-result semantics. Deadline behavior has
+    // separate controlled-clock tests and real browser/performance evidence.
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      rawFixture = generatePlanningRecommendations(input());
+      positiveFixture = generatePlanningRecommendationsV2(input());
+      negativeFixture = generatePlanningRecommendationsV2(input(2_000_000));
+      for (const result of [rawFixture, positiveFixture, negativeFixture]) expect(result.searchStatus).toBe("complete");
+    } finally { clock.mockRestore(); }
+  }, 60_000);
+  const rawResult = () => structuredClone(rawFixture);
+  const positiveResult = () => structuredClone(positiveFixture);
+
   it("calculates the break-even land price and current-price headroom", () => {
-    const result = generatePlanningRecommendationsV2(input());
+    const result = positiveResult();
     const preview = result.profitOptimal?.economicsPreview;
     expect(preview).toBeDefined();
     if (!preview) return;
@@ -98,7 +122,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("uses a stable physical-plan key that ignores scenario and zone IDs", () => {
-    const result = generatePlanningRecommendations(input());
+    const result = rawResult();
     const scenario = result.architecturalFeasibility;
     expect(scenario).not.toBeNull();
     if (!scenario) return;
@@ -122,7 +146,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("consolidates one physical candidate selected by both ranking axes", () => {
-    const raw = generatePlanningRecommendations(input());
+    const raw = rawResult();
     expect(raw.profitOptimal).not.toBeNull();
     if (!raw.profitOptimal) return;
 
@@ -145,7 +169,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("labels the best negative result as loss minimization instead of profit", () => {
-    const result = generatePlanningRecommendationsV2(input(2_000_000));
+    const result = structuredClone(negativeFixture);
 
     expect(result.eligibleCandidates).toBeGreaterThan(0);
     expect(result.profitOptimal).not.toBeNull();
@@ -157,7 +181,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("counts rejected candidates by transparent, possibly overlapping causes", () => {
-    const raw = generatePlanningRecommendations(input());
+    const raw = rawResult();
     const summary = summarizeRecommendationRejections(raw.evaluations);
 
     expect(summary.rejectedCandidates).toBe(
@@ -181,7 +205,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("never exposes a floor-envelope failure as the 3D legal ceiling reference", () => {
-    const raw = generatePlanningRecommendations(input());
+    const raw = rawResult();
     const result = analyzePlanningRecommendations(
       raw,
       input().parcel.maxFARPct
@@ -227,8 +251,8 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("keeps the balanced legal reference within 2% of the legal FAR cap", () => {
-    const raw = generatePlanningRecommendations(input());
-    const result = generatePlanningRecommendationsV2(input());
+    const raw = rawResult();
+    const result = positiveResult();
     const valid = raw.evaluations.filter(isLegalGeometryCandidate);
     const expectedFar = Math.max(
       ...valid.map(
@@ -249,7 +273,7 @@ describe("Stage 2 recommendation result analysis", () => {
     );
     expect(
       result.legalCeilingReference?.recommendation?.warnings.join(" ")
-    ).toContain("산술 법정 상한 자체가 아니라");
+    ).toContain("입력 산술 상한 자체가 아니라");
 
     const source = valid.find(
       (candidate) =>
@@ -314,7 +338,7 @@ describe("Stage 2 recommendation result analysis", () => {
   });
 
   it("recognizes persisted safe and profit records with different IDs as one plan", () => {
-    const raw = generatePlanningRecommendations(input());
+    const raw = rawResult();
     const safe = raw.architecturalFeasibility;
     expect(safe).not.toBeNull();
     if (!safe) return;

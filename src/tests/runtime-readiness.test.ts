@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildRuntimeReadiness } from "@/lib/runtime/readiness";
+import { localDevelopmentPrincipal } from "@/lib/site-access";
+import * as authorization from "@/lib/auth/request";
 
 describe("local runtime readiness", () => {
+  it("reports only configuration even with synthetic keys and never probes providers", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const result = buildRuntimeReadiness({ MOLIT_SERVICE_KEY: "synthetic-key", DATABASE_URL: "synthetic-db", NODE_ENV: "test" });
+      expect(result).toMatchObject({ kind: "configuration-only", liveConnectivityVerified: false });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally { fetchSpy.mockRestore(); }
+  });
   it("opens the local seed workflow while identifying missing public data keys", () => {
     const result = buildRuntimeReadiness(
       { NODE_ENV: "development" },
@@ -18,6 +28,9 @@ describe("local runtime readiness", () => {
     expect(result.checks.find((check) => check.id === "source-documents")?.status).toBe(
       "ready",
     );
+    expect(
+      result.checks.find((check) => check.id === "project-workspaces")?.status,
+    ).toBe("ready");
     expect(result.checks.find((check) => check.id === "vworld")?.status).toBe(
       "optional",
     );
@@ -52,7 +65,6 @@ describe("local runtime readiness", () => {
       NODE_ENV: "production",
       VWORLD_API_KEY: "vworld-secret-value",
       SITE_ACCESS_PASSWORD: "short",
-      SOURCE_DOCUMENT_UPLOAD_KEY: "also-short",
       OPENAI_API_KEY: "openai-secret-value",
       OPENAI_IMAGE_MODEL: "gpt-image-2",
     };
@@ -68,11 +80,35 @@ describe("local runtime readiness", () => {
     expect(
       result.checks.find((check) => check.id === "source-documents")?.status,
     ).toBe("review");
+    expect(
+      result.checks.find((check) => check.id === "project-workspaces")?.status,
+    ).toBe("review");
     expect(serialized).not.toContain("vworld-secret-value");
     expect(
       result.checks.find((check) => check.id === "openai-images")?.status,
     ).toBe("ready");
-    expect(serialized).not.toContain("also-short");
     expect(serialized).not.toContain("openai-secret-value");
   });
+});
+
+it("blocks the production deployment check without modifying local file fallback", async () => {
+ const env={NODE_ENV:"production" as const};
+ const result=buildRuntimeReadiness(env);
+ expect(result.deploymentGate.status).toBe("blocked");
+ expect(result.deploymentGate.blockers).toEqual(["production-database-required"]);
+ expect(result.deploymentGate.message).toContain("파일 fallback은 계속 동작");
+ expect(buildRuntimeReadiness({...env,DATABASE_URL:"synthetic"}).deploymentGate.status).toBe("runtime-validation-required");
+ expect(buildRuntimeReadiness({NODE_ENV:"development"}).deploymentGate.status).toBe("local-only");
+ const route=await import('@/app/api/system/readiness/route');
+ vi.stubEnv('NODE_ENV','production');vi.stubEnv('DATABASE_URL','');
+ const authorize=vi.spyOn(authorization,'requireApiCapability').mockResolvedValue({
+   ok:true, principal:localDevelopmentPrincipal(),
+ });
+ try {
+   const request=new Request('http://localhost/api/system/readiness');
+   const response=await route.GET(request);
+   expect(response.status).toBe(503);
+   expect(await response.json()).toMatchObject({kind:'configuration-only',deploymentGate:{status:'blocked'}});
+   expect(authorize).toHaveBeenCalledWith(request,'project.read');
+ } finally {authorize.mockRestore();vi.unstubAllEnvs();}
 });

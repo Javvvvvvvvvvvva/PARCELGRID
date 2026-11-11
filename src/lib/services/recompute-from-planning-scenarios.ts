@@ -1,5 +1,12 @@
 import { defaultAssumptions } from "@/lib/finance/scenario";
+import { transactionEvidenceComplete } from "@/lib/integrations/molit-evidence";
 import { estimateSalePriceFromComps } from "@/lib/finance/sale-price-from-comps";
+import {
+  applyRevenuePricingSourceRecords,
+  validateFinancialSource,
+  type FinancialSourceMap,
+} from "@/lib/finance/source-data-gate";
+import { revenuePoolForPriceSourceField } from "@/lib/finance/revenue-contract";
 import type { AssumptionSet, Parcel, Scenario } from "@/lib/finance/types";
 import {
   calculatePlanningScenario,
@@ -12,6 +19,32 @@ import {
   type ComputeOptions,
   type ProjectComputed,
 } from "@/lib/services/compute-project";
+
+export interface RecomputePlanningOptions extends ComputeOptions {
+  /** 잠긴 대표 Geometry와 금융 면적 계약을 연결한다. */
+  geometryHashes?: Record<string, string | undefined>;
+  financialSources?: FinancialSourceMap;
+}
+
+function applyCurrentFinancialSources(
+  parcel: Parcel,
+  assumptions: AssumptionSet,
+  sources: FinancialSourceMap | undefined,
+): { parcel: Parcel; assumptions: AssumptionSet } {
+  if (!sources) return { parcel, assumptions };
+  const nextParcel = { ...parcel };
+  const nextAssumptions = { ...assumptions };
+  for (const [field, record] of Object.entries(sources)) {
+    if (!record || !validateFinancialSource(record).valid) continue;
+    if (field === "acquisitionPrice") {
+      nextParcel.acquiredPrice = record.value;
+      continue;
+    }
+    if (revenuePoolForPriceSourceField(field)) continue;
+    nextAssumptions[field as keyof AssumptionSet] = record.value;
+  }
+  return { parcel: nextParcel, assumptions: nextAssumptions };
+}
 
 function cloneAssumptions(previous: ProjectComputed | null): AssumptionSet {
   const source =
@@ -46,32 +79,62 @@ export function recomputeFromPlanningScenarios(
   planningScenarios: PlanningScenario[],
   representativeId: string,
   previous: ProjectComputed | null,
-  options: ComputeOptions = {}
+  options: RecomputePlanningOptions = {}
 ): ProjectComputed | null {
   const candidates = eligibleScenarios(planningScenarios, representativeId);
   if (!candidates.some((scenario) => scenario.id === representativeId)) return null;
 
-  const assumptions = cloneAssumptions(previous);
-  const saleEstimate = estimateSalePriceFromComps(previous?.comps ?? []);
+  const baseAssumptions = cloneAssumptions(previous);
+  const saleEstimate = estimateSalePriceFromComps(transactionEvidenceComplete(previous?.transactionEvidence?.filter(item => item.type === "house")) ? previous?.comps ?? [] : []);
   if (saleEstimate) {
-    assumptions.salePricePerSqM = saleEstimate.salePricePerSqM;
+    baseAssumptions.salePricePerSqM = saleEstimate.salePricePerSqM;
   }
+  const sourced = applyCurrentFinancialSources(
+    parcel,
+    baseAssumptions,
+    options.financialSources,
+  );
+  const effectiveParcel = sourced.parcel;
+  const assumptions = sourced.assumptions;
 
   const planningAssumptions = planningEconomicsAssumptionsFromLegacy(
     assumptions,
     `stage2-representative-${representativeId}`
   );
+  if (planningAssumptions.revenuePricing) {
+    planningAssumptions.revenuePricing = applyRevenuePricingSourceRecords(
+      planningAssumptions.revenuePricing,
+      options.financialSources,
+    );
+  }
   const calculationContext = {
     parcel: {
-      lotAreaSqm: parcel.lotArea,
-      maxFARPct: parcel.maxFAR,
-      maxBCRPct: parcel.maxBCR,
-      heightLimitM: parcel.heightLimit ?? 0,
-      acquisitionCostManwon: parcel.acquiredPrice,
-      demolitionCostManwon: parcel.demolitionCost ?? 0,
+      address: effectiveParcel.address,
+      zoning: effectiveParcel.zoning,
+      zoningStatus:
+        effectiveParcel.inputProvenance?.zoning === "vworld-land-use"
+          ? ("public-observation" as const)
+          : ("user-entered" as const),
+      sunlightRuleAsOf: previous?.meta.lastSyncedAt?.slice(0, 10),
+      lotAreaSqm: effectiveParcel.lotArea,
+      maxFARPct: effectiveParcel.maxFAR,
+      maxBCRPct: effectiveParcel.maxBCR,
+      heightLimitM: effectiveParcel.heightLimit ?? 0,
+      regulatoryConstraints: effectiveParcel.regulatoryConstraints,
+      roofAllowanceM: 1.4,
+      acquisitionCostManwon: effectiveParcel.acquiredPrice,
+      demolitionCostManwon: effectiveParcel.demolitionCost ?? 0,
     },
     assumptions: planningAssumptions,
     calculatedAt: previous?.meta.lastSyncedAt,
+  };
+  const { geometryHashes } = options;
+  const computeOptions: ComputeOptions = {
+    startDate: options.startDate,
+    recommendedId: options.recommendedId,
+    transactions: options.transactions,
+    parcelDong: options.parcelDong,
+    calculateMaxAcquisition: options.calculateMaxAcquisition,
   };
 
   const financeScenarios: Scenario[] = candidates.map((planningScenario) => {
@@ -89,21 +152,26 @@ export function recomputeFromPlanningScenarios(
         planningScenario.id === representativeId
           ? "대표 계획안"
           : "저장 계획안",
-      program: planningScenarioToBuildingProgram(planningScenario, calculation),
+      program: planningScenarioToBuildingProgram(planningScenario, calculation, {
+        geometryHash: geometryHashes?.[planningScenario.id],
+      }),
       assumptions: scenarioAssumptions,
+      revenuePricing: calculation.revenueProjection.pricing,
     };
   });
 
-  const computed = computeProject(parcel, financeScenarios, {
+  const computed = computeProject(effectiveParcel, financeScenarios, {
     calculateMaxAcquisition: true,
-    ...options,
+    ...computeOptions,
     recommendedId: representativeId,
   });
 
   return {
     ...computed,
     comps: previous?.comps ?? [],
-    saleEstimate: saleEstimate ?? previous?.saleEstimate,
+    transactionEvidence: previous?.transactionEvidence,
+    dwellingMarket: previous?.dwellingMarket,
+    saleEstimate: saleEstimate ?? undefined,
     // 구형 Envelope 권장/최대 비교는 새 PlanningScenario 대표안과 기준이 다르다.
     scenarioComparison: undefined,
   };

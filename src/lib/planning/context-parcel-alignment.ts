@@ -1,31 +1,26 @@
-import {
-  area as turfArea,
-  featureCollection,
-  intersect,
-  polygon as turfPolygon,
-} from "@turf/turf";
 import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
 import type {
   ContextGeometryBuilding,
   ContextGeometrySnapshot,
 } from "@/lib/planning/sketchup-export-package";
-import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
+import { localParcelPolygons, type LocalParcelPolygon } from "@/lib/geo/parcel-topology";
+import { localParcelArea, localParcelCoveredArea, localParcelIntersectionArea, validateLocalParcelTopology } from "@/lib/geo/parcel-topology-geometry";
 
 export const CONTEXT_PARCEL_ALIGNMENT_VERSION =
-  "context-parcel-alignment-v1" as const;
+  "context-parcel-alignment-v2" as const;
 export const CONTEXT_PARCEL_ALIGNED_MIN_RATIO = 0.85;
 export const CONTEXT_PARCEL_REVIEW_MIN_RATIO = 0.6;
 
-export type ContextParcelAlignmentStatus = "aligned" | "review" | "mismatch";
+export type ContextParcelAlignmentStatus = "aligned" | "review" | "mismatch" | "unavailable";
 
 export interface ContextBuildingParcelAlignment {
   buildingId: string;
   buildingName: string;
   status: ContextParcelAlignmentStatus;
-  coverageRatio: number;
-  coveragePct: number;
+  coverageRatio: number | null;
+  coveragePct: number | null;
   bestParcelPnu: string | null;
-  bestParcelCoverageRatio: number;
+  bestParcelCoverageRatio: number | null;
 }
 
 export interface ContextParcelAlignmentSnapshot {
@@ -38,14 +33,15 @@ export interface ContextParcelAlignmentSnapshot {
     alignedBuildings: number;
     reviewBuildings: number;
     mismatchBuildings: number;
-    averageCoveragePct: number;
+    unavailableBuildings: number;
+    averageCoveragePct: number | null;
   };
   sourceNotes: string[];
 }
 
 interface ParcelCandidate {
   pnu: string;
-  polygon: LocalPlanPoint[];
+  polygons: LocalParcelPolygon[];
 }
 
 function round(value: number, digits = 6): number {
@@ -53,90 +49,32 @@ function round(value: number, digits = 6): number {
   return Math.round(value * factor) / factor;
 }
 
-function openRing(points: LocalPlanPoint[]): LocalPlanPoint[] {
-  if (points.length <= 1) return points;
-  const first = points[0];
-  const last = points[points.length - 1];
-  return first.x === last.x && first.z === last.z
-    ? points.slice(0, -1)
-    : points;
-}
-
-/**
- * Turf의 교차 연산을 안정적으로 사용하기 위해 로컬 meter를 작은 가상 경위도 값으로
- * 축척한다. 모든 도형에 같은 축척을 적용하므로 면적 비율은 유지된다.
- */
-function pseudoLngLatRing(points: LocalPlanPoint[]): [number, number][] {
-  const ring = openRing(points);
-  if (ring.length < 3) return [];
-  const scaled = ring.map(
-    (point) => [point.x / 111_000, -point.z / 111_000] as [number, number]
-  );
-  return [...scaled, scaled[0]];
-}
-
-function parcelFeature(parcel: ParcelCandidate) {
-  const ring = pseudoLngLatRing(parcel.polygon);
-  return ring.length >= 4 ? turfPolygon([ring], { pnu: parcel.pnu }) : null;
-}
-
-function buildingFeatures(building: ContextGeometryBuilding) {
-  return building.polygons.flatMap((part) => {
-    const outer = pseudoLngLatRing(part.outer);
-    if (outer.length < 4) return [];
-    const holes = part.holes
-      .map(pseudoLngLatRing)
-      .filter((ring) => ring.length >= 4);
-    try {
-      return [turfPolygon([outer, ...holes], { buildingId: building.id })];
-    } catch {
-      return [];
-    }
-  });
-}
-
-function overlapAreaSqm(
-  buildingFeature: ReturnType<typeof turfPolygon>,
-  parcel: ReturnType<typeof turfPolygon>
-): number {
-  try {
-    const overlap = intersect(featureCollection([buildingFeature, parcel]));
-    return overlap ? turfArea(overlap) : 0;
-  } catch {
-    return 0;
-  }
+function unavailableBuilding(building: ContextGeometryBuilding): ContextBuildingParcelAlignment {
+  return { buildingId: building.id, buildingName: building.name,
+    status: "unavailable", coverageRatio: null, coveragePct: null, bestParcelPnu: null, bestParcelCoverageRatio: null };
 }
 
 function assessBuilding(
   building: ContextGeometryBuilding,
-  parcels: ParcelCandidate[]
+  parcels: ParcelCandidate[],
+  checkDeadline: () => void,
 ): ContextBuildingParcelAlignment {
-  const features = buildingFeatures(building);
-  const totalArea = features.reduce((sum, feature) => sum + turfArea(feature), 0);
-  if (totalArea <= 0 || parcels.length === 0) {
-    return {
-      buildingId: building.id,
-      buildingName: building.name,
-      status: "mismatch",
-      coverageRatio: 0,
-      coveragePct: 0,
-      bestParcelPnu: null,
-      bestParcelCoverageRatio: 0,
-    };
-  }
+  checkDeadline();
+  const valid = validateLocalParcelTopology(building.polygons, checkDeadline);
+  checkDeadline();
+  if (!valid || !parcels.length) return unavailableBuilding(building);
+  const totalArea = localParcelArea(building.polygons);
 
-  let coveredArea = 0;
   let bestParcelPnu: string | null = null;
   let bestParcelArea = 0;
 
+  checkDeadline();
+  const coveredArea = localParcelCoveredArea(building.polygons, parcels.map(parcel => parcel.polygons));
+  checkDeadline();
   for (const candidate of parcels) {
-    const parcel = parcelFeature(candidate);
-    if (!parcel) continue;
-    const parcelOverlap = features.reduce(
-      (sum, feature) => sum + overlapAreaSqm(feature, parcel),
-      0
-    );
-    coveredArea += parcelOverlap;
+    checkDeadline();
+    const parcelOverlap = localParcelIntersectionArea(building.polygons, candidate.polygons);
+    checkDeadline();
     if (parcelOverlap > bestParcelArea) {
       bestParcelArea = parcelOverlap;
       bestParcelPnu = candidate.pnu;
@@ -171,19 +109,38 @@ export function buildContextParcelAlignment(input: {
   cadastral: CadastralContextSnapshot;
   generatedAt?: string;
 }): ContextParcelAlignmentSnapshot {
+  const deadline = performance.now() + 2_000;
+  let timedOut = false;
+  const checkDeadline = () => {
+    if (timedOut || performance.now() >= deadline) {
+      timedOut = true;
+      throw new DOMException("Context parcel alignment deadline exceeded", "TimeoutError");
+    }
+  };
   const parcels: ParcelCandidate[] = [
     {
       pnu: input.cadastral.targetParcel.pnu,
-      polygon: input.cadastral.targetParcel.polygon,
+      polygons: [{ outer: input.cadastral.targetParcel.polygon, holes: [] }],
     },
     ...input.cadastral.adjacentParcels.map((parcel) => ({
       pnu: parcel.pnu,
-      polygon: parcel.polygon,
+      polygons: localParcelPolygons(parcel),
     })),
   ];
-  const buildings = input.context.buildings.map((building) =>
-    assessBuilding(building, parcels)
-  );
+  let contextValid = input.cadastral.validation.usable;
+  try {
+    contextValid = contextValid && parcels.every(parcel => {
+      checkDeadline();
+      const valid = validateLocalParcelTopology(parcel.polygons, checkDeadline);
+      checkDeadline();
+      return valid;
+    });
+  } catch { contextValid = false; }
+  const buildings = input.context.buildings.map(building => {
+    if (!contextValid || timedOut) return unavailableBuilding(building);
+    try { return assessBuilding(building, parcels, checkDeadline); }
+    catch { return unavailableBuilding(building); }
+  });
   const alignedBuildings = buildings.filter(
     (building) => building.status === "aligned"
   ).length;
@@ -193,11 +150,9 @@ export function buildContextParcelAlignment(input: {
   const mismatchBuildings = buildings.filter(
     (building) => building.status === "mismatch"
   ).length;
-  const averageCoveragePct =
-    buildings.length > 0
-      ? buildings.reduce((sum, building) => sum + building.coveragePct, 0) /
-        buildings.length
-      : 0;
+  const unavailableBuildings = buildings.filter(building => building.status === "unavailable").length;
+  const measured = buildings.filter(building => building.coveragePct !== null);
+  const averageCoveragePct = measured.length ? measured.reduce((sum, building) => sum + building.coveragePct!, 0) / measured.length : null;
 
   return {
     version: CONTEXT_PARCEL_ALIGNMENT_VERSION,
@@ -209,7 +164,8 @@ export function buildContextParcelAlignment(input: {
       alignedBuildings,
       reviewBuildings,
       mismatchBuildings,
-      averageCoveragePct: round(averageCoveragePct, 1),
+      unavailableBuildings,
+      averageCoveragePct: averageCoveragePct === null ? null : round(averageCoveragePct, 1),
     },
     sourceNotes: [
       "주변 건물 외곽과 대상·인접 필지 경계를 동일한 로컬 meter 좌표에서 면적 교차로 비교합니다.",

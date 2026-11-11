@@ -23,6 +23,7 @@ export interface HouseCompLike {
   address?: string;
   date?: string;
   priceWon?: number;
+  cancellationStatus?: "not-reported" | "cancelled" | "unknown";
 }
 
 export interface ComparableCase {
@@ -89,7 +90,7 @@ export function estimateSalePriceFromComps(
   currentYear: number = new Date().getFullYear()
 ): SalePriceEstimate | null {
   const all = comps.filter(
-    (c) => c.type === "단독다가구" && c.pricePerPyeong > 0
+    (c) => c.type === "단독다가구" && c.pricePerPyeong > 0 && c.cancellationStatus !== "cancelled"
   );
   if (all.length < MIN_CASES) return null;
 

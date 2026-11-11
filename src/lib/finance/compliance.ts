@@ -1,33 +1,38 @@
 /**
- * Regulatory compliance engine.
+ * Preliminary regulatory risk summary, not a legal compliance decision.
  *
  * Runs a parcel + program combination against the Korean building/zoning
  * code checks that matter for feasibility:
  *
  *   GFA-01  Floor area ratio (용적률) cap
  *   GFA-02  Building coverage ratio (건폐율) cap
- *   GFA-03  Height limit (고도 제한)
+ *   GFA-03  Explicit floor-count input (height and permit review are separate)
  *   SUN-02  Sun-shadow setback (일조권 사선제한)
  *   PRK-04  Parking requirements (주차 대수)
- *   CUL-01  Cultural heritage buffer (문화재 보호구역)
- *   ENV-03  Environmental impact assessment (환경영향평가) threshold
- *   FIR-01  Fire egress / 소방
+ *   CUL-01  Unresolved heritage scope (국가유산 영향)
+ *   ENV-03  Unresolved environmental assessment scope (환경영향평가)
  *
  * Each check returns:
  *   - level: ok | low | med | high
  *   - finding: human-readable
  *   - reference: legal citation (시행령 조항)
  *
- * The legal references make this auditable. When a regulation changes
- * (e.g. 주차장법 시행규칙 개정), the rule lives in one place — this
- * module — and the audit trail still resolves to the prior version.
+ * References identify the separate review scope, not approval of the parcel.
+ * Statutory egress and fire compliance are outside this summary.
  */
 
 import type { Parcel, BuildingProgram } from "./types";
-import { calcSunSetback } from "@/lib/geo/sun-setback";
-import { calcParking } from "./parking";
+import { calcProgramParking } from "./parking";
+import {
+  evaluateSunlightRegulation,
+  type SunlightLegalUse,
+} from "@/lib/regulatory/sunlight-rules";
+import { BUILDING_HEIGHT_SOURCE_URL } from "@/lib/regulatory/constraints";
+
+export const COMPLIANCE_MODEL_VERSION = "regulatory-risk-summary-2026.1" as const;
 
 export type RiskLevel = "ok" | "low" | "med" | "high";
+export type RiskEvidenceStatus = "confirmed" | "preliminary";
 
 export interface RiskCheck {
   code: string;
@@ -35,6 +40,8 @@ export interface RiskCheck {
   level: RiskLevel;
   finding: string;
   reference: string;
+  /** 법규 위험도와 별개인 입력·출처 확실성. */
+  evidenceStatus?: RiskEvidenceStatus;
   /** Optional: numeric headroom or violation for UI display */
   headroom?: { actual: number; limit: number; unit: string };
 }
@@ -47,6 +54,24 @@ export interface ComplianceInput {
     nearCulturalHeritageM?: number; // distance to nearest heritage site
     isInDistrictUnitPlan?: boolean; // 지구단위계획 여부
   };
+}
+
+function sunlightLegalUseForProgram(program: BuildingProgram): SunlightLegalUse {
+  switch (program.type) {
+    case "single-house":
+      return "detached-house";
+    case "multi-family":
+      return "multi-family-house";
+    case "urban-housing":
+      return "urban-housing";
+    case "officetel":
+      return "officetel";
+    case "coliving":
+    case "mixed":
+      return "unknown-residential";
+    default:
+      return "general-building";
+  }
 }
 
 export function checkCompliance(input: ComplianceInput): RiskCheck[] {
@@ -95,94 +120,129 @@ export function checkCompliance(input: ComplianceInput): RiskCheck[] {
     });
   }
 
-  // ─── GFA-03 층수 여유 (용적률 기준) ──────────────────────────────────
-  // 제2종일반주거 등에 법적 절대고도 22m는 없음 (고도지구 지정시만).
-  // 진짜 한계는 용적률 — 최대 층수 = 용적률상한 / 건폐율상한 (국토계획법 §85).
-  // 건폐율을 꽉 채운 가정의 상한 가능치 (실제는 일조·주차로 더 낮을 수 있음).
-  const maxFloorsByFAR =
-    parcel.maxBCR > 0
-      ? Math.floor(parcel.maxFAR / parcel.maxBCR)
-      : program.floorsAbove;
-  const floorHeadroom = maxFloorsByFAR - program.floorsAbove;
-  if (floorHeadroom < 0) {
+  // FAR/maximum BCR assumes full equal-sized plates, not a maximum floor count.
+  // Compare only the separate input; the program is not a statutory floor audit.
+  const floorEvidence = parcel.regulatoryConstraints?.floors;
+  const floorLimit = floorEvidence?.status !== "unknown" && floorEvidence?.unit === "층" &&
+    Number.isInteger(floorEvidence.value) && Number(floorEvidence.value) > 0 ? Number(floorEvidence.value) : null;
+  const floorReference = floorEvidence?.sourceRef || BUILDING_HEIGHT_SOURCE_URL;
+  if (!Number.isInteger(program.floorsAbove) || program.floorsAbove < 1) {
     checks.push({
-      code: "GFA-03",
-      label: "용적률 상한 초과 우려",
-      level: "high",
-      finding: `현재 ${program.floorsAbove}층 / 용적률 ${parcel.maxFAR}% 기준 약 ${maxFloorsByFAR}층`,
-      reference: "국토계획법 시행령 §85 (용적률)",
-      headroom: {
-        actual: program.floorsAbove,
-        limit: maxFloorsByFAR,
-        unit: "층",
-      },
+      code: "GFA-03", label: "계획 층수 입력 확인", level: "high", evidenceStatus: "preliminary",
+      finding: "지상 층수는 양의 정수여야 합니다. 유효한 계획 층수와 별도 높이·층수 제한을 확인해야 합니다.",
+      reference: floorReference,
+    });
+  } else if (floorLimit === null) {
+    checks.push({
+      code: "GFA-03", label: "층수 상한 미확인", level: "low", evidenceStatus: "preliminary",
+      finding: `계획 지상 ${program.floorsAbove}층 · 별도 층수·높이·일조 제한과 허가 확인 필요. 용적률÷건폐율로 최대 층수를 판정하지 않습니다.`,
+      reference: floorReference,
     });
   } else {
+    const exceeded = program.floorsAbove > floorLimit;
     checks.push({
-      code: "GFA-03",
-      label: floorHeadroom === 0 ? "용적률 상한 근접" : "층수 여유",
-      level: floorHeadroom === 0 ? "med" : "ok",
-      finding: `현재 ${program.floorsAbove}층 / 용적률 ${parcel.maxFAR}% 기준 약 ${maxFloorsByFAR}층 가능`,
-      reference: "국토계획법 시행령 §85 (용적률)",
-      headroom: {
-        actual: program.floorsAbove,
-        limit: maxFloorsByFAR,
-        unit: "층",
-      },
+      code: "GFA-03", label: exceeded ? "층수 입력 상한 초과" : "층수 입력 상한 이내",
+      level: exceeded ? "high" : "ok", evidenceStatus: "preliminary",
+      finding: `계획 지상 ${program.floorsAbove}층 / 입력 상한 ${floorLimit}층 · 모델 층수 대사이며 법정 층수 산정·높이·일조·허가 적합성은 미확정입니다.`,
+      reference: floorReference,
+      headroom: { actual: program.floorsAbove, limit: floorLimit, unit: "층" },
     });
   }
 
-  // ─── SUN-02 정북 일조 사선제한 (건축법 §86) ──────────────────────────
-  // 진짜 계산: 건물높이 → 필요 북측이격 (10m↓ 1.5m, 초과분 높이/2).
-  // 준수여부는 북측 인접대지경계선 거리 필요 — 현재 인접필지 데이터 없어 미판정.
-  // 가짜 "8층 임계값" 제거.
-  const sunHeight = program.floorsAbove * 3.0 + 1.4;
-  const sun = calcSunSetback(sunHeight, null);
-  if (sun.exemptPossible) {
-    checks.push({
-      code: "SUN-02",
-      label: "정북 일조 — 완화 대상",
-      level: "ok",
-      finding: `${sunHeight.toFixed(1)}m (2층·8m 이하) — 조례로 사선제한 배제 가능`,
-      reference: "건축법 §61④, 시행령 §86",
+  // ─── SUN-02 정북 일조 사선제한 ──────────────────────────────────────
+  // Stage 2 계약이 있으면 당시 규칙·높이·예외 판정을 그대로 소비한다.
+  const sunlight =
+    program.areaContract?.sunlightAssessment ??
+    evaluateSunlightRegulation({
+      context: { address: parcel.address },
+      zoning: parcel.zoning,
+      zoningStatus:
+        parcel.inputProvenance?.zoning === "vworld-land-use"
+          ? "public-observation"
+          : "user-entered",
+      buildingHeightM: program.floorsAbove * 3 + 1.4,
+      floorsAbove: program.floorsAbove,
+      legalUse: sunlightLegalUseForProgram(program),
+      legalUseStatus: "source-backed",
+      daylight: {
+        sameLotBuildingCount: 1,
+        sameLotBuildingCountStatus: "source-backed",
+      },
     });
-  } else {
-    checks.push({
-      code: "SUN-02",
-      label: "정북 일조 — 북측 이격 필요",
-      level: "med",
-      finding: `건물 ${sunHeight.toFixed(1)}m → 북측 ${sun.requiredSetbackM.toFixed(1)}m 이격 필요 (준수여부는 인접대지 거리 확인 필요)`,
-      reference: "건축법 §61, 시행령 §86 (10m↓ 1.5m, 초과분 높이÷2)",
-    });
-  }
+  const north = sunlight.north;
+  const confirmed = north.complianceDecisionGrade;
+  const confirmedFailure = confirmed && north.compliant === false;
+  const confirmedPass = confirmed && north.compliant === true;
+  checks.push({
+    code: "SUN-02",
+    label:
+      north.applicability === "not-applicable"
+        ? "정북 일조 — 미적용"
+        : "정북 일조 — 북측 이격 검토",
+    level:
+      north.applicability === "not-applicable" &&
+      north.requirementDecisionGrade
+        ? "ok"
+        : confirmedFailure
+          ? "high"
+          : confirmedPass
+            ? "ok"
+            : "low",
+    evidenceStatus:
+      north.requirementDecisionGrade &&
+      (north.applicability === "not-applicable" || confirmed)
+        ? "confirmed"
+        : "preliminary",
+    finding:
+      north.applicability === "not-applicable"
+        ? north.basis.join(" · ")
+        : north.effectiveDistanceM != null
+          ? "북측 유효 이격 " +
+            north.effectiveDistanceM.toFixed(1) +
+            "m 필요" +
+            (north.actualDistanceM != null
+              ? " · 계획 " + north.actualDistanceM.toFixed(1) + "m"
+              : " · 실제 경계 거리 확인 전") +
+            (north.warnings[0] ? " · " + north.warnings[0] : "")
+          : north.warnings.join(" · "),
+    reference:
+      "건축법 제61조·시행령 제86조 · " +
+      sunlight.rule.id +
+      " · 시행 " +
+      sunlight.rule.effectiveFrom,
+    headroom:
+      north.actualDistanceM != null && north.effectiveDistanceM != null
+        ? {
+            actual: north.actualDistanceM,
+            limit: north.effectiveDistanceM,
+            unit: "m",
+          }
+        : undefined,
+  });
 
   // ─── PRK-04 주차 (유형별·규모별 — 주차장법 별표1, 주택건설기준 §27) ──
   // 가짜 제거: 유형무관 0.7대 일률 + 계획 1.1배 임의생성 삭제.
   // 진짜: 건물유형 + 연면적/세대당전용면적으로 법정대수. 단독 소규모 면제.
-  // 연면적 = 대지면적 × 용적률 (BuildingProgram에 gfa 직접 없음)
-  const grossFloorArea = parcel.lotArea * (program.far / 100);
-  const parking = calcParking(
-    program.type,
-    grossFloorArea,
-    program.units.residential,
-    program.units.retail
-  );
+  const parking = calcProgramParking(parcel, program);
   if (parking.exemptPossible) {
     checks.push({
       code: "PRK-04",
       label: "주차 — 면제 가능",
       level: "ok",
-      finding: `${parking.basis} (조례 확인 필요)`,
+      evidenceStatus: "preliminary",
+      finding: `${parking.basis} (${parking.warnings.join(" · ") || "관할 기준 확인 필요"})`,
       reference: parking.reference,
     });
   } else {
-    const note = parking.estimated ? " (전용면적 추정)" : "";
+    const note = parking.estimated ? " (전용면적 추정 · 예비값)" : "";
     checks.push({
       code: "PRK-04",
-      label: "법정 주차대수",
+      label: parking.decisionGrade ? "법정 주차대수" : "예비 주차대수",
+      // 계획 주차면수가 이 계약에 없으므로 여기서는 부족/위반을 판정하지 않는다.
       level: "low",
+      evidenceStatus: parking.decisionGrade ? "confirmed" : "preliminary",
       finding: `${parking.requiredCars}대 필요 — ${parking.basis}${note}`,
-      reference: parking.reference,
+      reference: `${parking.reference} · ${parking.rule.id}`,
       headroom: {
         actual: parking.requiredCars,
         limit: parking.requiredCars,
@@ -191,49 +251,22 @@ export function checkCompliance(input: ComplianceInput): RiskCheck[] {
     });
   }
 
-  // ─── CUL-01 문화재 ────────────────────────────────────────────────
+  // Distance alone does not establish designated boundaries or permitted acts.
   const distM = context.nearCulturalHeritageM;
-  if (distM !== undefined) {
-    if (distM <= 100) {
-      checks.push({
-        code: "CUL-01",
-        label: "문화재 영향구역",
-        level: "high",
-        finding: `${distM}m — 영향평가 필수`,
-        reference: "문화재보호법 제13조",
-      });
-    } else if (distM <= 500) {
-      checks.push({
-        code: "CUL-01",
-        label: "문화재 보호구역",
-        level: "high",
-        finding: `${distM}m 인접 — 협의 필요`,
-        reference: "문화재보호법 제13조",
-      });
-    }
-  }
+  const distanceNote = typeof distM === "number" && Number.isFinite(distM) && distM >= 0
+    ? `입력 거리 ${distM}m` : "국가유산 거리 미확인";
+  checks.push({
+    code: "CUL-01", label: "국가유산 영향 미확인", level: "low", evidenceStatus: "preliminary",
+    finding: `${distanceNote} · 지정·보호구역 경계, 역사문화환경 보존지역, 개별 허용기준과 관할 검토가 필요합니다. 거리만으로 의무 또는 비대상을 판정하지 않습니다.`,
+    reference: "문화유산의 보존 및 활용에 관한 법률 제13조·자연유산의 보존 및 활용에 관한 법률 제10조 · https://www.law.go.kr/admRulLsInfoP.do?admRulSeq=2100000279606",
+  });
 
-  // ─── ENV-03 환경영향평가 ────────────────────────────────────────────
-  // Threshold: 30,000m² 이상 사업장 (urban housing). Most small parcels are well under.
-  const lotArea = parcel.lotArea;
-  const gfa = (lotArea * program.far) / 100;
-  if (gfa >= 30_000) {
-    checks.push({
-      code: "ENV-03",
-      label: "환경영향평가 대상",
-      level: "med",
-      finding: `연면적 ${Math.round(gfa).toLocaleString()}㎡ — 평가 필요`,
-      reference: "환경영향평가법 제22조",
-    });
-  } else {
-    checks.push({
-      code: "ENV-03",
-      label: "환경영향평가",
-      level: "ok",
-      finding: "연면적 기준 미해당",
-      reference: "환경영향평가법 제22조",
-    });
-  }
+  // National, local and small-scale assessment scopes need more than GFA.
+  checks.push({
+    code: "ENV-03", label: "환경영향평가 적용 미확인", level: "low", evidenceStatus: "preliminary",
+    finding: "사업 종류·사업구역 규모·입지·보전지역·관할 조례와 소규모 환경영향평가 적용 범위가 미확인입니다. 건물 연면적만으로 대상 여부를 판정하지 않습니다.",
+    reference: "환경영향평가법 제22조·제42조·제43조 · https://law.go.kr/LSW/lsInfoP.do?ancYnChk=0&lsId=002016",
+  });
 
   return checks;
 }

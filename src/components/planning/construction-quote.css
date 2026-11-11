@@ -1,0 +1,44 @@
+.lv-quote { min-width: 0; overflow-wrap: anywhere; letter-spacing: 0; }
+.lv-quote h4 { margin: 0; font-size: 13px; font-weight: 700; }
+.lv-quote-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.lv-quote-section { padding: 16px 0; border-top: 1px solid var(--line, #dce2e4); }
+.lv-quote fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.lv-quote fieldset:disabled > .lv-fields, .lv-quote fieldset:disabled > .lv-field { opacity: .7; }
+.lv-quote .lv-field textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 58px; resize: vertical; padding: 6px 8px; border: 1px solid var(--line, #cfd9d6); border-radius: 4px; font: inherit; color: var(--fg, #263c38); background: var(--bg, #fff); }
+.lv-quote .lv-field input[type="date"] { min-width: 0; max-width: 100%; }
+.lv-quote-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr)); gap: 12px; margin: 12px 0; }
+.lv-quote-metrics dt { font-size: 11px; color: var(--fg-muted, #52645f); }
+.lv-quote-metrics dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+.lv-quote-line, .lv-quote-scope { border-bottom: 1px solid var(--line, #dce2e4); padding: 9px 0; }
+.lv-quote summary { cursor: pointer; font-weight: 600; }
+.lv-quote summary > span { display: inline-block; max-width: calc(100% - 24px); vertical-align: top; margin-right: 12px; }
+.lv-quote summary > span:last-child { color: var(--fg-muted, #52645f); font-weight: 400; font-variant-numeric: tabular-nums; }
+.lv-quote .lv-quote-bindings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 8px 14px; max-height: 240px; overflow-y: auto; margin: 12px 0; padding: 4px 2px 8px; }
+.lv-quote-bindings legend { font-weight: 600; margin-bottom: 6px; }
+.lv-quote-bindings label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; font-size: 11px; }
+.lv-quote-bindings input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; accent-color: #28664a; }
+.lv-quote .lv-quote-icon { width: 36px; height: 36px; flex: 0 0 36px; padding: 0; }
+.lv-quote button svg { flex-shrink: 0; }
+.lv-quote .lv-actions { align-items: center; }
+.lv-quote .lv-actions button, .lv-quote-heading button { max-width: 100%; white-space: normal; text-align: left; }
+.lv-quote button:focus-visible, .lv-quote summary:focus-visible, .lv-quote input:focus-visible, .lv-quote select:focus-visible, .lv-quote textarea:focus-visible { outline: 2px solid #28664a; outline-offset: 2px; }
+.lv-quote-error, .lv-quote [role="alert"] { color: #b04135; }
+.lv-quote input[aria-invalid="true"] { border-color: #b04135; }
+.lv-quote-warning { color: #795516; }
+.lv-quote-message { min-height: 1.6em; }
+.lv-quote .lv-table-wrap table { min-width: 460px; }
+.lv-quote caption { text-align: left; font-weight: 600; padding: 8px 0; }
+.lv-quote td { font-variant-numeric: tabular-nums; }
+.lv-quote-issues { margin: 12px 0; }
+.lv-quote-allocations { min-width: 0; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line, #dce2e4); }
+.lv-quote-allocations h5 { margin: 0; font-size: 12px; font-weight: 700; }
+.lv-quote-allocation { min-width: 0; padding: 10px 0; border-bottom: 1px solid var(--line, #dce2e4); }
+.lv-quote-allocation .lv-quote-heading > strong { min-width: 0; flex: 1; font-size: 12px; }
+.lv-quote-allocation-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px; margin-top: 6px; }
+.lv-quote-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 600px) {
+  .lv-quote-line summary > span:first-child, .lv-quote-scope summary > span:first-child { width: calc(100% - 28px); }
+  .lv-quote-line summary > span:last-child, .lv-quote-scope summary > span:last-child { margin-left: 16px; }
+  .lv-quote .lv-actions > .lv-note { flex-basis: 100%; }
+  .lv-quote-allocation-fields { grid-template-columns: minmax(0, 1fr); }
+}

@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { constraintStatusLabel } from "@/lib/regulatory/constraints";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FloorProgramEditor } from "@/components/planning/FloorProgramEditor";
+import { DwellingAssumptionsEditor } from "@/components/planning/DwellingAssumptionsEditor";
 import { PlanningGuidedEditor } from "@/components/planning/PlanningGuidedEditor";
 import { PlanningGeometrySourcePanel } from "@/components/planning/PlanningGeometrySourcePanel";
 import { PlanningParkingSequencePanel } from "@/components/planning/PlanningParkingSequencePanel";
@@ -10,14 +12,26 @@ import { PlanningMassingView } from "@/components/planning/PlanningMassingView";
 import { PlanningMaterialEditor } from "@/components/planning/PlanningMaterialEditor";
 import { Panel, SectionTitle } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
+import type {
+  FinancialRevenueAreaPools,
+  FinancialRevenuePoolKey,
+  FinancialRevenueProjectionSnapshot,
+  RevenuePoolPricingSnapshot,
+} from "@/lib/finance/types";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildParkingAlternativePatch } from "@/lib/planning/parking-sequence-advisor";
 import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-geometry";
+import { PlanningLayoutVerification } from "./PlanningLayoutVerification";
+import { InteriorDrawingExport } from "./InteriorDrawingExport";
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import {
   calculatePlanningScenario,
   planningEconomicsAssumptionsFromLegacy,
 } from "@/lib/planning/scenario-calculator";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
+import { assessPlanningAnalysisReference } from "@/lib/planning/analysis-reference";
+import { ANALYSIS_REFERENCE_NOTICE } from "@/lib/planning/analysis-reference-contract";
 import {
   createBlankScenarioForParcel,
   createStarterPlanningScenario,
@@ -43,6 +57,60 @@ const ORIGIN_LABEL: Record<PlanningScenarioOrigin, string> = {
   custom: "직접 설계",
   legacy: "기존 입력",
 };
+
+const REVENUE_POOL_ROWS: Array<{
+  key: FinancialRevenuePoolKey;
+  areaKey: keyof FinancialRevenueAreaPools;
+  label: string;
+}> = [
+  { key: "residentialSale", areaKey: "residentialSaleSqm", label: "주거 매각" },
+  { key: "retailSale", areaKey: "retailSaleSqm", label: "상가 매각" },
+  { key: "officeSale", areaKey: "officeSaleSqm", label: "업무 매각" },
+  {
+    key: "residentialLease",
+    areaKey: "residentialLeaseSqm",
+    label: "주거 임대",
+  },
+  { key: "retailLease", areaKey: "retailLeaseSqm", label: "상가 임대" },
+  { key: "officeLease", areaKey: "officeLeaseSqm", label: "업무 임대" },
+];
+
+const REVENUE_ADJUSTMENT_LABELS = {
+  use: "용도",
+  location: "입지",
+  floor: "층",
+  area: "면적",
+  newBuild: "신축",
+} as const;
+
+function revenueSourceStatusLabel(
+  status: RevenuePoolPricingSnapshot["sourceStatus"],
+): string {
+  if (status === "source-backed") return "원문 근거";
+  if (status === "user-input") return "사용자 입력";
+  return "내부 가정";
+}
+
+function revenueAdjustmentSummary(
+  pricing: RevenuePoolPricingSnapshot,
+): string {
+  const active = pricing.adjustments
+    ? Object.entries(pricing.adjustments).filter(
+        ([, adjustment]) => Math.abs(adjustment.factor - 1) > 0.000001,
+      )
+    : [];
+  if (active.length === 0) {
+    return Math.abs(pricing.adjustmentFactor - 1) > 0.000001
+      ? `통합 ${((pricing.adjustmentFactor - 1) * 100).toFixed(1)}%`
+      : "없음";
+  }
+  return active
+    .map(
+      ([dimension, adjustment]) =>
+        `${REVENUE_ADJUSTMENT_LABELS[dimension as keyof typeof REVENUE_ADJUSTMENT_LABELS]} ${((adjustment.factor - 1) * 100).toFixed(1)}%`,
+    )
+    .join(" · ");
+}
 
 const CHECK_TONE: Record<
   PlanningCheckStatus,
@@ -79,22 +147,6 @@ function scenarioSeed(parcel: {
     acquisitionCostManwon: parcel.acquiredPrice,
     demolitionCostManwon: parcel.demolitionCost ?? 0,
   };
-}
-
-function planHealth(calculation: PlanningScenarioCalculation): {
-  fail: number;
-  review: number;
-} {
-  return calculation.checks.reduce(
-    (result, check) => {
-      if (check.status === "fail") result.fail += 1;
-      if (check.status === "review" || check.status === "unknown") {
-        result.review += 1;
-      }
-      return result;
-    },
-    { fail: 0, review: 0 }
-  );
 }
 
 function StatusPill({
@@ -193,11 +245,106 @@ function MiniMetric({
   );
 }
 
+function RevenuePoolTable({
+  projection,
+}: {
+  projection: FinancialRevenueProjectionSnapshot;
+}) {
+  const activeRows = REVENUE_POOL_ROWS.filter(
+    (row) => Number(projection.areas[row.areaKey] ?? 0) > 0
+  );
+  return (
+    <div style={{ marginTop: 14, overflowX: "auto" }}>
+      <table
+        style={{
+          width: "100%",
+          minWidth: 900,
+          borderCollapse: "collapse",
+          fontSize: 10,
+        }}
+      >
+        <thead>
+          <tr style={{ color: "var(--fg-muted)", textAlign: "right" }}>
+            <th style={{ padding: "7px 8px", textAlign: "left" }}>수익 풀</th>
+            <th style={{ padding: "7px 8px" }}>면적</th>
+            <th style={{ padding: "7px 8px" }}>기준단가</th>
+            <th style={{ padding: "7px 8px" }}>보정</th>
+            <th style={{ padding: "7px 8px" }}>적용 단가</th>
+            <th style={{ padding: "7px 8px" }}>근거 상태</th>
+            <th style={{ padding: "7px 8px" }}>연 NOI</th>
+            <th style={{ padding: "7px 8px" }}>매출·가치</th>
+          </tr>
+        </thead>
+        <tbody>
+          {activeRows.map((row) => {
+            const pricing = projection.pricing.pools[row.key];
+            return (
+              <tr key={row.key} style={{ borderTop: "1px solid var(--border-faint)" }}>
+                <td style={{ padding: "8px", textAlign: "left", fontWeight: 700 }}>
+                  {row.label}
+                </td>
+                <td style={{ padding: "8px", textAlign: "right" }}>
+                  {num(Number(projection.areas[row.areaKey] ?? 0), 1)}㎡
+                </td>
+                <td style={{ padding: "8px", textAlign: "right" }}>
+                  {Math.round(
+                    pricing.baseUnitPriceWon ??
+                      pricing.unitPriceWon /
+                        Math.max(pricing.adjustmentFactor, 0.000001),
+                  ).toLocaleString()}
+                  원
+                </td>
+                <td
+                  style={{
+                    padding: "8px",
+                    maxWidth: 180,
+                    color: "var(--fg-muted)",
+                    textAlign: "right",
+                  }}
+                  title={revenueAdjustmentSummary(pricing)}
+                >
+                  {revenueAdjustmentSummary(pricing)}
+                </td>
+                <td style={{ padding: "8px", textAlign: "right" }}>
+                  {Math.round(pricing.unitPriceWon).toLocaleString()}원/
+                  {pricing.unit === "won-per-sqm" ? "㎡" : "㎡·월"}
+                </td>
+                <td
+                  style={{ padding: "8px", textAlign: "right" }}
+                  title={pricing.sourceName}
+                >
+                  {revenueSourceStatusLabel(pricing.sourceStatus)}
+                </td>
+                <td style={{ padding: "8px", textAlign: "right" }}>
+                  {pricing.unit === "won-per-sqm-month"
+                    ? won(projection.annualNoiByPoolManwon[row.key], {
+                        full: true,
+                      })
+                    : "-"}
+                </td>
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 700 }}>
+                  {won(projection.valueByPoolManwon[row.key], { full: true })}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p style={{ margin: "8px 0 0", color: "var(--fg-faint)", fontSize: 9.5 }}>
+        임대 출구가치는 잠재 임대료에서 공실 {projection.pricing.vacancyRatePct.toFixed(1)}%와
+        유효총수입 대비 운영비 {projection.pricing.operatingExpenseRatePct.toFixed(1)}%를 차감한
+        NOI ÷ Cap rate × 안정화 계수 {projection.pricing.stabilizationFactorPct.toFixed(0)}%로 계산합니다.
+      </p>
+    </div>
+  );
+}
+
 function PlanCard({
   scenario,
   calculation,
   active,
   representative,
+  analysisReference = false,
   onSelect,
   onDuplicate,
 }: {
@@ -205,10 +352,11 @@ function PlanCard({
   calculation: PlanningScenarioCalculation;
   active: boolean;
   representative: boolean;
+  analysisReference?: boolean;
   onSelect: () => void;
   onDuplicate: () => void;
 }) {
-  const health = planHealth(calculation);
+  const readiness = assessRepresentativeCheckReadiness(calculation.checks);
   const profit = calculation.economicsPreview.profitManwon;
   const firstFailure = calculation.checks.find(
     (check) => check.status === "fail"
@@ -247,7 +395,7 @@ function PlanCard({
           >
             <strong style={{ fontSize: 13.5 }}>{scenario.name}</strong>
             <span className="ui-tag">{ORIGIN_LABEL[scenario.origin]}</span>
-            {representative && <span className="ui-tag">대표안</span>}
+            {representative && <span className="ui-tag">{analysisReference ? "예비 기준안" : "대표안"}</span>}
             {scenario.status === "draft" && <span className="ui-tag">미저장</span>}
           </div>
           <div
@@ -293,19 +441,30 @@ function PlanCard({
         />
         <MiniMetric
           label="개략 이익"
-          value={won(profit, { sign: true })}
-          tone={profit >= 0 ? "positive" : "negative"}
+          value={calculation.economicsPreview.status === "stale" ? "원가 재검토" : won(profit, { sign: true })}
+          tone={calculation.economicsPreview.status === "stale" ? "neutral" : profit >= 0 ? "positive" : "negative"}
         />
       </div>
 
       <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
-        {health.fail > 0 ? (
-          <StatusPill label={`미충족 ${health.fail}`} tone="fail" />
+        {readiness.blockingFailureCount > 0 ? (
+          <StatusPill
+            label={`대표안 미충족 ${readiness.blockingFailureCount}`}
+            tone="fail"
+          />
+        ) : readiness.blockingVerificationCount > 0 ? (
+          <StatusPill
+            label={`확정 전 핵심 검증 ${readiness.blockingVerificationCount}`}
+            tone="review"
+          />
         ) : (
-          <StatusPill label="필수항목 통과" tone="pass" />
+          <StatusPill label="대표안 확정 가능" tone="pass" />
         )}
-        {health.review > 0 && (
-          <StatusPill label={`확인 ${health.review}`} tone="review" />
+        {readiness.advisoryCount > 0 && (
+          <StatusPill
+            label={`참고 확인 ${readiness.advisoryCount}`}
+            tone="review"
+          />
         )}
         <span
           style={{ marginLeft: "auto", fontSize: 10, color: "var(--fg-faint)" }}
@@ -333,13 +492,21 @@ function PlanCard({
 function UnifiedStatusBanner({
   calculation,
   representative,
+  geometryEligible,
+  analysisReference = false,
 }: {
   calculation: PlanningScenarioCalculation;
   representative: boolean;
+  geometryEligible: boolean;
+  analysisReference?: boolean;
 }) {
-  const health = planHealth(calculation);
+  const readiness = assessRepresentativeCheckReadiness(calculation.checks);
   const tone: PlanningCheckStatus =
-    health.fail > 0 ? "fail" : health.review > 0 ? "review" : "pass";
+    !geometryEligible || readiness.blockingFailureCount > 0
+      ? "fail"
+      : readiness.blockingVerificationCount > 0 || readiness.advisoryCount > 0
+        ? "review"
+        : "pass";
   const style = CHECK_TONE[tone];
   return (
     <div
@@ -355,11 +522,15 @@ function UnifiedStatusBanner({
       }}
     >
       <strong>
-        {health.fail > 0
-          ? `통합 판정 미충족 ${health.fail}건`
-          : health.review > 0
-            ? `필수항목 통과 · 확인 ${health.review}건`
-            : "통합 판정 통과"}
+        {analysisReference ? ANALYSIS_REFERENCE_NOTICE : !geometryEligible
+          ? "대표안 확정 불가 · 기하 검증 미통과"
+          : readiness.blockingFailureCount > 0
+            ? `대표안 확정 불가 · 미충족 ${readiness.blockingFailureCount}건`
+            : readiness.blockingVerificationCount > 0
+              ? `대표안 확정 전 핵심 검증 ${readiness.blockingVerificationCount}건`
+              : readiness.advisoryCount > 0
+                ? `대표안 확정 가능 · 참고 확인 ${readiness.advisoryCount}건`
+                : "대표안 확정 가능 · 핵심 검증 통과"}
       </strong>
       <span style={{ marginLeft: 7 }}>
         건폐율·용적률·높이·주차·층별 법규 외곽선·이동·회전을 같은 기준으로 판정합니다.
@@ -385,6 +556,7 @@ export function PlanningScenarioWorkspaceV4({
   const representativePlanningScenarioId = useProjectStore(
     (state) => state.representativePlanningScenarioId
   );
+  const representativeGeometry = useProjectStore(state => state.representativeGeometrySnapshot);
   const addPlanningScenario = useProjectStore(
     (state) => state.addPlanningScenario
   );
@@ -468,6 +640,13 @@ export function PlanningScenarioWorkspaceV4({
     if (!parcel) return null;
     return {
       parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus:
+          parcel.inputProvenance?.zoning === "vworld-land-use"
+            ? ("public-observation" as const)
+            : ("user-entered" as const),
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
@@ -494,7 +673,10 @@ export function PlanningScenarioWorkspaceV4({
           parcel.zoning ?? "",
           scenario,
           parcel.roads,
-          parcel.setback
+          parcel.setback,
+          base.sunlight,
+          base.metrics.roofAllowanceM,
+          parcel.boundaryPolygons
         );
         return [
           scenario.id,
@@ -519,8 +701,8 @@ export function PlanningScenarioWorkspaceV4({
   const selectedGeometry = useMemo(() => {
     if (
       !selectedScenario ||
-      !parcel?.boundary ||
-      parcel.boundary.length < 3
+      !parcel ||
+      !hasParcelBoundary(parcel)
     ) {
       return null;
     }
@@ -528,19 +710,22 @@ export function PlanningScenarioWorkspaceV4({
       projectId: selectedScenario.projectId ?? parcel.id,
       scenario: selectedScenario,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       lotAreaSqm: parcel.lotArea,
       zoning: parcel.zoning ?? "",
       roads: parcel.roads,
       setback: parcel.setback,
+      sunlight: selectedCalculation?.sunlight,
+      roofAllowanceM: selectedCalculation?.metrics.roofAllowanceM,
     }).snapshot;
-  }, [selectedScenario, parcel]);
+  }, [selectedScenario, selectedCalculation, parcel]);
   const selectedParkingGeometry = useMemo(() => {
     if (
       !selectedScenario ||
       !selectedCalculation ||
       !selectedGeometry ||
-      !parcel?.boundary ||
-      parcel.boundary.length < 3
+      !parcel ||
+      !hasParcelBoundary(parcel)
     ) {
       return null;
     }
@@ -549,12 +734,17 @@ export function PlanningScenarioWorkspaceV4({
       planning: selectedGeometry,
       requiredCars: selectedCalculation.parking.requiredCars,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       roads: parcel.roads,
     });
   }, [selectedScenario, selectedCalculation, selectedGeometry, parcel]);
   const geometryLocked = selectedScenario
     ? isPlanningGeometryLocked(selectedScenario)
     : false;
+  const analysisReadiness = useMemo(() => selectedScenario && parcel && selectedCalculation
+    ? assessPlanningAnalysisReference({ scenario: selectedScenario, parcel, calculation: selectedCalculation,
+      geometry: selectedGeometry, parking: selectedParkingGeometry }) : null,
+  [selectedScenario, parcel, selectedCalculation, selectedGeometry, selectedParkingGeometry]);
 
   if (!data || !parcel) return null;
 
@@ -621,17 +811,26 @@ export function PlanningScenarioWorkspaceV4({
       );
       return;
     }
-    const health = planHealth(selectedCalculation);
-    if (health.fail > 0) {
+    const readiness = assessRepresentativeCheckReadiness(
+      selectedCalculation.checks
+    );
+    if (!readiness.ready) {
+      const firstBlocker = readiness.blockers[0];
       window.alert(
-        `필수 미충족 ${health.fail}건이 있어 대표 계획안으로 확정할 수 없습니다. 법규·데이터 점검에서 내용을 확인하세요.`
+        `${
+          readiness.blockingFailureCount > 0
+            ? `미충족 ${readiness.blockingFailureCount}건`
+            : `핵심 검증 ${readiness.blockingVerificationCount}건`
+        }이 남아 대표 계획안으로 확정할 수 없습니다.\n\n${
+          firstBlocker?.message ?? "법규·주차 핵심 항목을 확인하세요."
+        }`
       );
       return;
     }
     if (
-      health.review > 0 &&
+      readiness.advisoryCount > 0 &&
       !window.confirm(
-        `확인 필요 항목이 ${health.review}건 있습니다. 검토 책임을 확인하고 대표 계획안으로 확정할까요?`
+        `대표안 확정을 막지 않는 참고 확인 항목이 ${readiness.advisoryCount}건 있습니다. 검토 책임을 확인하고 대표 계획안으로 확정할까요?`
       )
     ) {
       return;
@@ -656,11 +855,19 @@ export function PlanningScenarioWorkspaceV4({
     }
   };
 
-  const selectedHealth = selectedCalculation
-    ? planHealth(selectedCalculation)
-    : { fail: 0, review: 0 };
+  const selectAnalysisReference = () => {
+    if (!selectedScenario || !analysisReadiness?.ready) return;
+    if (!window.confirm("예비 분석 기준안으로 채택할까요? 현재 계획의 면적·주차대수는 그대로 사용해 사업성을 재계산합니다. 공식 경계·허가·전문가 승인은 미확정이며, 확정 수익이나 법정 적합 판정이 아닙니다.")) return;
+    if (setRepresentativePlanningScenarioId(selectedScenario.id, "preliminary-analysis")) setActiveScenarioId(selectedScenario.id);
+    else window.alert(useProjectStore.getState().geometryValidationError ?? "예비 분석 기준안을 채택하지 못했습니다.");
+  };
+
+  const selectedReadiness = selectedCalculation
+    ? assessRepresentativeCheckReadiness(selectedCalculation.checks)
+    : null;
   const isRepresentative =
     selectedScenario?.id === representativePlanningScenarioId;
+  const isAnalysisReference = isRepresentative && Boolean(representativeGeometry?.analysisReference);
 
   return (
     <div
@@ -735,14 +942,14 @@ export function PlanningScenarioWorkspaceV4({
           value={pyeong(parcel.lotArea)}
           sub={`${num(parcel.lotArea, 1)}㎡`}
         />
-        <Metric label="법정 건폐율" value={`${parcel.maxBCR}%`} />
-        <Metric label="법정 용적률" value={`${parcel.maxFAR}%`} />
+        <Metric label="건폐율 검토값" value={`${parcel.maxBCR}%`} sub={constraintStatusLabel(parcel.regulatoryConstraints?.bcr.status ?? "unknown")} />
+        <Metric label="용적률 검토값" value={`${parcel.maxFAR}%`} sub={constraintStatusLabel(parcel.regulatoryConstraints?.far.status ?? "unknown")} />
         <Metric
           label="인수가"
           value={won(parcel.acquiredPrice, { full: true })}
         />
         <Metric
-          label="대표 계획안"
+          label={representativeGeometry?.analysisReference ? "예비 분석 기준안" : "대표 계획안"}
           value={representativeScenario?.name ?? "미확정"}
           sub={representativeScenario ? `v${representativeScenario.version}` : "Stage 3 전달 전"}
         />
@@ -832,6 +1039,7 @@ export function PlanningScenarioWorkspaceV4({
                   representative={
                     scenario.id === representativePlanningScenarioId
                   }
+                  analysisReference={scenario.id === representativePlanningScenarioId && Boolean(representativeGeometry?.analysisReference)}
                   onSelect={() => selectPlanningScenario(scenario.id)}
                   onDuplicate={() => duplicatePlanningScenario(scenario.id)}
                 />
@@ -873,7 +1081,7 @@ export function PlanningScenarioWorkspaceV4({
                         {ORIGIN_LABEL[selectedScenario.origin]}
                       </span>
                       <span className="ui-tag">v{selectedScenario.version}</span>
-                      {isRepresentative && <span className="ui-tag">대표안</span>}
+                      {isRepresentative && <span className="ui-tag">{isAnalysisReference ? "예비 기준안" : "대표안"}</span>}
                       {selectedScenario.status === "draft" && (
                         <span className="ui-tag">미저장 변경</span>
                       )}
@@ -917,22 +1125,48 @@ export function PlanningScenarioWorkspaceV4({
                       style={{
                         ...confirmButtonStyle,
                         opacity:
-                          selectedHealth.fail > 0 ||
+                          !selectedReadiness?.ready ||
                           !selectedGeometry?.validation.representativeEligible
                             ? 0.55
                             : 1,
                       }}
+                      aria-disabled={
+                        !selectedReadiness?.ready ||
+                        !selectedGeometry?.validation.representativeEligible
+                      }
+                      title={
+                        !selectedGeometry?.validation.representativeEligible
+                          ? "기하 검증을 통과해야 대표안으로 확정할 수 있습니다."
+                          : selectedReadiness && !selectedReadiness.ready
+                            ? selectedReadiness.blockers[0]?.message
+                            : "현재 계획안을 Stage 3 입력으로 확정합니다."
+                      }
                       onClick={confirmRepresentative}
                     >
-                      {isRepresentative ? "대표안 확정됨" : "대표안 확정"}
+                      {isRepresentative && !isAnalysisReference ? "대표안 확정됨" : "대표안 확정"}
+                    </button>
+                    <button type="button" style={primaryButtonStyle}
+                      disabled={!analysisReadiness?.ready || isAnalysisReference}
+                      title={analysisReadiness?.blockers[0]?.message ?? ANALYSIS_REFERENCE_NOTICE}
+                      onClick={selectAnalysisReference}>
+                      {isAnalysisReference ? "예비 분석 기준안 채택됨" : "예비 분석 기준안 채택"}
                     </button>
                   </div>
                 </div>
 
                 <UnifiedStatusBanner
                   calculation={selectedCalculation}
-                  representative={isRepresentative}
+                  representative={isRepresentative && !isAnalysisReference}
+                  analysisReference={isAnalysisReference}
+                  geometryEligible={
+                    selectedGeometry?.validation.representativeEligible === true
+                  }
                 />
+                {analysisReadiness && <details style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6, overflowWrap: "anywhere" }}>
+                  <summary>{analysisReadiness.ready ? `예비 분석 채택 가능 · 미확정 ${analysisReadiness.unresolved.length}건` : `예비 분석 채택 보류 · 해결 필요 ${analysisReadiness.blockers.length}건`}</summary>
+                  <ul>{analysisReadiness.blockers.map((item, index) => <li key={`block-${index}`}>{item.message}</li>)}</ul>
+                  <ul>{analysisReadiness.unresolved.map((item, index) => <li key={`unresolved-${index}`}>{item.message}</li>)}</ul>
+                </details>}
 
                 <PlanningGeometrySourcePanel
                   scenario={selectedScenario}
@@ -950,6 +1184,7 @@ export function PlanningScenarioWorkspaceV4({
                     calculation={selectedCalculation}
                     geometry={selectedGeometry}
                     boundary={parcel.boundary}
+                    boundaryPolygons={parcel.boundaryPolygons}
                     roads={parcel.roads}
                     onCreateAlternative={createParkingAlternative}
                     onEditProgram={() => setEditorMode("expert")}
@@ -987,6 +1222,10 @@ export function PlanningScenarioWorkspaceV4({
 
                 <PlanningMassingView
                   boundary={parcel.boundary}
+                  boundaryPolygons={parcel.boundaryPolygons}
+                  lotAreaSqm={parcel.lotArea}
+                  sunlight={selectedCalculation?.sunlight}
+                  roofAllowanceM={selectedCalculation?.metrics.roofAllowanceM}
                   zoning={parcel.zoning ?? ""}
                   scenario={selectedScenario}
                   roads={parcel.roads}
@@ -1024,10 +1263,21 @@ export function PlanningScenarioWorkspaceV4({
                     sub={
                       selectedCalculation.metrics.parkingShortfallCars > 0
                         ? `${selectedCalculation.metrics.parkingShortfallCars}대 부족`
-                        : "예비 기준 충족"
+                        : selectedCalculation.parking.decisionGrade
+                          ? "확인 기준 충족"
+                          : "예비값 · 원문/전용면적 확인 필요"
                     }
                   />
                 </div>
+                <PlanningLayoutVerification
+                  scenario={selectedScenario}
+                  geometry={selectedGeometry}
+                  parking={selectedParkingGeometry}
+                  calculationContext={calculationContext}
+                  getCurrentScenario={() => useProjectStore.getState().planningScenarios.find(s => s.id === selectedScenario.id)}
+                  onChange={patch => editPlanningScenarioDraft(selectedScenario.id, patch)}
+                />
+                <InteriorDrawingExport projectId={projectId} scenarioId={selectedScenario.id} />
               </Panel>
 
               <Panel
@@ -1035,6 +1285,9 @@ export function PlanningScenarioWorkspaceV4({
                 source="Stage 2 비교용 · Stage 3에서 정밀 계산"
                 bodyStyle={{ padding: "var(--s5)" }}
               >
+                {selectedCalculation.economicsPreview.status === "stale" ? <p role="alert">
+                  상세 수량 원가의 기준이 달라 사업비·이익은 미확정입니다. 수량·원가에서 포함액과 견적을 다시 검토해야 합니다.
+                </p> : <>
                 <div className="economics-grid">
                   <Metric
                     label="예상 매출·가치"
@@ -1093,6 +1346,10 @@ export function PlanningScenarioWorkspaceV4({
                     )}
                   />
                 </div>
+                <RevenuePoolTable
+                  projection={selectedCalculation.revenueProjection}
+                />
+                </>}
               </Panel>
 
               <Panel
@@ -1171,6 +1428,8 @@ export function PlanningScenarioWorkspaceV4({
                       }
                     />
                   )}
+                  {!geometryLocked && <DwellingAssumptionsEditor scenario={selectedScenario} calculation={selectedCalculation}
+                    onChange={(dwellingProgram) => editPlanningScenarioDraft(selectedScenario.id, { dwellingProgram })} />}
                 </Panel>
 
                 <Panel
@@ -1206,6 +1465,36 @@ export function PlanningScenarioWorkspaceV4({
                           >
                             {check.message}
                           </div>
+                          {check.source && (
+                            <div
+                              style={{
+                                marginTop: 3,
+                                fontSize: 9.5,
+                                lineHeight: 1.4,
+                                color: "var(--fg-faint)",
+                                overflowWrap: "anywhere",
+                              }}
+                            >
+                              근거: {check.source}
+                              {check.code === "parking" &&
+                                selectedCalculation.parking.rule.sources[0] && (
+                                  <>
+                                    {" · "}
+                                    <a
+                                      href={
+                                        selectedCalculation.parking.rule.sources[0]
+                                          .sourceUrl
+                                      }
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      style={{ color: "var(--accent)" }}
+                                    >
+                                      원문
+                                    </a>
+                                  </>
+                                )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}

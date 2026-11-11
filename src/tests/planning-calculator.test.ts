@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   applyPlanningScenarioCalculation,
   calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
   type PlanningCalculationContext,
 } from "@/lib/planning/scenario-calculator";
+import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
   createBlankPlanningScenario,
   createFloorProgram,
@@ -55,6 +57,8 @@ const verifiedConstraints = {
 
 const context: PlanningCalculationContext = {
   parcel: {
+    address: "서울특별시 도봉구 쌍문동 281-23",
+    parkingRuleAsOf: "2026-09-08",
     lotAreaSqm: 120,
     maxFARPct: 200,
     maxBCRPct: 60,
@@ -68,16 +72,23 @@ const context: PlanningCalculationContext = {
     version: "test-v1",
     constructionCostPerSqmWon: 2_000_000,
     basementCostMultiplier: 1.25,
-    softCostRatePct: 10,
-    contingencyRatePct: 5,
-    financingCostRatePct: 2,
+  softCostRatePct: 10,
+  contingencyRatePct: 5,
+  acquisitionTaxManwon: 0,
+  acquisitionOtherCostManwon: 0,
+  tenantRelocationCostManwon: 0,
+  financingCostRatePct: 2,
+  pfUpfrontFeeRatePct: 0,
+  trustFeeManwon: 0,
+  ltcTargetPct: 70,
     residentialSalePricePerSqmWon: 5_000_000,
     commercialSalePricePerSqmWon: 4_000_000,
     residentialRentPerSqmMonthWon: 25_000,
     retailRentPerSqmMonthWon: 50_000,
     officeRentPerSqmMonthWon: 40_000,
-    vacancyRatePct: 5,
-    capRatePct: 5,
+  vacancyRatePct: 5,
+  operatingExpenseRatePct: 20,
+  capRatePct: 5,
   },
   calculatedAt: "2026-07-13T00:00:00.000Z",
 };
@@ -87,10 +98,18 @@ function mixedUseScenario(): PlanningScenario {
   return {
     ...scenario,
     primaryUse: "mixed",
-    parking: { strategy: "basement", providedCars: 2 },
+    parking: { strategy: "basement", providedCars: 1 },
     floorPrograms: [
-      createFloorProgram(3, [createFloorZone("residential", 50, 1)]),
-      createFloorProgram(2, [createFloorZone("residential", 60, 2)]),
+      createFloorProgram(3, [{
+        ...createFloorZone("residential", 50, 1),
+        parkingExclusiveAreaSqm: 37.5,
+        parkingExclusiveAreaStatus: "source-backed",
+      }]),
+      createFloorProgram(2, [{
+        ...createFloorZone("residential", 60, 2),
+        parkingExclusiveAreaSqm: 45,
+        parkingExclusiveAreaStatus: "source-backed",
+      }]),
       createFloorProgram(1, [
         createFloorZone("retail", 40, 1),
         createFloorZone("common", 10, 0),
@@ -102,6 +121,16 @@ function mixedUseScenario(): PlanningScenario {
 }
 
 describe("Stage 2 planning calculation engine", () => {
+  it("carries the edited basement multiplier into the Stage 2 cost assumptions", () => {
+    const legacy = defaultAssumptions();
+    legacy.basementCostMultiplier = 1.6;
+
+    expect(
+      planningEconomicsAssumptionsFromLegacy(legacy)
+        .basementCostMultiplier,
+    ).toBe(1.6);
+  });
+
   it("separates construction, FAR, revenue and parking areas for a mixed-use plan", () => {
     const result = calculatePlanningScenario(mixedUseScenario(), context);
 
@@ -129,11 +158,17 @@ describe("Stage 2 planning calculation engine", () => {
   it("calculates component parking and reports a shortfall", () => {
     const result = calculatePlanningScenario(mixedUseScenario(), context);
 
-    expect(result.parking.requiredCars).toBe(3);
-    expect(result.parking.providedCars).toBe(2);
+    expect(result.parking.requiredCars).toBe(2);
+    expect(result.parking.providedCars).toBe(1);
     expect(result.parking.shortfallCars).toBe(1);
     expect(result.parking.estimatedCapacityFromProgram).toBe(3);
-    expect(result.checks.find((check) => check.code === "parking")?.status).toBe("fail");
+    expect(result.parking.rule.id).toBe("parking-kr-seoul-2026-07-13");
+    expect(result.parking.decisionGrade).toBe(false);
+    expect(result.parking.estimated).toBe(true);
+    expect(result.checks.find((check) => check.code === "parking")?.status).toBe("review");
+    expect(result.checks.find((check) => check.code === "parking")?.source).toContain(
+      "서울특별시조례 제10142호"
+    );
   });
 
   it("produces a transparent Stage 2 economics preview", () => {
@@ -145,12 +180,13 @@ describe("Stage 2 planning calculation engine", () => {
     expect(economics.contingencyCostManwon).toBe(2_805);
     expect(economics.financingCostManwon).toBe(1_178.1);
     expect(economics.saleRevenueManwon).toBe(55_000);
-    expect(economics.expectedAnnualNoiManwon).toBe(2_280);
-    expect(economics.capitalizedLeaseValueManwon).toBe(45_600);
-    expect(economics.expectedRevenueManwon).toBe(100_600);
+    expect(economics.expectedAnnualNoiManwon).toBe(1_824);
+    expect(economics.capitalizedLeaseValueManwon).toBe(31_008);
+    expect(economics.expectedRevenueManwon).toBe(86_008);
     expect(economics.totalCostManwon).toBe(111_083.1);
-    expect(economics.profitManwon).toBe(-10_483.1);
-    expect(economics.profitMarginPct).toBe(-10.4);
+    expect(economics.profitManwon).toBe(-25_075.1);
+    expect(economics.profitMarginPct).toBe(-29.2);
+    expect(result.revenueProjection.pricing.stabilizationFactorPct).toBe(85);
     expect(economics.assumptionsVersion).toBe("test-v1");
   });
 
@@ -211,6 +247,54 @@ describe("Stage 2 planning calculation engine", () => {
     expect(result.checks.find((check) => check.code === "bcr")?.status).toBe("review");
     expect(result.checks.find((check) => check.code === "far")?.status).toBe("review");
     expect(result.checks.find((check) => check.code === "height")?.status).toBe("unknown");
+  });
+
+  it("does not auto-exempt a 2-floor 7.9m Seoul plan from north sunlight", () => {
+    const scenario = createBlankPlanningScenario({ name: "서울 저층안" });
+    scenario.primaryUse = "single-house";
+    scenario.floorPrograms = [
+      createFloorProgram(1, [createFloorZone("residential", 40, 1)], 3.25),
+      createFloorProgram(2, [createFloorZone("residential", 40, 1)], 3.25),
+    ];
+    const result = calculatePlanningScenario(scenario, {
+      ...context,
+      parcel: {
+        ...context.parcel,
+        zoning: "제2종일반주거지역",
+        zoningStatus: "source-backed",
+        sunlightRuleAsOf: "2026-09-08",
+        sunlightNorthBoundary: {
+          adjacentZoning: "제2종일반주거지역",
+          adjacentZoningStatus: "source-backed",
+          separatorType: "none",
+          separatorStatus: "source-backed",
+        },
+      },
+    });
+
+    expect(result.metrics.totalHeightM).toBe(7.9);
+    expect(result.sunlight.north.exception).toBe("none");
+    expect(result.sunlight.north.effectiveDistanceM).toBe(1.5);
+    expect(
+      result.checks.find((check) => check.code === "sunlight-north")?.message
+    ).toContain("1.5m 필요");
+  });
+
+  it("keeps the ambiguous multi-family planning label under daylight review", () => {
+    const result = calculatePlanningScenario(mixedUseScenario(), {
+      ...context,
+      parcel: {
+        ...context.parcel,
+        zoning: "제2종일반주거지역",
+        zoningStatus: "source-backed",
+        sunlightRuleAsOf: "2026-09-08",
+      },
+    });
+
+    expect(result.sunlight.daylight.applicability).toBe("review");
+    expect(
+      result.checks.find((check) => check.code === "sunlight-daylight")?.status
+    ).toBe("review");
   });
 
   it("applies derived checks and economics without replacing the plan definition", () => {

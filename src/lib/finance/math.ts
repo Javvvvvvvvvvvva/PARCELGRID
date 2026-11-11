@@ -9,7 +9,7 @@
  * (display, storage, API response).
  *
  * Numerical methods here:
- *   - IRR via Newton-Raphson with Brent's method fallback
+ *   - IRR via Newton-Raphson with bisection fallback
  *   - NPV (straightforward)
  *   - DSCR (NOI / debt service)
  *   - Equity multiple (cumulative distributions / equity)
@@ -75,7 +75,15 @@ export function npv(rate: DecimalLike, cashflows: DecimalLike[]): Decimal {
  * Returns the *periodic* IRR. For monthly cashflows the caller annualizes:
  *   annualIRR = (1 + monthlyIRR)^12 - 1
  *
- * @returns periodic IRR as Decimal, or null if no solution.
+ * Newton accepts rates in (-1, 10]; fallback searches only [-0.99, 10].
+ * With multiple roots, returns the first converged Newton iterate for the
+ * supplied guess, otherwise a converged fallback endpoint or bracketed root.
+ * This does not establish uniqueness or guarantee finding every valid root.
+ * Residuals must satisfy both absolute and relative (discounted magnitude)
+ * tolerance. A narrow bracket alone does not establish convergence.
+ *
+ * @returns periodic IRR as Decimal, or null for invalid numeric inputs or when
+ * no root converges within the search bounds and iteration budget.
  */
 export function irr(
   cashflows: DecimalLike[],
@@ -83,31 +91,48 @@ export function irr(
   maxIter = 200,
   tolerance = 1e-9
 ): Decimal | null {
-  if (cashflows.length < 2) return null;
+  if (
+    cashflows.length < 2 ||
+    !Number.isSafeInteger(maxIter) || maxIter <= 0 ||
+    !Number.isFinite(tolerance) || tolerance <= 0
+  ) return null;
 
   // Need at least one sign change
   const flows = cashflows.map(D);
+  if (flows.some((flow) => !flow.isFinite())) return null;
   const hasPos = flows.some((c) => c.gt(0));
   const hasNeg = flows.some((c) => c.lt(0));
   if (!hasPos || !hasNeg) return null;
 
   // Newton-Raphson
   let r = D(guess);
+  if (!r.isFinite() || r.lte(-1) || r.gt(10)) return null;
+  const flowScale = flows.reduce(
+    (scale, flow) => Decimal.max(scale, flow.abs()), ZERO,
+  );
+  const derivativeTolerance = Decimal.min(ONE, flowScale).times(1e-15);
   for (let i = 0; i < maxIter; i++) {
     let f = ZERO;
     let df = ZERO;
+    let magnitude = ZERO;
     const onePlusR = ONE.plus(r);
+    let denom = ONE;
 
     for (let t = 0; t < flows.length; t++) {
-      const denom = onePlusR.pow(t);
-      f = f.plus(flows[t].div(denom));
+      // The derivative's power is the next period's denominator. Reuse it
+      // without replacing Decimal.pow with differently rounded multiplication.
+      const nextDenom = onePlusR.pow(t + 1);
+      const presentValue = flows[t].div(denom);
+      f = f.plus(presentValue);
+      magnitude = magnitude.plus(presentValue.abs());
       if (t > 0) {
-        df = df.minus(flows[t].times(t).div(onePlusR.pow(t + 1)));
+        df = df.minus(flows[t].times(t).div(nextDenom));
       }
+      denom = nextDenom;
     }
 
-    if (f.abs().lt(tolerance)) return r;
-    if (df.abs().lt(1e-15)) break; // derivative too small, Newton stuck
+    if (irrResidualConverged(f, magnitude, tolerance)) return r;
+    if (!f.isFinite() || !df.isFinite() || df.abs().lt(derivativeTolerance)) break;
 
     const next = r.minus(f.div(df));
 
@@ -123,6 +148,15 @@ export function irr(
   return irrBisection(flows, tolerance, maxIter);
 }
 
+function irrResidualConverged(
+  residual: Decimal,
+  magnitude: Decimal,
+  tolerance: number,
+): boolean {
+  return residual.isFinite() && magnitude.isFinite() && magnitude.gt(0) &&
+    residual.abs().lt(Decimal.min(ONE, magnitude).times(tolerance));
+}
+
 function irrBisection(
   flows: Decimal[],
   tolerance: number,
@@ -130,23 +164,32 @@ function irrBisection(
 ): Decimal | null {
   let lo = D(-0.99);
   let hi = D(10);
+  const absoluteFlows = flows.map((flow) => flow.abs());
+  const converged = (rate: Decimal, residual: Decimal) =>
+    irrResidualConverged(residual, npv(rate, absoluteFlows), tolerance);
 
-  const fLo = npv(lo, flows);
+  let fLo = npv(lo, flows);
   const fHi = npv(hi, flows);
-  if (fLo.times(fHi).gt(0)) return null; // no sign change in bracket
+  if (converged(lo, fLo)) return lo;
+  if (converged(hi, fHi)) return hi;
+  if (
+    !fLo.isFinite() || !fHi.isFinite() || fLo.isZero() || fHi.isZero() ||
+    fLo.isPositive() === fHi.isPositive()
+  ) return null;
 
   for (let i = 0; i < maxIter; i++) {
     const mid = lo.plus(hi).div(2);
     const fMid = npv(mid, flows);
-    if (fMid.abs().lt(tolerance)) return mid;
-    if (fLo.times(fMid).lt(0)) {
+    if (converged(mid, fMid)) return mid;
+    if (!fMid.isFinite() || fMid.isZero() || mid.eq(lo) || mid.eq(hi)) return null;
+    if (fLo.isPositive() !== fMid.isPositive()) {
       hi = mid;
     } else {
       lo = mid;
+      fLo = fMid;
     }
-    if (hi.minus(lo).abs().lt(tolerance)) return mid;
   }
-  return lo.plus(hi).div(2);
+  return null;
 }
 
 /** Convert periodic IRR to annual. */
@@ -181,6 +224,20 @@ export function annualMortgagePayment(
   if (r.eq(0)) return p.div(years);
   const onePlusR = ONE.plus(r);
   const factor = onePlusR.pow(years);
+  return p.times(r).times(factor).div(factor.minus(ONE));
+}
+
+/** Level monthly payment for a fully-amortizing loan. */
+export function monthlyMortgagePayment(
+  principal: DecimalLike,
+  annualRate: DecimalLike,
+  years: number,
+): Decimal {
+  const p = D(principal);
+  const periods = years * 12;
+  const r = D(annualRate).div(12);
+  if (r.eq(0)) return p.div(periods);
+  const factor = ONE.plus(r).pow(periods);
   return p.times(r).times(factor).div(factor.minus(ONE));
 }
 

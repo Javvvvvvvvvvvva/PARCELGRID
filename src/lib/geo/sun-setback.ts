@@ -14,8 +14,6 @@
 const ILJO_THRESHOLD_M = 10;
 /** 기준 높이 이하 최소 이격 (m) */
 const BASE_SETBACK_M = 1.5;
-/** 조례 배제 가능 상한 (2층 이하 & 8m 이하) */
-const EXEMPT_HEIGHT_M = 8;
 
 export interface SunSetbackResult {
   /** 건물 최고높이 기준 필요한 북측 이격 (m) */
@@ -24,7 +22,7 @@ export interface SunSetbackResult {
   buildingHeightM: number;
   /** 10m 초과 여부 (사선제한 본격 적용) */
   exceedsThreshold: boolean;
-  /** 2층 이하 & 8m 이하 — 조례로 배제 가능 */
+  /** 관할 조례 입력이 없는 이 공식 전용 helper에서는 항상 false. */
   exemptPossible: boolean;
   /** 북측 경계 거리를 알 때만: 준수 여부 */
   compliant: boolean | null;
@@ -46,7 +44,9 @@ export function calcSunSetback(
   const requiredSetbackM = exceedsThreshold
     ? buildingHeightM / 2
     : BASE_SETBACK_M;
-  const exemptPossible = buildingHeightM <= EXEMPT_HEIGHT_M;
+  // 건축법 제61조제4항은 지자체 조례가 채택한 경우에만 배제가 가능하다.
+  // 이 helper에는 관할 정보가 없으므로 높이만으로 예외를 만들지 않는다.
+  const exemptPossible = false;
 
   let compliant: boolean | null = null;
   let shortfallM: number | null = null;

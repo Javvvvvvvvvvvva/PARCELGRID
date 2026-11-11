@@ -1,11 +1,17 @@
 import { calculateScenario } from "@/lib/finance/scenario";
-import type { AssumptionSet, Parcel, Scenario } from "@/lib/finance/types";
+import {
+  blendedRevenueUnitPrice,
+  revenuePricingKindForScenario,
+  withScenarioRevenueUnitPrice,
+} from "@/lib/finance/revenue-contract";
+import type { Parcel, Scenario } from "@/lib/finance/types";
 
 export const STAGE3_REVENUE_STEPS = [-10, -5, 0, 5, 10] as const;
 export const STAGE3_COST_STEPS = [-10, -5, 0, 10, 20] as const;
 
 export interface Stage3SensitivityCell {
   profit: number;
+  profitUnroundedManwon: number | null;
   irr: number;
   irrStatus?: "calculated" | "not-calculated" | "ambiguous";
 }
@@ -34,26 +40,30 @@ export function buildStage3Sensitivity(
   parcel: Parcel,
   scenario: Scenario
 ): Stage3Sensitivity {
-  const saleDriven = scenario.program.mix.residentialSale > 0;
-  const revenueField: keyof AssumptionSet = saleDriven
-    ? "salePricePerSqM"
-    : "rentPerSqMMonth";
-  const baseRevenue = scenario.assumptions[revenueField];
+  const revenueKind = revenuePricingKindForScenario(scenario);
+  const saleDriven = revenueKind === "sale";
+  const baseRevenue = blendedRevenueUnitPrice(scenario, revenueKind);
   const baseCost = scenario.assumptions.constCostPerSqM;
 
   const rows = STAGE3_COST_STEPS.map((costDelta) =>
     STAGE3_REVENUE_STEPS.map((revenueDelta) => {
+      const pricedScenario = withScenarioRevenueUnitPrice(
+        scenario,
+        revenueKind,
+        baseRevenue * (1 + revenueDelta / 100),
+      );
       const assumptions = {
-        ...scenario.assumptions,
-        [revenueField]: baseRevenue * (1 + revenueDelta / 100),
+        ...pricedScenario.assumptions,
         constCostPerSqM: baseCost * (1 + costDelta / 100),
       };
       const result = calculateScenario({
         parcel,
-        scenario: { ...scenario, assumptions },
+        scenario: { ...pricedScenario, assumptions },
       });
       return {
         profit: result.profit,
+        profitUnroundedManwon: Number.isFinite(result.profitUnroundedManwon)
+          ? result.profitUnroundedManwon! : null,
         irr: result.irr,
         irrStatus: result.irrStatus,
       };
@@ -73,25 +83,21 @@ export function findStage3BreakEvenRevenuePrice(
   parcel: Parcel,
   scenario: Scenario
 ): Stage3BreakEvenPrice {
-  const saleDriven = scenario.program.mix.residentialSale > 0;
+  const revenueKind = revenuePricingKindForScenario(scenario);
+  const saleDriven = revenueKind === "sale";
   const kind = saleDriven ? ("sale" as const) : ("rent" as const);
-  const field: keyof AssumptionSet = saleDriven
-    ? "salePricePerSqM"
-    : "rentPerSqMMonth";
-  const current = scenario.assumptions[field];
+  const current = blendedRevenueUnitPrice(scenario, revenueKind);
   let lo = 0;
   let hi = Math.max(1, current * 4);
 
   const profitAt = (value: number) =>
     calculateScenario({
       parcel,
-      scenario: {
-        ...scenario,
-        assumptions: { ...scenario.assumptions, [field]: value },
-      },
-    }).profit;
+      scenario: withScenarioRevenueUnitPrice(scenario, revenueKind, value),
+    }).profitUnroundedManwon;
 
-  if (profitAt(hi) < 0) {
+  const upperProfit = profitAt(hi);
+  if (!Number.isFinite(upperProfit) || upperProfit! < 0) {
     return {
       kind,
       label: saleDriven ? "매각 단가" : "임대료",
@@ -103,7 +109,11 @@ export function findStage3BreakEvenRevenuePrice(
 
   for (let i = 0; i < 36; i += 1) {
     const mid = (lo + hi) / 2;
-    if (profitAt(mid) >= 0) hi = mid;
+    const profit = profitAt(mid);
+    if (!Number.isFinite(profit)) {
+      return { kind, label: saleDriven ? "매각 단가" : "임대료", current, value: null, marginPct: null };
+    }
+    if (profit! >= 0) hi = mid;
     else lo = mid;
   }
 

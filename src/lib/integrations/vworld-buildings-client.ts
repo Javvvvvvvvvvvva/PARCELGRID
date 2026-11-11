@@ -1,4 +1,5 @@
 import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
+import { fetchVworldJson } from "./vworld-response";
 import {
   BUILDING_CONTEXT_RADIUS_M,
   parseBuildingFeatureCollection,
@@ -66,25 +67,5 @@ export function buildExistingBuildingWfsUrl(
 export async function fetchExistingBuildingGeometry(
   query: ExistingBuildingGeometryQuery
 ): Promise<ExistingBuildingGeometry> {
-  const response = await fetch(buildExistingBuildingWfsUrl(query), {
-    signal: AbortSignal.timeout(12_000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`V-World building WFS HTTP ${response.status}`);
-  }
-
-  const contentType = response.headers.get("content-type") ?? "";
-  const body = await response.text();
-
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return parseBuildingFeatureCollection(parsed, query);
-  } catch {
-    const responseKind = contentType || "unknown content-type";
-    const isXml = body.trimStart().startsWith("<");
-    throw new Error(
-      `V-World building WFS returned ${isXml ? "XML/GML" : "non-JSON"} (${responseKind})`
-    );
-  }
+  return parseBuildingFeatureCollection(await fetchVworldJson(buildExistingBuildingWfsUrl(query), { envelope: "wfs" }), query);
 }

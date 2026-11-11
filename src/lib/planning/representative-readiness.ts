@@ -7,6 +7,9 @@ const DECISION_GRADE_CODES = [
   "parking",
 ] as const;
 
+// New area-only dwelling programs cannot acquire a final geometry approval from rectangle packing.
+const CONDITIONAL_DECISION_CODES = new Set(["dwelling-layout-verification", "vehicle-circulation", "egress-core", "layout-finance-adoption"]);
+
 export interface RepresentativeCheckBlocker {
   code: string;
   message: string;
@@ -16,6 +19,28 @@ export interface RepresentativeCheckBlocker {
 export interface RepresentativeCheckReadiness {
   ready: boolean;
   blockers: RepresentativeCheckBlocker[];
+  advisories: RepresentativeCheckBlocker[];
+  blockingFailureCount: number;
+  blockingVerificationCount: number;
+  advisoryCount: number;
+}
+
+const BLOCKER_PRIORITY: Record<RepresentativeCheckBlocker["status"], number> = {
+  pass: 0,
+  review: 1,
+  unknown: 2,
+  missing: 3,
+  fail: 4,
+};
+
+function keepHighestPriority(
+  target: Map<string, RepresentativeCheckBlocker>,
+  item: RepresentativeCheckBlocker,
+): void {
+  const current = target.get(item.code);
+  if (!current || BLOCKER_PRIORITY[item.status] > BLOCKER_PRIORITY[current.status]) {
+    target.set(item.code, item);
+  }
 }
 
 /**
@@ -28,12 +53,13 @@ export function assessRepresentativeCheckReadiness(
   checks: PlanningCheck[] | null | undefined,
 ): RepresentativeCheckReadiness {
   const normalizedChecks = checks ?? [];
-  const blockers: RepresentativeCheckBlocker[] = [];
+  const blockers = new Map<string, RepresentativeCheckBlocker>();
+  const advisories = new Map<string, RepresentativeCheckBlocker>();
   const seen = new Set(normalizedChecks.map((check) => check.code));
 
   for (const check of normalizedChecks) {
     if (check.status === "fail") {
-      blockers.push({
+      keepHighestPriority(blockers, {
         code: check.code,
         message: check.message,
         status: check.status,
@@ -41,12 +67,20 @@ export function assessRepresentativeCheckReadiness(
       continue;
     }
     if (
-      DECISION_GRADE_CODES.includes(
+      (check.code.startsWith("interior-layout:") || check.code.startsWith("room-layout:") || CONDITIONAL_DECISION_CODES.has(check.code) || DECISION_GRADE_CODES.includes(
         check.code as (typeof DECISION_GRADE_CODES)[number],
-      ) &&
+      )) &&
       check.status !== "pass"
     ) {
-      blockers.push({
+      keepHighestPriority(blockers, {
+        code: check.code,
+        message: check.message,
+        status: check.status,
+      });
+      continue;
+    }
+    if (check.status === "review" || check.status === "unknown") {
+      keepHighestPriority(advisories, {
         code: check.code,
         message: check.message,
         status: check.status,
@@ -56,7 +90,7 @@ export function assessRepresentativeCheckReadiness(
 
   for (const code of DECISION_GRADE_CODES) {
     if (!seen.has(code)) {
-      blockers.push({
+      keepHighestPriority(blockers, {
         code,
         message: `${code} 검증 결과가 생성되지 않았습니다.`,
         status: "missing",
@@ -64,12 +98,20 @@ export function assessRepresentativeCheckReadiness(
     }
   }
 
-  const unique = new Map<string, RepresentativeCheckBlocker>();
-  for (const blocker of blockers) {
-    unique.set(blocker.code, blocker);
+  for (const code of blockers.keys()) {
+    advisories.delete(code);
   }
+  const blockerList = [...blockers.values()];
+  const advisoryList = [...advisories.values()];
   return {
-    ready: unique.size === 0,
-    blockers: [...unique.values()],
+    ready: blockerList.length === 0,
+    blockers: blockerList,
+    advisories: advisoryList,
+    blockingFailureCount: blockerList.filter((item) => item.status === "fail")
+      .length,
+    blockingVerificationCount: blockerList.filter(
+      (item) => item.status !== "fail",
+    ).length,
+    advisoryCount: advisoryList.length,
   };
 }

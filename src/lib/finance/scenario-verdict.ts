@@ -19,7 +19,7 @@ import {
 import {
   findNorthEdge,
   northSouthDepthM,
-  evaluateSunSetback,
+  isNorthEdgeAbuttingRoad,
 } from "@/lib/finance/sun-envelope";
 import { calcParking } from "@/lib/finance/parking";
 import { calcBuildableArea } from "@/lib/finance/buildable-area";
@@ -28,10 +28,14 @@ import {
   layoutParkingFromBoundary,
   assessPilotiOverlap,
 } from "@/lib/geo/parking-layout";
-import { sunRestrictionApplies } from "@/lib/finance/sun-envelope";
 import { computeScore, type ScoreDeduction } from "@/lib/finance/score-engine";
 import type { BuildingType } from "@/lib/finance/types";
 import { regulatoryConstraintIsDecisionGrade } from "@/lib/regulatory/constraints";
+import {
+  evaluateSunlightRegulation,
+  toSunlightGeometryProfile,
+  type SunlightRegulationResult,
+} from "@/lib/regulatory/sunlight-rules";
 
 /** 최소 건물 깊이 (MVP — 주택/다가구) */
 const MIN_BUILDING_DEPTH_M = 7.0;
@@ -48,7 +52,7 @@ function capFloorsByVerifiedConstraints(
   floorHeightM: number
 ): number {
   const constraints = parcel.regulatoryConstraints;
-  let result = Math.max(1, farBasedFloors);
+  let result = Number.isFinite(farBasedFloors) ? Math.min(200, Math.max(1, farBasedFloors)) : 1;
   if (regulatoryConstraintIsDecisionGrade(constraints?.height)) {
     const occupiableHeightM = Math.max(
       floorHeightM,
@@ -75,7 +79,7 @@ export interface SunVerdict {
 }
 
 export interface ParkingVerdict {
-  requiredCars: number;
+  requiredCars: number | null;
   basis: string;
 }
 
@@ -83,19 +87,20 @@ export interface ScenarioOption {
   /** "input"(내 계획) | "recommended" | "max" */
   mode: "input" | "recommended" | "max";
   floors: number;
-  gfaSqm: number;
-  gfaPyeong: number;
+  gfaSqm: number | null;
+  gfaPyeong: number | null;
+  geometryStatus: "available" | "unavailable";
   /** 실현 용적률 (%) = 실제 연면적 ÷ 대지면적 */
-  farUsedPct: number;
+  farUsedPct: number | null;
   /** 법정 용적률 상한 (%) = 용도지역 허용 최대 용적률 */
   farCapPct: number;
-  units: number;
+  units: number | null;
   sun: SunVerdict;
   parking: ParkingVerdict;
   /** 법적 최대 건축면적 (건폐율, ㎡) — 참고 표시용 */
   maxBuildingAreaSqm: number;
   /** 정북일조 반영 2D 건축가능면적 (㎡) — 보수 안전영역 */
-  buildable2DSqm: number;
+  buildable2DSqm: number | null;
   /** 시공성 (Score Engine) */
   buildability: { grade: "높음" | "보통" | "낮음"; note: string };
   /** 법적 리스크 (Score Engine) */
@@ -133,38 +138,29 @@ const LABELS: Record<ScenarioType, string> = {
 
 /** 정북일조 — 배치 깊이 기준 판정 (C 확정) */
 function evalSunVerdict(
-  zoning: string,
-  heightM: number,
-  floors: number,
-  northSouthM: number,
-  parcel: Parcel
+  regulation: SunlightRegulationResult,
+  northSouthM: number
 ): SunVerdict {
-  const northEdge = parcel.boundary ? findNorthEdge(parcel.boundary) : null;
-  const ev = evaluateSunSetback(zoning, heightM, floors, northEdge, parcel.roads);
+  const north = regulation.north;
 
-  if (!ev.applies) {
+  if (!north.geometryApplies) {
     return {
-      mark: "ok",
-      label: "미적용",
+      mark: north.requirementDecisionGrade ? "ok" : "warn",
+      label: north.requirementDecisionGrade ? "미적용" : "미적용 검토",
       requiredSetbackM: 0,
       remainDepthM: null,
-      detail: ev.conclusion,
-    };
-  }
-  if (ev.exemptByOrdinance) {
-    return {
-      mark: "ok",
-      label: "완화 가능",
-      requiredSetbackM: 0,
-      remainDepthM: null,
-      detail: ev.conclusion,
+      detail: north.basis.join(" · "),
     };
   }
 
-  const remain = northSouthM - ev.requiredSetbackM;
+  const requiredSetbackM = north.effectiveDistanceM ?? 0;
+  const remain = northSouthM - requiredSetbackM;
   let mark: VerdictMark;
   let label: string;
-  if (remain >= MIN_BUILDING_DEPTH_M) {
+  if (north.applicability === "review") {
+    mark = "warn";
+    label = "조건 확인";
+  } else if (remain >= MIN_BUILDING_DEPTH_M) {
     mark = "ok";
     label = "충족";
   } else if (remain >= MIN_BUILDING_DEPTH_M - 1.0) {
@@ -177,10 +173,55 @@ function evalSunVerdict(
   return {
     mark,
     label,
-    requiredSetbackM: ev.requiredSetbackM,
+    requiredSetbackM,
     remainDepthM: remain,
-    detail: `북측 ${ev.requiredSetbackM.toFixed(1)}m 이격 후 배치깊이 ${remain.toFixed(1)}m`,
+    detail:
+      "북측 " +
+      requiredSetbackM.toFixed(1) +
+      "m 이격 후 배치깊이 " +
+      remain.toFixed(1) +
+      "m" +
+      (north.warnings[0] ? " · " + north.warnings[0] : ""),
   };
+}
+
+function evaluateOptionSunlight(
+  type: ScenarioType,
+  parcel: Parcel,
+  heightM: number,
+  floors: number
+): SunlightRegulationResult {
+  const northEdge = parcel.boundary ? findNorthEdge(parcel.boundary) : null;
+  const northRoad = northEdge
+    ? isNorthEdgeAbuttingRoad(northEdge, parcel.roads)
+    : { isRoad: false, roadName: null };
+  return evaluateSunlightRegulation({
+    context: { address: parcel.address },
+    zoning: parcel.zoning,
+    zoningStatus:
+      parcel.inputProvenance?.zoning === "vworld-land-use"
+        ? "public-observation"
+        : "user-entered",
+    buildingHeightM: heightM,
+    floorsAbove: floors,
+    legalUse:
+      type === "single-house"
+        ? "detached-house"
+        : type === "multi-family"
+          ? "multi-family-house"
+          : "general-building",
+    legalUseStatus: "source-backed",
+    northBoundary: northRoad.isRoad
+      ? {
+          separatorType: "road",
+          separatorStatus: "public-observation",
+        }
+      : undefined,
+    daylight: {
+      sameLotBuildingCount: 1,
+      sameLotBuildingCountStatus: "source-backed",
+    },
+  });
 }
 
 /** 별점 — 정북일조 + 주차 종합 */
@@ -197,12 +238,13 @@ function sunRank(mark: VerdictMark): number {
  * @returns 양수면 a가 더 우수
  */
 function compareRecommendedCandidates(a: ScenarioOption, b: ScenarioOption): number {
+  if (a.geometryStatus !== b.geometryStatus) return a.geometryStatus === "available" ? 1 : -1;
   if (a.score !== b.score) return a.score - b.score;
   const sunDiff = sunRank(a.sun.mark) - sunRank(b.sun.mark);
   if (sunDiff !== 0) return sunDiff;
-  const parkDiff = b.parking.requiredCars - a.parking.requiredCars;
+  const parkDiff = (b.parking.requiredCars ?? 0) - (a.parking.requiredCars ?? 0);
   if (parkDiff !== 0) return parkDiff;
-  return a.gfaSqm - b.gfaSqm;
+  return (a.gfaSqm ?? 0) - (b.gfaSqm ?? 0);
 }
 
 /** 1~maxFloors 후보를 점수로 평가해 최적 권장안 선택 */
@@ -273,7 +315,9 @@ function buildOption(
           ? Math.max(1, inputFloors ?? 1)
           : maxCandidateFloors; // recommended는 pickRecommendedOption 경유
   // Buildable Area 엔진 (#2) — 정북일조 반영 실제 건축가능면적 (계단식 합)
-  const sunApplies = sunRestrictionApplies(parcel.zoning);
+  const heightM = floors * floorHeightM + DEFAULT_ROOF_ALLOWANCE_M;
+  const sunlight = evaluateOptionSunlight(type, parcel, heightM, floors);
+  const sunApplies = sunlight.north.geometryApplies;
   // 대지경계 최소 이격 0.5m만 사실 기반 반영 (C 확정).
   // 도로 3m·후면 3m 하드코딩 가정값은 제외 — Buildable Area 과소 방지.
   // 건축선 후퇴·도로사선·조례는 추가 검토 항목 (실제 데이터 확보 시 방향별 적용).
@@ -316,8 +360,17 @@ function buildOption(
     floors,
     floorHeightM,
     sunApplies,
-    edgeSetbacksM
+    edgeSetbacksM,
+    {
+      sunlightProfile: toSunlightGeometryProfile(sunlight),
+      floorHeightsM: Array.from({ length: floors }, () => floorHeightM),
+      floorLevels: Array.from({ length: floors }, (_, index) => index + 1),
+      roofAllowanceM: DEFAULT_ROOF_ALLOWANCE_M,
+      polygons: parcel.boundaryPolygons,
+    }
   );
+
+  const geometryAvailable = ba.geometryStatus === "available" && ba.stepped3D.every(step => step.floorPlateSqm === 0 || step.ringLngLat !== null);
 
   // 필로티 자동 판정 (C 확정: 토글도 기본값도 아닌 — 주차 동선의 결과)
   // 1층 플레이트 기준 (buildable2DRing은 최고높이 보수 링 — 겹침 과소평가)
@@ -333,36 +386,39 @@ function buildOption(
     console.log(`[piloti] ${piloti.reason}`);
   }
   // 연면적 = 계단식 각 층 floorPlate 합 (건폐율 상한 반영), 용적률 상한 clip.
-  // boundary 없으면 fallback: envelope 최대 (건폐율×층수).
+  // A computed zero stays zero. Missing geometry is not a BCR-based approval.
   const steppedSum = ba.stepped3D.reduce(
-    (sum, s) => sum + Math.min(s.floorPlateSqm || maxBuildingAreaSqm, maxBuildingAreaSqm),
+    (sum, s) => sum + Math.min(s.floorPlateSqm, maxBuildingAreaSqm),
     0
   );
-  const gfaSqm =
-    ba.buildable2DRing && steppedSum > 0
-      ? Math.min(maxFarFloorAreaSqm, steppedSum)
-      : Math.min(maxFarFloorAreaSqm, maxBuildingAreaSqm * floors);
+  const gfaSqm = Math.min(maxFarFloorAreaSqm, steppedSum);
   // input 모드: 사용자 입력 세대수 우선 (C 확정 — 내 조건으로 검토).
   // 권장·최대: 엔진 산정 최대 가능 세대수 (세대당 50㎡ 가정, 표시 필요).
   const autoUnits =
     type === "multi-family"
-      ? Math.max(1, Math.floor(gfaSqm / unitAreaSqm))
+      ? Math.max(0, Math.floor(gfaSqm / unitAreaSqm))
       : type === "single-house"
-      ? 1
+      ? (gfaSqm > 0 ? 1 : 0)
       : 0;
   const units =
     mode === "input" && inputUnits != null && type !== "retail"
       ? Math.max(1, inputUnits)
       : autoUnits;
 
-  const heightM = floors * floorHeightM + DEFAULT_ROOF_ALLOWANCE_M;
-  const sun = evalSunVerdict(parcel.zoning, heightM, floors, northSouthM, parcel);
+  const sun = evalSunVerdict(sunlight, northSouthM);
+  if (!geometryAvailable) {
+    sun.mark = "warn";
+    sun.label = "형상 미확인";
+    sun.remainDepthM = null;
+    sun.detail = [...ba.warnings, "이 비교에서는 사용 가능한 단일 층 형상을 확인하지 못했습니다."].join(" · ");
+  }
 
   const pk = calcParking(
     type as BuildingType,
     gfaSqm,
     type === "retail" ? 0 : units,
-    type === "retail" ? 1 : 0
+    type === "retail" ? 1 : 0,
+    { context: { address: parcel.address } }
   );
 
   const farUsedPct = Math.round((gfaSqm / parcel.lotArea) * 100);
@@ -392,13 +448,14 @@ function buildOption(
   return {
     mode,
     floors,
-    gfaSqm,
-    gfaPyeong: Math.round(gfaSqm / 3.3058),
-    farUsedPct,
+    geometryStatus: geometryAvailable ? "available" : "unavailable",
+    gfaSqm: geometryAvailable ? gfaSqm : null,
+    gfaPyeong: geometryAvailable ? Math.round(gfaSqm / 3.3058) : null,
+    farUsedPct: geometryAvailable ? farUsedPct : null,
     farCapPct: parcel.maxFAR,
-    units,
+    units: geometryAvailable || mode === "input" ? units : null,
     sun,
-    parking: { requiredCars: pk.requiredCars, basis: pk.basis },
+    parking: { requiredCars: geometryAvailable ? pk.requiredCars : null, basis: geometryAvailable ? pk.basis : "형상 미확인으로 대수 산정을 보류했습니다." },
     piloti: piloti
       ? {
           recommended: piloti.recommended,
@@ -407,11 +464,11 @@ function buildOption(
         }
       : null,
     maxBuildingAreaSqm: Number(maxBuildingAreaSqm.toFixed(1)),
-    buildable2DSqm: ba.buildable2DSqm,
-    buildability: score.buildability,
-    legalRisk: score.legalRisk,
-    parkingSufficient: score.parkingSufficient,
-    score: score.score,
+    buildable2DSqm: geometryAvailable ? ba.buildable2DSqm : null,
+    buildability: geometryAvailable && gfaSqm > 0 ? score.buildability : { grade: "낮음", note: "사용 가능한 건축 형상을 확인하지 못했습니다." },
+    legalRisk: geometryAvailable && gfaSqm > 0 ? score.legalRisk : { grade: "높음", note: "형상 검토 전에는 실행 가능한 후보로 채택할 수 없습니다." },
+    parkingSufficient: geometryAvailable && gfaSqm > 0 ? score.parkingSufficient : null,
+    score: geometryAvailable && gfaSqm > 0 ? score.score : 0,
     scoreBreakdown: score.breakdown,
   };
 }

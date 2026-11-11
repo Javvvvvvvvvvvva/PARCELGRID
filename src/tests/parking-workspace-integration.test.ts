@@ -29,6 +29,7 @@ describe("Stage 2 parking workspace integration", () => {
       pilotiShape: parcel,
       pilotiEnabled: true,
       requiredCars: 2,
+      frontEdge: [parcel[0], parcel[1]],
       parking: scenario.parking,
     });
 
@@ -40,5 +41,15 @@ describe("Stage 2 parking workspace integration", () => {
     expect(result.capacityCars).toBeGreaterThan(0);
     expect(updatedParking.providedCars).toBe(result.capacityCars);
     expect(updatedParking.providedCars).not.toBe(9);
+  });
+
+  it("does not replace stored supply with a capacity lacking a road entry", () => {
+    const scenario = createBlankPlanningScenario({ name: "접면 미확인" });
+    const parking = { ...scenario.parking, strategy: "piloti" as const, providedCars: 9 };
+    const result = calculateParkingLayout({ strategy: "piloti", parcelShape: parcel, pilotiShape: parcel,
+      pilotiEnabled: true, requiredCars: 2, parking });
+    expect(result.capacityCars).toBe(0);
+    expect(result.components[0].accessStatus).toBe("missing");
+    expect(parking.providedCars).toBe(9);
   });
 });

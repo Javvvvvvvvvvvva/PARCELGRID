@@ -1,8 +1,15 @@
 import { passesDealRescueTarget } from "./deal-rescue";
-import { calculateScenario } from "./scenario";
+import { calculatedAnnualIrr } from "./return-metrics";
+import {
+  blendedRevenueUnitPrice,
+  revenuePricingKindForScenario,
+  withScenarioRevenueUnitPrice,
+} from "./revenue-contract";
+import { calculateScenario, minimumConstructionCostRate } from "./scenario";
+import { ASSUMPTION_VALUE_RULES } from "./assumption-validation";
 import type { Parcel, Scenario, ScenarioResult } from "./types";
 
-export const DEAL_STRESS_MODEL_VERSION = "deal-stress-2026.1";
+export const DEAL_STRESS_MODEL_VERSION = "deal-stress-2026.2";
 const BINARY_SEARCH_ITERATIONS = 20;
 
 export type DealStressThresholdId =
@@ -20,10 +27,15 @@ export type DealStressThresholdStatus =
 export interface DealStressCostItem {
   id:
     | "land"
+    | "acquisition-tax"
+    | "acquisition-other"
     | "demolition"
+    | "tenant-relocation"
     | "hard-cost"
     | "soft-cost"
-    | "financing"
+    | "interest"
+    | "pf-fee"
+    | "trust-fee"
     | "contingency"
     | "rounding";
   label: string;
@@ -62,8 +74,8 @@ export interface DealStressResult {
   baseline: ScenarioResult;
   baselinePasses: boolean;
   gateGap: {
-    profit: number;
-    npv: number;
+    profit: number | null;
+    npv: number | null;
     irrPctPoint: number | null;
   };
   costDna: DealStressCostItem[];
@@ -100,11 +112,14 @@ function findHighestPassing(
   low: number,
   high: number,
   evaluate: (value: number) => boolean,
+  current: number,
 ): ThresholdSearch {
-  if (!evaluate(low)) return { value: null, hitBound: false };
   if (evaluate(high)) return { value: high, hitBound: true };
-
-  let passing = low;
+  const candidates = [low, Math.max(low, Math.min(high, current)),
+    ...Array.from({ length: 15 }, (_, i) => low + (high - low) * (i + 1) / 16)];
+  const passingSeed = candidates.find(evaluate);
+  if (passingSeed === undefined) return { value: null, hitBound: false };
+  let passing = passingSeed;
   let failing = high;
   for (let i = 0; i < BINARY_SEARCH_ITERATIONS; i += 1) {
     const candidate = (passing + failing) / 2;
@@ -118,12 +133,15 @@ function findLowestPassing(
   low: number,
   high: number,
   evaluate: (value: number) => boolean,
+  current: number,
 ): ThresholdSearch {
-  if (!evaluate(high)) return { value: null, hitBound: false };
   if (evaluate(low)) return { value: low, hitBound: true };
-
+  const candidates = [high, Math.max(low, Math.min(high, current)),
+    ...Array.from({ length: 15 }, (_, i) => low + (high - low) * (16 - i - 1) / 16)];
+  const passingSeed = candidates.find(evaluate);
+  if (passingSeed === undefined) return { value: null, hitBound: false };
   let failing = low;
-  let passing = high;
+  let passing = passingSeed;
   for (let i = 0; i < BINARY_SEARCH_ITERATIONS; i += 1) {
     const candidate = (failing + passing) / 2;
     if (evaluate(candidate)) passing = candidate;
@@ -149,10 +167,15 @@ function pctDelta(current: number, threshold: number | null): number | null {
 function buildCostDna(result: ScenarioResult): DealStressCostItem[] {
   const rows: Array<Omit<DealStressCostItem, "shareOfTotalCost">> = [
     { id: "land", label: "부동산 취득대금", amount: result.landCost },
+    { id: "acquisition-tax", label: "취득세 반영액", amount: result.acquisitionTax },
+    { id: "acquisition-other", label: "기타 취득 부대비", amount: result.acquisitionOtherCost },
     { id: "demolition", label: "철거비", amount: result.demolitionCost },
+    { id: "tenant-relocation", label: "명도·임차인 정리비", amount: result.tenantRelocationCost },
     { id: "hard-cost", label: "직접 공사비", amount: result.hardCost },
     { id: "soft-cost", label: "설계·인허가·간접비", amount: result.softCost },
-    { id: "financing", label: "금융비", amount: result.financingCost },
+    { id: "interest", label: "PF 이자", amount: result.interestCost },
+    { id: "pf-fee", label: "PF 약정·취급 수수료", amount: result.pfFee },
+    { id: "trust-fee", label: "신탁·자금관리비", amount: result.trustFee },
     { id: "contingency", label: "예비비", amount: result.contingency },
   ];
   const componentTotal = rows.reduce((sum, row) => sum + row.amount, 0);
@@ -181,7 +204,12 @@ function stressCase(
   scenario: Scenario,
   targetIRR: number,
 ): DealStressCase {
-  const result = calculateScenario({ parcel, scenario });
+  let result: ScenarioResult;
+  try {
+    result = calculateScenario({ parcel, scenario });
+  } catch (error) {
+    throw new Error(`${label} 분석을 완료하지 못했습니다. ${error instanceof Error ? error.message : "입력값과 계산 범위를 확인하세요."}`);
+  }
   return {
     id,
     label,
@@ -193,7 +221,7 @@ function stressCase(
 
 /**
  * Builds an auditable Stage 3 stress view from the exact same scenario ledger.
- * Thresholds are mathematical boundaries inside disclosed search ranges, not
+ * Thresholds are rechecked candidates inside disclosed search ranges, not
  * appraisals, lender terms, construction quotes, or legal buildability advice.
  */
 export function buildDealStressTest(
@@ -203,11 +231,10 @@ export function buildDealStressTest(
   const targetIRR = scenario.assumptions.equityIRR;
   const baseline = calculateScenario({ parcel, scenario });
   const baselinePasses = passesDealRescueTarget(baseline, targetIRR);
+  const revenueKind = revenuePricingKindForScenario(scenario);
   const revenueField =
-    scenario.program.mix.residentialSale > 0
-      ? "salePricePerSqM"
-      : "rentPerSqMMonth";
-  const revenueCurrent = scenario.assumptions[revenueField];
+    revenueKind === "sale" ? "salePricePerSqM" : "rentPerSqMMonth";
+  const revenueCurrent = blendedRevenueUnitPrice(scenario, revenueKind);
 
   const landHigh = Math.max(
     parcel.acquiredPrice * 4,
@@ -216,26 +243,37 @@ export function buildDealStressTest(
   );
   const land = findHighestPassing(0, landHigh, (value) =>
     pass({ ...parcel, acquiredPrice: value }, scenario, targetIRR),
+    parcel.acquiredPrice,
   );
 
-  const revenueHigh = Math.max(revenueCurrent * 4, 1);
+  const revenueHigh = Math.min(Math.max(revenueCurrent * 4, 1), ASSUMPTION_VALUE_RULES[revenueField].max);
   const revenue = findLowestPassing(0, revenueHigh, (value) =>
-    pass(parcel, cloneScenario(scenario, { [revenueField]: value }), targetIRR),
+    pass(
+      parcel,
+      withScenarioRevenueUnitPrice(scenario, revenueKind, value),
+      targetIRR,
+    ),
+    revenueCurrent,
   );
 
   const constructionCurrent = scenario.assumptions.constCostPerSqM;
-  const constructionHigh = Math.max(constructionCurrent * 2.5, 1);
-  const construction = findHighestPassing(0, constructionHigh, (value) =>
+  const quantityCostScope = scenario.program.areaContract?.quantityCostAdjustment
+    ? "수량 교체 견적액 고정 · 잔여 기본 공종만 증감" : "직접 공사비 단가 변동";
+  const constructionLow = minimumConstructionCostRate({ parcel, scenario });
+  const constructionHigh = Math.min(Math.max(constructionCurrent * 2.5, 1), ASSUMPTION_VALUE_RULES.constCostPerSqM.max);
+  const construction = findHighestPassing(constructionLow, constructionHigh, (value) =>
     pass(
       parcel,
       cloneScenario(scenario, { constCostPerSqM: value }),
       targetIRR,
     ),
+    constructionCurrent,
   );
 
   const rateCurrent = scenario.assumptions.interestRate;
   const rate = findHighestPassing(0, 25, (value) =>
     pass(parcel, cloneScenario(scenario, { interestRate: value }), targetIRR),
+    rateCurrent,
   );
 
   const thresholds: DealStressThreshold[] = [
@@ -248,7 +286,7 @@ export function buildDealStressTest(
       threshold: land.value,
       unit: "만원",
       deltaFromCurrentPct: pctDelta(parcel.acquiredPrice, land.value),
-      note: "수익·원가·금융·기간을 고정한 최대 통과값",
+      note: "수익·원가·금융·기간 고정 · 탐색에서 확인한 상방 후보 (전역 최대 보장 아님)",
     },
     {
       id: "revenue-price",
@@ -260,7 +298,7 @@ export function buildDealStressTest(
       threshold: revenue.value,
       unit: revenueField === "salePricePerSqM" ? "원/㎡" : "원/㎡·월",
       deltaFromCurrentPct: pctDelta(revenueCurrent, revenue.value),
-      note: "다른 입력을 고정한 최소 통과값",
+      note: "다른 입력 고정 · 탐색에서 확인한 하방 후보 (전역 최소 보장 아님)",
     },
     {
       id: "construction-cost",
@@ -271,7 +309,7 @@ export function buildDealStressTest(
       threshold: construction.value,
       unit: "원/㎡",
       deltaFromCurrentPct: pctDelta(constructionCurrent, construction.value),
-      note: "설계·간접비와 예비비의 연동을 포함한 최대 통과값",
+      note: `설계·간접비·예비비 연동 상방 후보 (전역 최대 보장 아님) · ${quantityCostScope}`,
     },
     {
       id: "pf-rate",
@@ -282,13 +320,15 @@ export function buildDealStressTest(
       threshold: rate.value,
       unit: "%",
       deltaFromCurrentPct: pctDelta(rateCurrent, rate.value),
-      note: "0~25% 탐색 범위 안의 최대 통과값",
+      note: "0~25% 탐색에서 확인한 상방 후보 (전역 최대 보장 아님)",
     },
   ];
 
-  const revenueDown = cloneScenario(scenario, {
-    [revenueField]: revenueCurrent * 0.9,
-  });
+  const revenueDown = withScenarioRevenueUnitPrice(
+    scenario,
+    revenueKind,
+    revenueCurrent * 0.9,
+  );
   const costUp = cloneScenario(scenario, {
     constCostPerSqM: constructionCurrent * 1.1,
   });
@@ -298,12 +338,18 @@ export function buildDealStressTest(
   const delay = cloneScenario(scenario, {
     constructionMonths: scenario.assumptions.constructionMonths + 3,
   });
-  const combined = cloneScenario(scenario, {
-    [revenueField]: revenueCurrent * 0.95,
+  const combined = cloneScenario(
+    withScenarioRevenueUnitPrice(
+      scenario,
+      revenueKind,
+      revenueCurrent * 0.95,
+    ),
+    {
     constCostPerSqM: constructionCurrent * 1.1,
     interestRate: rateCurrent + 1,
     constructionMonths: scenario.assumptions.constructionMonths + 3,
-  });
+    },
+  );
 
   const stressCases: DealStressCase[] = [
     stressCase(
@@ -316,8 +362,8 @@ export function buildDealStressTest(
     ),
     stressCase(
       "cost-up-10",
-      "공사비 +10%",
-      ["직접 공사비 단가 +10%", "연동 간접비·예비비 재계산"],
+      "기본 공사단가 +10%",
+      ["직접 공사비 단가 +10%", quantityCostScope, "연동 간접비·예비비 재계산"],
       parcel,
       costUp,
       targetIRR,
@@ -341,7 +387,7 @@ export function buildDealStressTest(
     stressCase(
       "combined-downside",
       "복합 하방",
-      ["매출 -5%", "공사비 +10%", "PF +1.0%p", "공사 +3개월"],
+      ["매출 -5%", "기본 공사단가 +10%", quantityCostScope, "PF +1.0%p", "공사 +3개월"],
       parcel,
       combined,
       targetIRR,
@@ -349,17 +395,20 @@ export function buildDealStressTest(
   ];
 
   const summedCost = buildCostDna(baseline);
+  const annualIrr = calculatedAnnualIrr(baseline);
   return {
     modelVersion: DEAL_STRESS_MODEL_VERSION,
     targetIRR,
     baseline,
     baselinePasses,
     gateGap: {
-      profit: Math.max(0, -baseline.profit),
-      npv: Math.max(0, -baseline.npv),
+      profit: Number.isFinite(baseline.profitUnroundedManwon)
+        ? Math.max(0, -baseline.profitUnroundedManwon!) : null,
+      npv: Number.isFinite(baseline.npvUnroundedManwon)
+        ? Math.max(0, -baseline.npvUnroundedManwon!) : null,
       irrPctPoint:
-        baseline.irrStatus === "calculated"
-          ? Math.max(0, targetIRR - baseline.irr)
+        annualIrr !== null
+          ? Math.max(0, targetIRR - annualIrr)
           : null,
     },
     costDna: summedCost,
@@ -371,8 +420,8 @@ export function buildDealStressTest(
       "계획 규모·용적률은 연속 보간하지 않습니다. Stage 2에서 저장된 법규·배치 검증 계획안끼리만 별도 비교합니다.",
     bounds: [
       `부동산 총 취득대금 0~${Math.round(landHigh)}만원`,
-      `매출 단가 0~현재의 4배`,
-      `직접 공사비 0~현재의 2.5배`,
+      `매출 단가 0~${revenueHigh}원 (현재의 4배와 입력 상한 중 작은 값)`,
+      `직접 공사비 ${constructionLow}~${constructionHigh}원/㎡ (음수 공사비 제외 · 현재의 2.5배와 입력 상한 중 작은 값)`,
       `PF 금리 0~25%`,
     ],
   };

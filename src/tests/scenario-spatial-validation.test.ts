@@ -13,6 +13,12 @@ import type {
   PlanningCheck,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
+import { evaluateSunlightRegulation } from "@/lib/regulatory/sunlight-rules";
+import {
+  createRevenuePricingSnapshot,
+  emptyRevenueAreaPools,
+  valueRevenueAreaPools,
+} from "@/lib/finance/revenue-contract";
 
 const boundary: [number, number][] = [
   [126.99994, 37.49995],
@@ -71,7 +77,33 @@ function baseCalculation(): PlanningScenarioCalculation {
       exemptPossible: false,
       basis: [],
       reference: [],
+      decisionGrade: true,
+      warnings: [],
+      components: [],
+      rule: {
+        engineVersion: "parking-rules-2026.1",
+        id: "test-parking-rule",
+        jurisdictionCode: "KR-11",
+        jurisdictionName: "서울특별시",
+        effectiveFrom: "2026-07-13",
+        asOf: "2026-09-08",
+        status: "source-backed",
+        sources: [],
+      },
     },
+    sunlight: evaluateSunlightRegulation({
+      context: { jurisdictionCode: "KR-11", asOf: "2026-09-08" },
+      zoning: "일반상업지역",
+      zoningStatus: "source-backed",
+      buildingHeightM: 3,
+      floorsAbove: 1,
+      legalUse: "general-building",
+      legalUseStatus: "source-backed",
+      daylight: {
+        sameLotBuildingCount: 1,
+        sameLotBuildingCountStatus: "source-backed",
+      },
+    }),
     checks: [
       {
         code: "far",
@@ -96,6 +128,21 @@ function baseCalculation(): PlanningScenarioCalculation {
       profitManwon: 0,
       profitMarginPct: 0,
     },
+    revenueProjection: valueRevenueAreaPools(
+      emptyRevenueAreaPools(),
+      createRevenuePricingSnapshot({
+        unitPricesWon: {
+          residentialSale: 0,
+          retailSale: 0,
+          officeSale: 0,
+          residentialLease: 0,
+          retailLease: 0,
+          officeLease: 0,
+        },
+        vacancyRatePct: 0,
+        capRatePct: 1,
+      }),
+    ),
   };
 }
 
@@ -116,6 +163,33 @@ describe("Stage 2 unified spatial validation", () => {
       result?.checks.find((check) => check.code === "spatial-placement")
         ?.status
     ).toBe("pass");
+    expect(result?.warnings).toContain(
+      "정북일조 미적용 조건으로 측후면 이격만 반영했습니다. 적용 근거는 별도 확인이 필요합니다."
+    );
+  });
+
+  it("does not report a basement calculation as a non-residential sunlight zone", () => {
+    const scenario = createBlankPlanningScenario({ name: "주거 지하층 포함안" });
+    scenario.primaryUse = "multi-family";
+    scenario.floorPrograms = [
+      createFloorProgram(1, [
+        createFloorZone("residential", 20, 1, "주거", "sale"),
+      ]),
+      createFloorProgram(-1, [
+        createFloorZone("parking", 20, 0, "지하주차", "non-revenue"),
+      ]),
+    ];
+
+    const result = calculatePlanningSpatialValidation(
+      boundary,
+      "제2종일반주거지역",
+      scenario
+    );
+
+    expect(result).not.toBeNull();
+    expect(result?.warnings).not.toContain(
+      "정북일조 미적용 용도지역 — 측후면 이격만 반영"
+    );
   });
 
   it("keeps legal placement geometry independent from user design margins", () => {

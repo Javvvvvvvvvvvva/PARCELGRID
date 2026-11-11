@@ -7,7 +7,7 @@ import {
 export const dynamic = "force-dynamic";
 
 const STATUS_LABEL: Record<ReadinessStatus, string> = {
-  ready: "사용 가능",
+  ready: "설정 충족",
   review: "설정 필요",
   optional: "선택 설정",
 };
@@ -33,13 +33,17 @@ export default function ReadinessPage() {
           </p>
           <h1 style={{ margin: "8px 0 7px", fontSize: 30 }}>로컬 환경 진단</h1>
           <p style={{ margin: 0, maxWidth: 720, color: "var(--fg-muted)", fontSize: 13, lineHeight: 1.65 }}>
-            비밀 값은 표시하지 않고 기능별 연결 여부만 확인합니다. 설정을 바꾼
+            환경변수와 실행 모드의 설정만 확인합니다. 외부 API·DB 연결과 실제 데이터의 정확성은 검증하지 않습니다. 설정을 바꾼
             뒤에는 개발 서버를 다시 시작하세요.
           </p>
         </header>
 
+        <aside role={readiness.deploymentGate.status === "blocked" ? "alert" : "status"} style={{ padding: 14, marginBottom: 16, border: "1px solid var(--border)", lineHeight: 1.65 }}>
+          <strong>{readiness.deploymentGate.message}</strong>
+        </aside>
+
         <section className="readiness-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: 16 }}>
-          <Summary label="사용 가능" value={readiness.summary.ready} />
+          <Summary label="설정 충족" value={readiness.summary.ready} />
           <Summary label="설정 필요" value={readiness.summary.review} />
           <Summary label="선택 설정" value={readiness.summary.optional} />
         </section>
@@ -73,7 +77,7 @@ export default function ReadinessPage() {
         </section>
 
         <footer style={{ marginTop: 18, padding: 14, borderRadius: 9, background: "var(--bg-soft)", color: "var(--fg-muted)", fontSize: 11, lineHeight: 1.65 }}>
-          실행 모드: <strong>{readiness.mode}</strong> · API 확인:{" "}
+          실행 모드: <strong>{readiness.mode}</strong> · 설정 진단 API:{" "}
           <code>GET /api/system/readiness</code> · 생성 시각:{" "}
           {readiness.generatedAt}
         </footer>

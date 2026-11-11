@@ -35,6 +35,13 @@ describe("generatePFSchedule", () => {
     expect(schedule.rows[0].quarter).toBe("2025-Q3");
   });
 
+  it.each(["2026-01-31", "2026-08-31", "2028-01-31"])("keeps monthly rows in their calendar quarter for a %s start", startDate => {
+    const firstOfMonth = `${startDate.slice(0, 7)}-01`;
+    expect(generatePFSchedule({ parcel, scenario, result, startDate })).toEqual(
+      generatePFSchedule({ parcel, scenario, result, startDate: firstOfMonth }),
+    );
+  });
+
   it("first quarter includes land acquisition without dropping other costs", () => {
     expect(schedule.rows[0].phase).toContain("토지 인수");
     expect(schedule.rows[0].outflow).toBeGreaterThanOrEqual(parcel.acquiredPrice);
@@ -70,26 +77,28 @@ describe("calculateTaxes", () => {
 
   it("produces all expected tax lines", () => {
     const codes = taxes.lines.map((l) => l.tax);
-    expect(codes).toContain("취득세");
-    expect(codes).toContain("재산세");
-    expect(codes).toContain("법인세");
-    expect(codes).toContain("부가세");
+    expect(codes).toContain("기존 부동산 취득세");
+    expect(codes).toContain("신축 건물 취득세");
+    expect(codes).toContain("재산세·보유세");
+    expect(codes).toContain("법인세·소득세");
+    expect(codes).toContain("부가가치세 순정산");
   });
 
   it("does not apply a land-only tax rate when building status is unknown", () => {
     const acquisition = taxes.lines.find(
       (line) =>
-        line.tax === "취득세" && line.base === "부동산 총 취득대금",
+        line.tax === "기존 부동산 취득세" &&
+        line.base === "계약상 취득 과세표준",
     );
     expect(acquisition).toMatchObject({
       amount: 0,
-      rate: "미산정",
+      rate: "일반 부동산 본세 4% 참고",
       status: "not-calculated",
     });
     expect(acquisition?.note).toContain("건축물 존재 여부");
   });
 
-  it("estimates the land rate only when the parcel is confirmed vacant", () => {
+  it("does not turn a vacant-land reference rate into tax due", () => {
     const vacantParcel: Parcel = {
       ...parcel,
       currentBuilding: {
@@ -103,13 +112,43 @@ describe("calculateTaxes", () => {
       residentialSaleShare: scenario.program.mix.residentialSale,
     });
     const acquisition = vacantTaxes.lines.find(
-      (line) => line.tax === "취득세" && line.base === "토지",
+      (line) => line.tax === "기존 부동산 취득세",
     );
-    expect(acquisition).toMatchObject({ status: "estimated" });
-    expect(acquisition!.amount).toBeCloseTo(
-      vacantParcel.acquiredPrice * TAX_RATES.acquisitionLandGeneral,
-      -1,
+    expect(acquisition).toMatchObject({
+      status: "not-calculated",
+      amount: 0,
+      rate: "일반 부동산 본세 4% 참고",
+    });
+    expect(TAX_RATES.realEstateAcquisitionGeneral).toBe(0.04);
+  });
+
+  it("uses an explicit acquisition-tax ledger amount instead of adding a second estimate", () => {
+    const explicitScenario: Scenario = {
+      ...scenario,
+      assumptions: {
+        ...scenario.assumptions,
+        acquisitionTaxManwon: 7_500,
+      },
+    };
+    const explicitResult = calculateScenario({
+      parcel,
+      scenario: explicitScenario,
+    });
+    const taxes = calculateTaxes({ parcel, result: explicitResult });
+    const acquisition = taxes.lines.find(
+      (line) =>
+        line.tax === "기존 부동산 취득세" &&
+        line.base === "세전 사업비 원장",
     );
+
+    expect(acquisition).toMatchObject({
+      amount: 7_500,
+      rate: "원장 입력",
+      status: "included-in-pretax",
+    });
+    expect(
+      taxes.lines.filter((line) => line.tax.includes("취득세")).length,
+    ).toBe(2);
   });
 
   it("blocks acquisition tax when an existing building is confirmed", () => {
@@ -130,7 +169,8 @@ describe("calculateTaxes", () => {
     });
     const acquisition = improvedTaxes.lines.find(
       (line) =>
-        line.tax === "취득세" && line.base === "부동산 총 취득대금",
+        line.tax === "기존 부동산 취득세" &&
+        line.base === "계약상 취득 과세표준",
     );
     expect(acquisition).toMatchObject({
       amount: 0,
@@ -139,40 +179,45 @@ describe("calculateTaxes", () => {
     expect(acquisition?.note).toContain("토지·건물 안분");
   });
 
-  it("corporate tax applies progressive brackets to positive profit", () => {
-    const corp = taxes.lines.find((l) => l.tax === "법인세")!;
-    const profitWon = Math.max(result.profit, 0) * 10_000;
-    let remaining = profitWon;
-    let lower = 0;
-    let expectedWon = 0;
-    for (const bracket of TAX_RATES.corporateBrackets) {
-      if (remaining <= 0) break;
-      const width = Number.isFinite(bracket.upperWon)
-        ? bracket.upperWon - lower
-        : remaining;
-      const taxable = Math.min(remaining, width);
-      expectedWon += taxable * bracket.rate;
-      remaining -= taxable;
-      lower = bracket.upperWon;
-    }
-    expect(corp.amount).toBeCloseTo(expectedWon / 10_000, 0);
+  it("shows corporate rates as references without treating model profit as taxable income", () => {
+    const corp = taxes.lines.find((l) => l.tax === "법인세·소득세")!;
+    expect(corp).toMatchObject({
+      amount: 0,
+      status: "reference-only",
+      rate: "법인 기본세율 10~25% 참고",
+    });
+    expect(TAX_RATES.corporateBrackets.map((bracket) => bracket.rate)).toEqual([
+      0.1,
+      0.2,
+      0.22,
+      0.25,
+    ]);
   });
 
-  it("does not create negative corporate tax for a loss", () => {
+  it("does not imply a tax refund from a model loss", () => {
     const lossTaxes = calculateTaxes({
       parcel,
       result: { ...result, profit: -10_000 },
       residentialSaleShare: scenario.program.mix.residentialSale,
     });
-    const corp = lossTaxes.lines.find((l) => l.tax === "법인세")!;
+    const corp = lossTaxes.lines.find((l) => l.tax === "법인세·소득세")!;
     expect(corp.amount).toBe(0);
+    expect(corp.status).toBe("reference-only");
   });
 
-  it("total only includes calculated estimates and flags incomplete coverage", () => {
-    const sum = taxes.lines
-      .filter((line) => line.status === "estimated")
-      .reduce((total, line) => total + line.amount, 0);
-    expect(taxes.total).toBe(sum);
+  it("legacy total only reports tax already included in pretax and never an added burden", () => {
+    const explicitScenario: Scenario = {
+      ...scenario,
+      assumptions: {
+        ...scenario.assumptions,
+        acquisitionTaxManwon: 7_500,
+      },
+    };
+    const explicitResult = calculateScenario({ parcel, scenario: explicitScenario });
+    const explicitTaxes = calculateTaxes({ parcel, result: explicitResult });
+    expect(explicitTaxes.total).toBe(7_500);
+    expect(explicitTaxes.includedInPretaxTotal).toBe(7_500);
+    expect(explicitTaxes.incrementalAfterTaxTotal).toBe(0);
     expect(taxes.complete).toBe(false);
     expect(taxes.lines.some((line) => line.status === "not-calculated")).toBe(true);
   });
@@ -228,7 +273,7 @@ describe("checkCompliance", () => {
     expect(["ok", "low", "med"]).toContain(gfa01.level);
   });
 
-  it("flags cultural heritage proximity when within 100m", () => {
+  it("keeps heritage scope unverified even with a distance within 100m", () => {
     const checks = checkCompliance({
       parcel,
       program: scenario.program,
@@ -236,13 +281,44 @@ describe("checkCompliance", () => {
     });
     const cul = checks.find((c) => c.code === "CUL-01");
     expect(cul).toBeDefined();
-    expect(cul!.level).toBe("high");
+    expect(cul).toMatchObject({ level: "low", evidenceStatus: "preliminary" });
+    expect(cul!.finding).toContain("80m");
   });
 
   it("compliance score is 100 when nothing flagged seriously", () => {
     const cleanProgram = { ...scenario.program, far: 200, floorsAbove: 6 };
     const checks = checkCompliance({ parcel, program: cleanProgram });
+    const parking = checks.find((check) => check.code === "PRK-04");
     const score = complianceScore(checks);
+    expect(parking).toMatchObject({
+      level: "low",
+      evidenceStatus: "preliminary",
+    });
     expect(score).toBeGreaterThan(80);
+  });
+
+  it("does not label a low-rise Seoul building as automatically exempt", () => {
+    const program = {
+      ...defaultProgram("single-house", 80, 40),
+      floorsAbove: 2,
+    };
+    const sunlight = checkCompliance({ parcel, program }).find(
+      (check) => check.code === "SUN-02"
+    );
+
+    expect(sunlight?.label).toBe("정북 일조 — 북측 이격 검토");
+    expect(sunlight?.finding).toContain("1.5m 필요");
+    expect(sunlight?.finding).not.toContain("완화");
+  });
+
+  it("does not show a north-setback warning for a commercial-zone building", () => {
+    const sunlight = checkCompliance({
+      parcel: { ...parcel, zoning: "일반상업지역" },
+      program: defaultProgram("office", 600, 60),
+    }).find((check) => check.code === "SUN-02");
+
+    expect(sunlight?.label).toBe("정북 일조 — 미적용");
+    expect(sunlight?.finding).toContain("적용 용도지역이 아닙니다");
+    expect(sunlight?.finding).not.toContain("이격 필요");
   });
 });

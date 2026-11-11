@@ -1,27 +1,43 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Canvas } from "@react-three/fiber";
-import { Line, OrbitControls, Text } from "@react-three/drei";
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+import { sessionLocalStorage } from "@/lib/auth/client-session";
+
+import { Suspense, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
+import { Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { Panel } from "@/components/ui/primitives";
+import { SceneText as Text } from "@/components/ui/SceneText";
+import { defaultAssumptions } from "@/lib/finance/scenario";
 import { getExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 import {
   buildCadastralContext,
   type CadastralContextSnapshot,
   type CadastralParcelFeature,
   type LocalCadastralParcel,
-  type CadastralRoadFrontage,
   type RoadClearanceAssessment,
 } from "@/lib/geo/cadastral-context";
+import { hasParcelBoundary, localParcelPolygons, parcelRings, type LocalParcelPolygon } from "@/lib/geo/parcel-topology";
 import {
   buildContextParcelAlignment,
   type ContextParcelAlignmentSnapshot,
   type ContextParcelAlignmentStatus,
 } from "@/lib/planning/context-parcel-alignment";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import {
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
-import { planningPointToThreeShape } from "@/lib/planning/three-coordinate-contract";
+import {
+  calculateContextSceneFrame,
+  contextCameraDistance,
+  contextFlatGeometry,
+  contextPrismGeometry,
+  openContextRing,
+  type ContextSceneFrame,
+} from "@/lib/planning/context-three-geometry";
 import {
   buildSketchupExportPackage,
   type ContextGeometryBuilding,
@@ -38,9 +54,9 @@ interface ApiResponse {
   parcels: CadastralParcelFeature[];
   source?: string;
   sourceSummary?: {
-    cadastralParcelCount: number;
-    cadastralRoadCount: number;
-    upisRoadBoundaryCount: number;
+    cadastralParcelCount: number | null;
+    cadastralRoadCount: number | null;
+    upisRoadBoundaryCount: number | null;
     activeRoadBoundarySource:
       | "cadastral-road-parcel"
       | "upis-road-boundary"
@@ -55,64 +71,23 @@ interface ApiResponse {
     roadNo: string;
   }>;
   error?: string;
+  warnings?: string[];
 }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
-function openRing(points: LocalPlanPoint[]): LocalPlanPoint[] {
-  if (points.length < 2) return points;
-  const first = points[0];
-  const last = points[points.length - 1];
-  return first.x === last.x && first.z === last.z ? points.slice(0, -1) : points;
+function useGeometryEdges(geometry: THREE.BufferGeometry): THREE.EdgesGeometry {
+  const edges = useMemo(() => new THREE.EdgesGeometry(geometry), [geometry]);
+  useEffect(() => () => {
+    edges.dispose();
+    geometry.dispose();
+  }, [edges, geometry]);
+  return edges;
 }
 
-function hasShape(points: LocalPlanPoint[]): boolean {
-  return (
-    points.length >= 3 &&
-    points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
-  );
-}
-
-function flatGeometry(points: LocalPlanPoint[]): THREE.BufferGeometry {
-  const ring = openRing(points);
-  if (!hasShape(ring)) return new THREE.BufferGeometry();
-  const shape = new THREE.Shape();
-  ring.forEach((point, index) => {
-    const shapePoint = planningPointToThreeShape(point);
-    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
-    else shape.lineTo(shapePoint.x, shapePoint.y);
-  });
-  shape.closePath();
-  const geometry = new THREE.ShapeGeometry(shape);
-  geometry.rotateX(-Math.PI / 2);
-  return geometry;
-}
-
-function prismGeometry(
-  points: LocalPlanPoint[],
-  bottomY: number,
-  topY: number
-): THREE.BufferGeometry {
-  const ring = openRing(points);
-  if (!hasShape(ring)) return new THREE.BufferGeometry();
-  const shape = new THREE.Shape();
-  ring.forEach((point, index) => {
-    const shapePoint = planningPointToThreeShape(point);
-    if (index === 0) shape.moveTo(shapePoint.x, shapePoint.y);
-    else shape.lineTo(shapePoint.x, shapePoint.y);
-  });
-  shape.closePath();
-  const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: Math.max(0.02, topY - bottomY),
-    bevelEnabled: false,
-  });
-  geometry.rotateX(-Math.PI / 2);
-  geometry.translate(0, bottomY, 0);
-  return geometry;
-}
-
-function ParcelPlate({ points }: { points: LocalPlanPoint[] }) {
-  const geometry = useMemo(() => flatGeometry(points), [points]);
+function ParcelPlate({ polygon }: { polygon: LocalParcelPolygon }) {
+  const geometry = useMemo(() => contextFlatGeometry(polygon), [polygon]);
+  const edges = useGeometryEdges(geometry);
   return (
     <group>
       <mesh geometry={geometry} position={[0, -0.035, 0]}>
@@ -124,7 +99,7 @@ function ParcelPlate({ points }: { points: LocalPlanPoint[] }) {
           side={THREE.DoubleSide}
         />
       </mesh>
-      <lineSegments geometry={new THREE.EdgesGeometry(geometry)} position={[0, -0.012, 0]}>
+      <lineSegments geometry={edges} position={[0, -0.012, 0]}>
         <lineBasicMaterial color="#8a6f47" transparent opacity={0.92} />
       </lineSegments>
     </group>
@@ -143,9 +118,10 @@ function ProposedMass({
   };
 }) {
   const geometry = useMemo(
-    () => prismGeometry(floor.shape, floor.baseHeightM, floor.topHeightM),
+    () => contextPrismGeometry({ outer: floor.shape, holes: [] }, floor.baseHeightM, floor.topHeightM),
     [floor.shape, floor.baseHeightM, floor.topHeightM]
   );
+  const edges = useGeometryEdges(geometry);
   return (
     <group>
       <mesh geometry={geometry}>
@@ -157,7 +133,7 @@ function ProposedMass({
           side={THREE.DoubleSide}
         />
       </mesh>
-      <lineSegments geometry={new THREE.EdgesGeometry(geometry)}>
+      <lineSegments geometry={edges}>
         <lineBasicMaterial color="#315f82" transparent opacity={0.9} />
       </lineSegments>
     </group>
@@ -170,6 +146,7 @@ function alignmentEdgeColor(
 ): string {
   if (status === "mismatch") return "#dc2626";
   if (status === "review") return "#d97706";
+  if (status === "unavailable") return "#ca8a04";
   return verified ? "#74808b" : "#9aa3ab";
 }
 
@@ -182,171 +159,111 @@ function ContextBuilding({
 }) {
   return (
     <group>
-      {building.polygons.map((polygon, index) => {
-        const geometry = prismGeometry(polygon.outer, 0, building.heightM);
-        const verified = building.accuracy === "verified";
-        const edgeColor = alignmentEdgeColor(alignmentStatus, verified);
-        return (
-          <group key={`${building.id}-${index}`}>
-            {/*
-              주변 건물은 반투명하지만 먼저 depth만 기록해 바닥 지적선이 건물을
-              관통해 보이는 착시를 막는다. 실제 색상은 다음 mesh에서 그린다.
-            */}
-            <mesh geometry={geometry} renderOrder={0}>
-              <meshBasicMaterial
-                colorWrite={false}
-                depthWrite
-                depthTest
-                side={THREE.DoubleSide}
-              />
-            </mesh>
-            <mesh geometry={geometry} renderOrder={1}>
-              <meshStandardMaterial
-                color={verified ? "#8f99a3" : "#aeb6be"}
-                transparent
-                opacity={verified ? 0.18 : 0.1}
-                depthWrite={false}
-                depthTest
-                roughness={0.9}
-                side={THREE.DoubleSide}
-              />
-            </mesh>
-            <lineSegments geometry={new THREE.EdgesGeometry(geometry)} renderOrder={2}>
-              <lineBasicMaterial
-                color={edgeColor}
-                transparent
-                opacity={alignmentStatus === "mismatch" ? 0.9 : verified ? 0.32 : 0.2}
-                depthTest
-              />
-            </lineSegments>
-          </group>
-        );
-      })}
+      {building.polygons.map((polygon, index) => (
+        <ContextBuildingPart
+          key={`${building.id}:part:${index}`}
+          polygon={polygon}
+          heightM={building.heightM}
+          verified={building.accuracy === "verified"}
+          alignmentStatus={alignmentStatus}
+        />
+      ))}
     </group>
   );
 }
 
-function buildFocusedRoadStrip(
-  frontage: CadastralRoadFrontage,
-  roadPolygon: LocalPlanPoint[]
-): LocalPlanPoint[] {
-  const [start, end] = frontage.frontage;
-  const dx = end.x - start.x;
-  const dz = end.z - start.z;
-  const length = Math.hypot(dx, dz);
-  if (length < 0.1) return [];
-  const tangent = { x: dx / length, z: dz / length };
-  let outward = { x: -tangent.z, z: tangent.x };
-  const midpoint = { x: (start.x + end.x) / 2, z: (start.z + end.z) / 2 };
-  const roadCenter = roadPolygon.length
-    ? roadPolygon.reduce(
-        (sum, point) => ({ x: sum.x + point.x, z: sum.z + point.z }),
-        { x: 0, z: 0 }
-      )
-    : midpoint;
-  if (roadPolygon.length) {
-    roadCenter.x /= roadPolygon.length;
-    roadCenter.z /= roadPolygon.length;
-  }
-  if (
-    (roadCenter.x - midpoint.x) * outward.x +
-      (roadCenter.z - midpoint.z) * outward.z <
-    0
-  ) {
-    outward = { x: -outward.x, z: -outward.z };
-  }
-  const sourceWidthM = frontage.plannedWidthAvgM ?? frontage.widthAvgM;
-  if (
-    sourceWidthM == null ||
-    !Number.isFinite(sourceWidthM) ||
-    sourceWidthM <= 0
-  ) {
-    return [];
-  }
-  const referenceWidthM = Math.min(12, Math.max(2, sourceWidthM));
-  // 대상 접도부 주변만 면으로 보여 주변 건물 전체를 가르는 긴 계획도로 면을 피한다.
-  const extensionM = Math.min(8, Math.max(5, referenceWidthM));
-  const a = {
-    x: start.x - tangent.x * extensionM,
-    z: start.z - tangent.z * extensionM,
-  };
-  const b = {
-    x: end.x + tangent.x * extensionM,
-    z: end.z + tangent.z * extensionM,
-  };
-  return [
-    a,
-    b,
-    {
-      x: b.x + outward.x * referenceWidthM,
-      z: b.z + outward.z * referenceWidthM,
-    },
-    {
-      x: a.x + outward.x * referenceWidthM,
-      z: a.z + outward.z * referenceWidthM,
-    },
-  ];
+function ContextBuildingPart({
+  polygon,
+  heightM,
+  verified,
+  alignmentStatus,
+}: {
+  polygon: LocalParcelPolygon;
+  heightM: number;
+  verified: boolean;
+  alignmentStatus?: ContextParcelAlignmentStatus;
+}) {
+  const geometry = useMemo(() => contextPrismGeometry(polygon, 0, heightM), [polygon, heightM]);
+  const edges = useGeometryEdges(geometry);
+  const edgeColor = alignmentEdgeColor(alignmentStatus, verified);
+  return (
+    <group>
+      {/*
+        주변 건물은 반투명하지만 먼저 depth만 기록해 바닥 지적선이 건물을
+        관통해 보이는 착시를 막는다. 실제 색상은 다음 mesh에서 그린다.
+      */}
+      <mesh geometry={geometry} renderOrder={0}>
+        <meshBasicMaterial
+          colorWrite={false}
+          depthWrite
+          depthTest
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <mesh geometry={geometry} renderOrder={1}>
+        <meshStandardMaterial
+          color={verified ? "#8f99a3" : "#aeb6be"}
+          transparent
+          opacity={verified ? 0.18 : 0.1}
+          depthWrite={false}
+          depthTest
+          roughness={0.9}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <lineSegments geometry={edges} renderOrder={2}>
+        <lineBasicMaterial
+          color={edgeColor}
+          transparent
+          opacity={alignmentStatus === "mismatch" ? 0.9 : alignmentStatus === "unavailable" ? 0.78 : verified ? 0.32 : 0.2}
+          depthTest
+        />
+      </lineSegments>
+    </group>
+  );
 }
 
 function RoadBoundary({
   parcel,
-  frontage,
   showSourceBoundary,
 }: {
   parcel: LocalCadastralParcel;
-  frontage: CadastralRoadFrontage | null;
   showSourceBoundary: boolean;
 }) {
-  const geometry = useMemo(() => flatGeometry(parcel.polygon), [parcel.polygon]);
+  const polygons = useMemo(() => localParcelPolygons(parcel), [parcel]);
   const upis =
     parcel.boundarySource === "upis-planned-road" ||
     parcel.jimokCode === "UPIS-UQ151";
-  const focusedStrip = useMemo(
-    () => (upis && frontage ? buildFocusedRoadStrip(frontage, parcel.polygon) : []),
-    [frontage, parcel.polygon, upis]
+  return (
+    <group>
+      {polygons.map((polygon, index) => (
+        <RoadBoundaryPart
+          key={`${parcel.pnu}:part:${index}`}
+          polygon={polygon}
+          upis={upis}
+          showSourceBoundary={showSourceBoundary}
+        />
+      ))}
+    </group>
   );
-  const focusedGeometry = useMemo(() => flatGeometry(focusedStrip), [focusedStrip]);
+}
 
-  if (upis) {
-    return (
-      <group>
-        {focusedStrip.length >= 3 && (
-          <group>
-            <mesh geometry={focusedGeometry} position={[0, -0.028, 0]}>
-              <meshStandardMaterial
-                color="#5f6873"
-                transparent
-                opacity={0.22}
-                roughness={1}
-                side={THREE.DoubleSide}
-                depthWrite={false}
-                depthTest
-              />
-            </mesh>
-            <lineSegments
-              geometry={new THREE.EdgesGeometry(focusedGeometry)}
-              position={[0, -0.006, 0]}
-            >
-              <lineBasicMaterial color="#374151" transparent opacity={0.62} />
-            </lineSegments>
-          </group>
-        )}
-        {(showSourceBoundary || focusedStrip.length < 3) && (
-          <PolygonLine
-            points={parcel.polygon}
-            color="#4b5563"
-            opacity={0.38}
-            y={-0.002}
-          />
-        )}
-      </group>
-    );
-  }
+function RoadBoundaryPart({
+  polygon,
+  upis,
+  showSourceBoundary,
+}: {
+  polygon: LocalParcelPolygon;
+  upis: boolean;
+  showSourceBoundary: boolean;
+}) {
+  const geometry = useMemo(() => contextFlatGeometry(polygon), [polygon]);
+  const edges = useGeometryEdges(geometry);
   return (
     <group>
       <mesh geometry={geometry} position={[0, -0.025, 0]}>
         <meshStandardMaterial
-          color="#6b7280"
+          color={upis ? "#5f6873" : "#6b7280"}
           transparent
           opacity={0.2}
           roughness={1}
@@ -354,11 +271,11 @@ function RoadBoundary({
           depthWrite={false}
         />
       </mesh>
-      <lineSegments geometry={new THREE.EdgesGeometry(geometry)} position={[0, -0.005, 0]}>
+      <lineSegments geometry={edges} position={[0, -0.005, 0]}>
         <lineBasicMaterial
           color="#4b5563"
           transparent
-          opacity={0.82}
+          opacity={upis ? (showSourceBoundary ? 0.82 : 0.38) : 0.82}
         />
       </lineSegments>
     </group>
@@ -376,8 +293,8 @@ function PolygonLine({
   opacity?: number;
   y?: number;
 }) {
-  const ring = openRing(points);
-  if (ring.length < 2) return null;
+  const ring = openContextRing(points);
+  if (ring.length < 2 || ring.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.z))) return null;
   const positions = [...ring, ring[0]].map(
     (point) => [point.x, y, point.z] as [number, number, number]
   );
@@ -426,6 +343,37 @@ function RoadClearanceMarker({
   );
 }
 
+function SiteCamera({ frame }: { frame: ContextSceneFrame }) {
+  const { camera, size, invalidate } = useThree();
+  const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
+  const distance = contextCameraDistance(frame.radius, 44, size.width / Math.max(1, size.height));
+  useEffect(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const target = new THREE.Vector3(...frame.center);
+    camera.position.copy(new THREE.Vector3(1.45, 1.25, 1.7).normalize().multiplyScalar(distance).add(target));
+    camera.near = 0.1;
+    camera.far = Math.max(1000, distance * 5 + frame.radius * 2);
+    camera.lookAt(target);
+    camera.updateProjectionMatrix();
+    controls.current?.target.copy(target);
+    controls.current?.update();
+    invalidate();
+  }, [camera, distance, frame, invalidate]);
+  return (
+    <OrbitControls
+      ref={controls}
+      makeDefault
+      enablePan
+      enableZoom
+      enableRotate
+      target={frame.center}
+      minDistance={1}
+      maxDistance={distance * 5}
+      maxPolarAngle={Math.PI / 2.02}
+    />
+  );
+}
+
 function SiteScene({
   planning,
   context,
@@ -437,7 +385,6 @@ function SiteScene({
   showSamples,
   showSourceRoadBoundary,
   roadClearance,
-  extent,
 }: {
   planning: ReturnType<typeof buildPlanningGeometry>["snapshot"];
   context: ContextGeometrySnapshot;
@@ -449,18 +396,46 @@ function SiteScene({
   showSamples: boolean;
   showSourceRoadBoundary: boolean;
   roadClearance: RoadClearanceAssessment | null;
-  extent: number;
 }) {
-  const frontageIds = new Set(cadastral.frontages.map((frontage) => frontage.roadParcelPnu));
-  const visibleRoads = cadastral.roadParcels.filter(
-    (parcel) =>
-      frontageIds.has(parcel.pnu) ||
-      ((parcel.boundarySource !== "upis-planned-road" &&
-        parcel.jimokCode !== "UPIS-UQ151") ||
-        showSourceRoadBoundary) &&
-        parcel.distanceM <= 55
-  );
-  const visibleParcels = cadastral.adjacentParcels.filter((parcel) => parcel.distanceM <= 45);
+  const { visibleRoads, visibleParcels, frame } = useMemo(() => {
+    const frontageIds = new Set(cadastral.frontages.map((frontage) => frontage.roadParcelPnu));
+    const visibleRoads = showRoads ? cadastral.roadParcels.filter(
+      (parcel) => frontageIds.has(parcel.pnu) || (
+        ((parcel.boundarySource !== "upis-planned-road" && parcel.jimokCode !== "UPIS-UQ151") ||
+          showSourceRoadBoundary) && parcel.distanceM <= 55
+      )
+    ) : [];
+    const visibleParcels = showParcels
+      ? cadastral.adjacentParcels.filter((parcel) => parcel.distanceM <= 45)
+      : [];
+    const buildings = showBuildings ? context.buildings : [];
+    const sampleLines = showSamples ? cadastral.frontages
+      .filter((frontage) => frontage.status !== "planned-road-reference")
+      .flatMap((frontage) => [frontage.frontage, ...frontage.widthSamples.map((sample) => [sample.from, sample.to])]) : [];
+    const clearanceLine = showRoads && roadClearance?.buildingPoint && roadClearance.roadPoint
+      ? [[roadClearance.buildingPoint, roadClearance.roadPoint]]
+      : [];
+    return {
+      visibleRoads,
+      visibleParcels,
+      frame: calculateContextSceneFrame({
+        polygons: [
+          ...localParcelPolygons(planning.parcel),
+          ...planning.building.floors.map((floor) => ({ outer: floor.shape, holes: [] })),
+          ...buildings.flatMap((building) => building.polygons),
+          ...visibleRoads.flatMap(localParcelPolygons),
+          ...visibleParcels.flatMap(localParcelPolygons),
+        ],
+        lines: [
+          ...(showRoads ? planning.roads.map((road) => road.points) : []),
+          ...sampleLines,
+          ...clearanceLine,
+        ],
+        heightM: Math.max(planning.building.totalHeightM, ...buildings.map((building) => building.heightM)),
+      }),
+    };
+  }, [cadastral, context, planning, roadClearance, showBuildings, showParcels, showRoads, showSamples, showSourceRoadBoundary]);
+  const extent = frame.radius;
   const alignmentByBuilding = new Map(
     alignment.buildings.map((building) => [building.buildingId, building.status])
   );
@@ -471,29 +446,28 @@ function SiteScene({
       <directionalLight position={[extent, extent * 2.2, extent]} intensity={1.05} />
       <directionalLight position={[-extent, extent, -extent]} intensity={0.28} />
 
-      <ParcelPlate points={planning.parcel.polygon} />
+      {localParcelPolygons(planning.parcel).map((polygon, index) => <ParcelPlate key={`target-part-${index}`} polygon={polygon} />)}
 
       {showParcels &&
-        visibleParcels.map((parcel) => (
-          <PolygonLine
-            key={parcel.pnu}
-            points={parcel.polygon}
-            color="#9a8f80"
-            opacity={0.2}
-            y={0.008}
-          />
-        ))}
+        visibleParcels.flatMap((parcel) => localParcelPolygons(parcel).map((polygon, partIndex) => (
+          <group key={`${parcel.pnu}:part:${partIndex}`}>
+            {parcelRings([polygon]).map((ring, ringIndex) => (
+              <PolygonLine
+                key={`ring:${ringIndex}`}
+                points={ring}
+                color="#9a8f80"
+                opacity={0.2}
+                y={0.008}
+              />
+            ))}
+          </group>
+        )))}
 
       {showRoads &&
         visibleRoads.map((parcel) => (
           <RoadBoundary
             key={parcel.pnu}
             parcel={parcel}
-            frontage={
-              cadastral.frontages.find(
-                (frontage) => frontage.roadParcelPnu === parcel.pnu
-              ) ?? null
-            }
             showSourceBoundary={showSourceRoadBoundary}
           />
         ))}
@@ -516,7 +490,7 @@ function SiteScene({
         cadastral.frontages
           .filter((frontage) => frontage.status !== "planned-road-reference")
           .map((frontage) => (
-          <group key={`${frontage.roadParcelPnu}-${frontage.targetEdgeIndex}`}>
+          <group key={`${frontage.roadParcelPnu}-${frontage.targetPolygonIndex ?? 0}-${frontage.targetRingIndex ?? 0}-${frontage.targetEdgeIndex}`}>
             <Line
               points={frontage.frontage.map(
                 (point) => [point.x, 0.07, point.z] as [number, number, number]
@@ -558,7 +532,7 @@ function SiteScene({
       )}
 
       <Text
-        position={[0, 0.1, -extent * 0.9]}
+        position={[frame.center[0], 0.1, frame.center[2] - extent * 0.9]}
         rotation={[-Math.PI / 2, 0, 0]}
         fontSize={Math.max(0.8, extent * 0.04)}
         color="#dc2626"
@@ -568,45 +542,9 @@ function SiteScene({
         N
       </Text>
 
-      <OrbitControls
-        makeDefault
-        enablePan
-        enableZoom
-        enableRotate
-        minDistance={extent * 0.9}
-        maxDistance={extent * 7}
-        maxPolarAngle={Math.PI / 2.02}
-      />
+      <SiteCamera frame={frame} />
     </>
   );
-}
-
-function calculateExtent(input: {
-  planning: ReturnType<typeof buildPlanningGeometry>["snapshot"];
-  context: ContextGeometrySnapshot;
-  cadastral: CadastralContextSnapshot;
-}): number {
-  const points: LocalPlanPoint[] = [
-    ...input.planning.parcel.polygon,
-    ...input.planning.building.floors.flatMap((floor) => floor.shape),
-    ...input.context.buildings.flatMap((building) =>
-      building.polygons.flatMap((polygon) => polygon.outer)
-    ),
-    ...input.cadastral.roadParcels
-      .filter(
-        (parcel) =>
-          parcel.distanceM <= 55 &&
-          parcel.boundarySource !== "upis-planned-road" &&
-          parcel.jimokCode !== "UPIS-UQ151"
-      )
-      .flatMap((parcel) => parcel.polygon),
-  ];
-  let extent = 12;
-  points.forEach((point) => {
-    extent = Math.max(extent, Math.abs(point.x), Math.abs(point.z));
-  });
-  extent = Math.max(extent, input.planning.building.totalHeightM * 0.8);
-  return Math.min(85, extent * 1.08);
 }
 
 export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
@@ -625,6 +563,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   >([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sourceWarnings, setSourceWarnings] = useState<string[]>([]);
   const [showBuildings, setShowBuildings] = useState(true);
   const [showParcels, setShowParcels] = useState(true);
   const [showRoads, setShowRoads] = useState(true);
@@ -647,6 +586,10 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
+    setSourceWarnings([]);
+    setSourceParcels([]);
+    setSourceSummary(undefined);
+    setUpisRoadSummaries([]);
     if (
       !parcel ||
       manualParcel ||
@@ -683,7 +626,9 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         return payload;
       })
       .then((payload) => {
+        if (controller.signal.aborted) return;
         setSourceParcels(payload.parcels ?? []);
+        setSourceWarnings(payload.warnings ?? []);
         setSourceSummary(payload.sourceSummary);
         setUpisRoadSummaries(payload.upisRoadSummaries ?? []);
         setLoadState("ready");
@@ -700,17 +645,46 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
   }, [manualParcel, parcel, targetPnu]);
 
   const snapshots = useMemo(() => {
-    if (!parcel?.boundary || parcel.boundary.length < 3 || !scenario || !targetPnu) {
+    if (!parcel || !hasParcelBoundary(parcel) || !scenario || !targetPnu) {
       return null;
     }
+    const legacyAssumptions =
+      data?.scenarios.find((candidate) => candidate.recommended)?._raw.assumptions ??
+      data?.scenarios[0]?._raw.assumptions ??
+      defaultAssumptions();
+    const calculation = calculatePlanningScenario(scenario, {
+      parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus: parcel.inputProvenance?.zoning === "vworld-land-use"
+          ? "public-observation" : "user-entered",
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
+        lotAreaSqm: parcel.lotArea,
+        maxFARPct: parcel.maxFAR,
+        maxBCRPct: parcel.maxBCR,
+        heightLimitM: parcel.heightLimit ?? 0,
+        regulatoryConstraints: parcel.regulatoryConstraints,
+        roofAllowanceM: 1.4,
+        acquisitionCostManwon: parcel.acquiredPrice,
+        demolitionCostManwon: parcel.demolitionCost ?? 0,
+      },
+      assumptions: planningEconomicsAssumptionsFromLegacy(
+        legacyAssumptions,
+        `stage2-${data?.meta.version ?? "local"}`
+      ),
+      calculatedAt: data?.meta.lastSyncedAt,
+    });
     const planning = buildPlanningGeometry({
       projectId,
       scenario,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       lotAreaSqm: parcel.lotArea,
       zoning: parcel.zoning ?? "",
       roads: parcel.roads,
       setback: parcel.setback,
+      sunlight: calculation.sunlight,
+      roofAllowanceM: calculation.metrics.roofAllowanceM,
     }).snapshot;
     const basePackage = buildSketchupExportPackage({
       planning,
@@ -719,6 +693,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
     const cadastral = buildCadastralContext({
       planning,
       targetPnu,
+      targetBoundary: parcel.boundary,
+      targetBoundaryPolygons: parcel.boundaryPolygons,
       parcels: sourceParcels,
     });
     const alignment = buildContextParcelAlignment({
@@ -730,13 +706,8 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       context: basePackage.context,
       cadastral,
       alignment,
-      extent: calculateExtent({
-        planning,
-        context: basePackage.context,
-        cadastral,
-      }),
     };
-  }, [parcel, projectId, scenario, sourceParcels, targetPnu]);
+  }, [data, parcel, projectId, scenario, sourceParcels, targetPnu]);
 
   const captureEligible = Boolean(
     snapshots &&
@@ -760,7 +731,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         geometryHash: snapshots.planning.geometryHash,
         dataUrl: captureCanvasRef.current.toDataURL("image/jpeg", 0.9),
       });
-      window.localStorage.setItem(
+      sessionLocalStorage.setItem(
         conceptReferenceStorageKey(projectId),
         JSON.stringify(capture)
       );
@@ -794,11 +765,11 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           (clearance) => clearance.roadParcelPnu === primary.roadParcelPnu
         )
       : null) ?? snapshots.cadastral.roadClearances[0] ?? null;
-  const primaryUpisSummary = primary
+  const primaryUpisSummary = plannedRoadReference && primary?.status === "planned-road-reference"
     ? upisRoadSummaries.find((summary) =>
-        primary.roadParcelPnu.includes(summary.presentSn)
-      ) ?? upisRoadSummaries[0] ?? null
-    : upisRoadSummaries[0] ?? null;
+        primary.roadParcelPnu === `UPIS-${summary.presentSn}-1`
+      ) ?? null
+    : null;
 
   return (
     <Panel
@@ -823,7 +794,9 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
           <span className="ui-tag">활성 경계: {sourceLabel}</span>
           <span className="ui-tag">
-            도로 경계 {snapshots.cadastral.summary.roadParcelCount}개
+            {loadState === "ready"
+              ? `확보 도로 경계 ${snapshots.cadastral.summary.roadParcelCount}개`
+              : "도로 경계 미확인"}
           </span>
           <span className="ui-tag">
             주변 건물 {snapshots.context.summary.totalBuildings}동
@@ -836,6 +809,9 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
           )}
           {alignmentSummary.mismatchBuildings > 0 && (
             <span className="ui-tag">정합 불일치 {alignmentSummary.mismatchBuildings}동</span>
+          )}
+          {alignmentSummary.unavailableBuildings > 0 && (
+            <span className="ui-tag">정합 미확인 {alignmentSummary.unavailableBuildings}동</span>
           )}
           {(plannedRoadReference
             ? primary?.plannedWidthAvgM
@@ -887,7 +863,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
                 active={showSourceRoadBoundary}
                 onClick={() => setShowSourceRoadBoundary((value) => !value)}
               >
-                원본 계획선
+                주변 계획선
               </Toggle>
             </>
           )}
@@ -898,6 +874,7 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>VWorld 지적·UPIS 도로 경계를 불러오고 있습니다.</Notice>
       )}
       {loadState === "error" && <Notice tone="fail">{loadError}</Notice>}
+      {sourceWarnings.map((warning) => <Notice key={warning}>{warning}</Notice>)}
       {manualParcel && (
         <Notice>
           VWorld 비활성 모드입니다. 사용자 GeoJSON 필지와 계획 매스만 표시하며
@@ -906,17 +883,15 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
       )}
       {plannedRoadReference && (
         <Notice>
-          회색 면은 대상 접도부에 맞춰{" "}
-          {primary?.plannedWidthAvgM != null
-            ? `${num(primary.plannedWidthAvgM, 2)}m 계획폭`
-            : "계획도로 참고 폭"}
-          만 짧게 표시한 3D 참고 구간입니다. UPIS 원본 긴 경계는 법적 계산에
-          그대로 유지되며 ‘원본 계획선’에서 따로 확인할 수 있습니다. 현황·법정 도로폭
-          확정값은 아닙니다.
+          회색 면은 UPIS 원본 계획도로 경계의 전체 형상이며 분리된 구간과 내부 빈 영역을
+          그대로 유지합니다. 계획폭은 개략설계 참고값으로, 현황·법정 도로폭 확정값이나
+          공식 인허가 승인을 의미하지 않습니다.
         </Notice>
       )}
       <RoadBuildingLineCard
         plannedRoadReference={plannedRoadReference}
+        roadBoundaryAvailable={loadState === "ready" && snapshots.cadastral.roadParcels.length > 0 &&
+          (sourceSummary?.activeRoadBoundarySource === "cadastral-road-parcel" || plannedRoadReference)}
         roadLabel={primaryUpisSummary?.label || primary?.roadParcelJibun || null}
         roadNo={primaryUpisSummary?.roadNo || null}
         frontageLengthM={primary?.frontageLengthM ?? null}
@@ -940,6 +915,13 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         <Notice>
           주황 외곽 주변 건물 {alignmentSummary.reviewBuildings}동은 필지 포함 비율이
           60~85%라 원본 지적도 확인이 필요합니다.
+        </Notice>
+      )}
+      {alignmentSummary.unavailableBuildings > 0 && (
+        <Notice>
+          주변 건물 {alignmentSummary.unavailableBuildings}동은 경계 형상 또는 겹침 계산 문제로
+          필지 정합을 확인하지 못했습니다. 노란 외곽은 정합 미확인 상태로, 원본 건물·지적
+          경계를 확인해야 합니다. 정합 불일치 판정과는 구분됩니다.
         </Notice>
       )}
 
@@ -993,14 +975,10 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
             captureCanvasRef.current = gl.domElement;
           }}
           camera={{
-            position: [
-              snapshots.extent * 1.45,
-              snapshots.extent * 1.25,
-              snapshots.extent * 1.7,
-            ],
+            position: [20, 20, 25],
             fov: 44,
             near: 0.1,
-            far: snapshots.extent * 30,
+            far: 1000,
           }}
         >
           <Suspense fallback={null}>
@@ -1015,7 +993,6 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
               showSamples={showSamples}
               showSourceRoadBoundary={showSourceRoadBoundary}
               roadClearance={primaryRoadClearance}
-              extent={snapshots.extent}
             />
           </Suspense>
         </Canvas>
@@ -1030,9 +1007,10 @@ export function PlanningSiteContextPanel({ projectId }: { projectId: string }) {
         }}
       >
         갈색선은 인접 지적 경계이며 별도로 회전하지 않습니다. 주변 건물과 지적선은 같은
-        로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치입니다.
-        짙은 회색 면은 연속지적 도로 필지 또는 대상 접도부에 한정한 UPIS 계획폭 참고
-        구간입니다. UPIS 원본 경계는 토글로 분리했습니다. 파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
+        로컬 meter 좌표를 사용합니다. 회색 외곽은 정합, 주황은 확인, 빨강은 불일치,
+        노랑은 미확인입니다.
+        짙은 회색 면은 연속지적 도로 필지 또는 UPIS 계획도로 원본 경계입니다.
+        파란색 접도선과 주황색 수직 폭 샘플은 연속지적 도로 필지가 대상
         경계와 충분히 평행할 때만 표시합니다. 모든 GIS 검사는 개략설계용이며 측량
         성과도를 대체하지 않습니다.
       </p>
@@ -1055,6 +1033,7 @@ function plannedRoadRange(label: string | null): string | null {
 
 function RoadBuildingLineCard({
   plannedRoadReference,
+  roadBoundaryAvailable,
   roadLabel,
   roadNo,
   frontageLengthM,
@@ -1068,6 +1047,7 @@ function RoadBuildingLineCard({
   clearance,
 }: {
   plannedRoadReference: boolean;
+  roadBoundaryAvailable: boolean;
   roadLabel: string | null;
   roadNo: string | null;
   frontageLengthM: number | null;
@@ -1080,12 +1060,12 @@ function RoadBuildingLineCard({
   plannedWidthMaxM: number | null;
   clearance: RoadClearanceAssessment | null;
 }) {
-  const range = plannedRoadRange(roadLabel);
+  const range = plannedRoadReference ? plannedRoadRange(roadLabel) : null;
   const cells = [
     {
       label: "도로 출처",
-      value: plannedRoadReference ? "UPIS 계획도로" : "연속지적 도로",
-      detail: roadLabel
+      value: !roadBoundaryAvailable ? "미확인" : plannedRoadReference ? "UPIS 계획도로" : "연속지적 도로",
+      detail: !roadBoundaryAvailable ? "확보한 도로 경계 없음" : roadLabel
         ? `${roadLabel}${range ? ` · ${range}` : ""}${roadNo ? ` · ${roadNo}호` : ""}`
         : "등급 확인 필요",
     },
@@ -1125,10 +1105,12 @@ function RoadBuildingLineCard({
           ? `${num(clearance.intrusionAreaSqm, 2)}㎡ 저촉`
           : `${num(clearance.minimumClearanceM, 2)}m`
         : "미확인",
-      detail: clearance?.intrudes
-        ? "배치 수정 및 건축선 확인 필요"
-        : "도형상 침범 없음 · 법적 건축선은 미확정",
-      tone: clearance?.intrudes ? "fail" : "pass",
+      detail: clearance
+        ? clearance.intrudes
+          ? "배치 수정 및 건축선 확인 필요"
+          : "도형상 침범 없음 · 법적 건축선은 미확정"
+        : "도로 경계·매스 간격을 확인하지 못했습니다.",
+      tone: clearance ? (clearance.intrudes ? "fail" : "pass") : "unavailable",
     },
   ];
 

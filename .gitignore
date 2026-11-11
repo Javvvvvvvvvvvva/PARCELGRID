@@ -5,6 +5,7 @@
 
 # next.js
 /.next/
+/.next-dev/
 /out/
 
 # production build
@@ -18,6 +19,13 @@
 /.pnpm-home/
 /.pnpm-store/
 /.xdg-data/
+
+# Local verification evidence and generated deliverables (may contain source data)
+/artifacts/
+/output/
+/tmp/
+__pycache__/
+*.py[cod]
 
 # misc
 .DS_Store

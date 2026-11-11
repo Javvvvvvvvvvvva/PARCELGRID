@@ -12,7 +12,8 @@ vi.mock("@/lib/integrations/kakao", () => ({
   geocodeAddress: mocks.geocodeAddress,
 }));
 
-vi.mock("@/lib/integrations/vworld", () => ({
+vi.mock("@/lib/integrations/vworld", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/integrations/vworld")>(),
   lookupCadastral: mocks.lookupCadastral,
   lookupZoningByPNU: mocks.lookupZoningByPNU,
 }));

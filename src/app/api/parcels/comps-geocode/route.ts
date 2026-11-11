@@ -22,6 +22,8 @@ import {
   coordinateDistanceKm,
   scatterApproximateCoordinate,
 } from "@/lib/geo/comps-geocode";
+import { requireApiCapability } from "@/lib/auth/request";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 
 export const runtime = "nodejs";
 
@@ -44,8 +46,12 @@ const requestSchema = z
   );
 
 export async function POST(req: NextRequest) {
+  const authorization = await requireApiCapability(req, "project.read");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.compGeocode });
+  if (!input.ok) return input.response;
   try {
-    const parsed = requestSchema.safeParse(await req.json());
+    const parsed = requestSchema.safeParse(input.value);
     if (!parsed.success) {
       return NextResponse.json(
         {

@@ -189,7 +189,7 @@ export function DataRow({ label, value, sub, divider = true }: DataRowProps) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "1fr auto",
+        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2fr)",
         alignItems: "baseline",
         gap: "var(--s3)",
         padding: "var(--s2) 0",
@@ -197,8 +197,8 @@ export function DataRow({ label, value, sub, divider = true }: DataRowProps) {
         fontSize: "var(--t-xs)",
       }}
     >
-      <span style={{ color: "var(--fg-muted)" }}>{label}</span>
-      <span style={{ textAlign: "right", minWidth: 0 }}>
+      <span style={{ color: "var(--fg-muted)", minWidth: 0, wordBreak: "keep-all", overflowWrap: "anywhere" }}>{label}</span>
+      <span style={{ textAlign: "right", minWidth: 0, wordBreak: "keep-all", overflowWrap: "anywhere" }}>
         <span className="mono" style={{ color: "var(--fg)", fontWeight: 600 }}>
           {value}
         </span>

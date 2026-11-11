@@ -1,20 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, X } from "lucide-react";
 import { Panel } from "@/components/ui/primitives";
-import { defaultAssumptions } from "@/lib/finance/scenario";
+import { DwellingComparisonTable } from "@/components/planning/DwellingComparisonTable";
+import { clonePlanningScenario } from "@/lib/planning/scenario-utils";
 import {
   calculateAcquisitionCapacity,
-  generatePlanningRecommendationsV2,
   recommendationsSharePhysicalPlan,
+  selectCurrentPlanningRecommendations,
   type PlanningRecommendationAnalysis,
   type RecommendationProfitMode,
   type RecommendationRejectionSummary,
 } from "@/lib/planning/recommendation-analysis";
+import { runPlanningRecommendationWorker } from "@/lib/planning/recommendation-worker";
 import {
   calculatePlanningScenario,
-  planningEconomicsAssumptionsFromLegacy,
 } from "@/lib/planning/scenario-calculator";
+import { planningRecommendationInput, planningRecommendationInputBasis } from "@/lib/planning/recommendation-basis";
+import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
 import {
   applySpatialValidationToCalculation,
   calculatePlanningSpatialValidation,
@@ -26,6 +30,7 @@ import type {
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
 import { useProjectStore } from "@/lib/stores/project-store";
+import { clientSession } from "@/lib/auth/client-session";
 import { num, won } from "@/lib/utils/format";
 
 const ALGORITHM_ORIGINS = new Set<PlanningScenario["origin"]>([
@@ -87,6 +92,13 @@ function RecommendationCard({
       </article>
     );
   }
+  if (calculation.economicsPreview.status === "stale") {
+    return <article style={emptyCardStyle}>
+      <strong>{scenario.name} · 원가 재검토 필요</strong>
+      <p>상세 수량 원가 기준이 달라 개략 이익과 추천을 보류합니다.</p>
+      <button type="button" onClick={onOpen}><ArrowRight size={14} aria-hidden="true" />계획안 열기</button>
+    </article>;
+  }
 
   const summary = summarizePlanningScenario(scenario);
   const metadata = scenario.recommendation;
@@ -94,10 +106,7 @@ function RecommendationCard({
   const acquisitionCapacity = calculateAcquisitionCapacity(
     calculation.economicsPreview
   );
-  const failCount = calculation.checks.filter((check) => check.status === "fail").length;
-  const reviewCount = calculation.checks.filter(
-    (check) => check.status === "review" || check.status === "unknown"
-  ).length;
+  const readiness = assessRepresentativeCheckReadiness(calculation.checks);
   const reference = metadata.objective === "legal-ceiling";
   const lossMode = metadata.profitSelectionMode === "loss-minimization";
   const displayName =
@@ -136,7 +145,7 @@ function RecommendationCard({
               <span className="ui-tag">손실 최소</span>
             )}
             {metadata.eligible ? (
-              <span className="ui-tag">실행 가능 후보</span>
+              <span className="ui-tag">예비 실행 후보</span>
             ) : (
               <span className="ui-tag">참고 전용</span>
             )}
@@ -198,13 +207,21 @@ function RecommendationCard({
         <MiniMetric
           label="판정"
           value={
-            failCount > 0
-              ? `미충족 ${failCount}`
-              : reviewCount > 0
-                ? `통과 · 확인 ${reviewCount}`
-                : "필수항목 통과"
+            readiness.blockingFailureCount > 0
+              ? `미충족 ${readiness.blockingFailureCount}`
+              : readiness.blockingVerificationCount > 0
+                ? `확정 전 검증 ${readiness.blockingVerificationCount}`
+                : readiness.advisoryCount > 0
+                  ? `적격 · 참고 ${readiness.advisoryCount}`
+                  : "대표안 적격"
           }
-          tone={failCount > 0 ? "negative" : "positive"}
+          tone={
+            readiness.blockingFailureCount > 0
+              ? "negative"
+              : readiness.ready && readiness.advisoryCount === 0
+                ? "positive"
+                : "neutral"
+          }
         />
       </div>
 
@@ -332,15 +349,35 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
   const [running, setRunning] = useState(false);
   const [lastResult, setLastResult] =
     useState<PlanningRecommendationAnalysis | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ basis: string; text: string } | null>(null);
+  const calculationJob = useRef<AbortController | null>(null);
 
   const parcel = data?.parcel;
   const projectScenarios = planningScenarios.filter(
     (scenario) => scenario.projectId === projectId
   );
-  const recommendations = projectScenarios.filter((scenario) =>
-    Boolean(scenario.recommendation)
-  );
+  const input = useMemo(() => data?.parcel.id === projectId
+    ? planningRecommendationInput(data, projectId) : null, [data, projectId]);
+  const inputBasis = input ? planningRecommendationInputBasis(input) : null;
+  useEffect(() => {
+    setRunning(false);
+    const unsubscribe = clientSession.subscribe(() => {
+      calculationJob.current?.abort();
+      calculationJob.current = null;
+      setRunning(false);
+    });
+    return () => {
+      unsubscribe();
+      calculationJob.current?.abort();
+      calculationJob.current = null;
+    };
+  }, [projectId, inputBasis]);
+  const { current: recommendations, stale: staleRecommendations } =
+    selectCurrentPlanningRecommendations(projectScenarios, projectId, inputBasis);
+  const currentLastResult = lastResult?.inputBasis === inputBasis && staleRecommendations.length === 0
+    ? lastResult : null;
+  const currentMessage = message?.basis === inputBasis && staleRecommendations.length === 0
+    ? message.text : null;
   const safe =
     recommendations.find(
       (scenario) =>
@@ -378,34 +415,14 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
       (scenario) => scenario.recommendation?.objective === "legal-ceiling"
     ) ?? null;
 
-  const assumptions = useMemo(() => {
-    const legacy =
-      data?.scenarios.find((scenario) => scenario.recommended)?._raw.assumptions ??
-      data?.scenarios[0]?._raw.assumptions ??
-      defaultAssumptions();
-    return planningEconomicsAssumptionsFromLegacy(
-      legacy,
-      `stage2-recommend-${data?.meta.version ?? "local"}`
-    );
-  }, [data]);
-
   const calculations = useMemo(() => {
     const result = new Map<string, PlanningScenarioCalculation>();
-    if (!parcel) return result;
+    if (!parcel || !input) return result;
     for (const scenario of [displayedSafe, profit, max]) {
       if (!scenario) continue;
       const base = calculatePlanningScenario(scenario, {
-        parcel: {
-          lotAreaSqm: parcel.lotArea,
-          maxFARPct: parcel.maxFAR,
-          maxBCRPct: parcel.maxBCR,
-          heightLimitM: parcel.heightLimit ?? 0,
-        regulatoryConstraints: parcel.regulatoryConstraints,
-        roofAllowanceM: 1.4,
-          acquisitionCostManwon: parcel.acquiredPrice,
-          demolitionCostManwon: parcel.demolitionCost ?? 0,
-        },
-        assumptions,
+        parcel: input.parcel,
+        assumptions: input.assumptions,
         calculatedAt: data?.meta.lastSyncedAt,
       });
       const spatial = calculatePlanningSpatialValidation(
@@ -413,12 +430,15 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
         parcel.zoning ?? "",
         scenario,
         parcel.roads,
-        parcel.setback
+        parcel.setback,
+        base.sunlight,
+        base.metrics.roofAllowanceM,
+        parcel.boundaryPolygons
       );
       result.set(scenario.id, applySpatialValidationToCalculation(base, spatial));
     }
     return result;
-  }, [assumptions, data?.meta.lastSyncedAt, displayedSafe, max, parcel, profit]);
+  }, [input, data?.meta.lastSyncedAt, displayedSafe, max, parcel, profit]);
 
   const persistedMetadata =
     displayedSafe?.recommendation ?? profit?.recommendation ?? max?.recommendation;
@@ -430,11 +450,12 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
           multipleReasonsPossible: true,
         }
       : null;
-  const rejectionSummary = lastResult?.rejectionSummary ?? persistedRejectionSummary;
+  const rejectionSummary = currentLastResult?.rejectionSummary ?? persistedRejectionSummary;
 
-  if (!data || !parcel) return null;
+  if (!data || !parcel || !input || !inputBasis) return null;
 
   const generate = () => {
+    if (!clientSession.active) return;
     const representative = projectScenarios.find(
       (scenario) => scenario.id === representativeId
     );
@@ -450,28 +471,42 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
 
     setRunning(true);
     setMessage(null);
-    window.setTimeout(() => {
+    setLastResult(null);
+    calculationJob.current?.abort();
+    const job = new AbortController();
+    calculationJob.current = job;
+    const startedState = useProjectStore.getState();
+    const replacementBasis = (scenarios: PlanningScenario[]) => JSON.stringify(scenarios
+      .filter(scenario => scenario.projectId === projectId && ALGORITHM_ORIGINS.has(scenario.origin)));
+    const startedReplacementBasis = replacementBasis(startedState.planningScenarios);
+    const startedRepresentativeId = startedState.representativePlanningScenarioId;
+    const startedSelectionId = startedState.selectedPlanningScenarioId;
+    const isCurrentInput = () => {
+      const latestData = useProjectStore.getState().data;
+      return clientSession.active && !job.signal.aborted && calculationJob.current === job && latestData?.parcel.id === projectId
+        && planningRecommendationInputBasis(planningRecommendationInput(latestData, projectId)) === inputBasis;
+    };
+    const setInputMessage = (text: string) => setMessage({ basis: inputBasis, text });
+    window.setTimeout(async () => {
       try {
-        const result = generatePlanningRecommendationsV2({
-          projectId,
-          parcel: {
-            lotAreaSqm: parcel.lotArea,
-            maxFARPct: parcel.maxFAR,
-            maxBCRPct: parcel.maxBCR,
-            heightLimitM: parcel.heightLimit ?? 0,
-        regulatoryConstraints: parcel.regulatoryConstraints,
-        roofAllowanceM: 1.4,
-            acquisitionCostManwon: parcel.acquiredPrice,
-            demolitionCostManwon: parcel.demolitionCost ?? 0,
-            boundary: parcel.boundary,
-            zoning: parcel.zoning ?? "",
-            roads: parcel.roads,
-            setback: parcel.setback,
-          },
-          assumptions,
+        if (!isCurrentInput()) return;
+        const result = await runPlanningRecommendationWorker({
+          ...input,
           generatedAt: new Date().toISOString(),
-        });
-        const manualPlans = planningScenarios.filter(
+        }, job.signal);
+        if (!isCurrentInput() || result.inputBasis !== inputBasis) return;
+        setLastResult(result);
+        if (result.searchStatus !== "complete") {
+          setInputMessage(`후보 ${result.evaluatedCandidates}개까지 검토했지만 전체 탐색을 완료하지 못했습니다. 추천 순위는 보류하고 기존 계획을 유지합니다.`);
+          return;
+        }
+        const latestState = useProjectStore.getState();
+        if (replacementBasis(latestState.planningScenarios) !== startedReplacementBasis
+          || latestState.representativePlanningScenarioId !== startedRepresentativeId) {
+          setInputMessage("계산 중 기존 추천안 또는 대표안이 변경되었습니다. 편집 내용을 유지하고 새 추천안 적용을 보류했습니다.");
+          return;
+        }
+        const manualPlans = useProjectStore.getState().planningScenarios.filter(
           (scenario) =>
             scenario.projectId !== projectId ||
             !ALGORITHM_ORIGINS.has(scenario.origin)
@@ -507,34 +542,40 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
           (scenario) =>
             scenario.recommendation?.objective !== "legal-ceiling"
         );
-        selectPlanningScenario(firstEditable?.id ?? validGenerated[0]?.id ?? null);
+        if (latestState.selectedPlanningScenarioId === startedSelectionId) {
+          selectPlanningScenario(firstEditable?.id ?? validGenerated[0]?.id ?? null);
+        }
         setLastResult(result);
 
         if (result.eligibleCandidates <= 0) {
-          setMessage(
+          setInputMessage(
             `후보 ${result.evaluatedCandidates}개를 검토했지만 실행 가능한 후보를 찾지 못했습니다.`
           );
         } else if (result.sharedPrimaryCandidate) {
-          setMessage(
+          setInputMessage(
             result.profitMode === "loss-minimization"
               ? `후보 ${result.evaluatedCandidates}개 중 실행 가능 ${result.eligibleCandidates}개를 찾았습니다. 동일 계획안이 건축 타당성 1위이자 예상 손실 최소안입니다.`
               : `후보 ${result.evaluatedCandidates}개 중 실행 가능 ${result.eligibleCandidates}개를 찾았습니다. 동일 계획안이 건축 타당성과 개략 수익 두 기준 모두 1위입니다.`
           );
         } else {
-          setMessage(
+          setInputMessage(
             result.profitMode === "loss-minimization"
               ? `후보 ${result.evaluatedCandidates}개 중 실행 가능 ${result.eligibleCandidates}개를 찾았습니다. 모든 실행 가능 후보가 적자여서 손실 최소안을 표시합니다.`
               : `후보 ${result.evaluatedCandidates}개 중 실행 가능 ${result.eligibleCandidates}개를 찾았습니다.`
           );
         }
       } catch (error) {
-        setMessage(
+        if (!isCurrentInput()) return;
+        setInputMessage(
           error instanceof Error
             ? error.message
             : "추천 계획안 계산 중 오류가 발생했습니다."
         );
       } finally {
-        setRunning(false);
+        if (calculationJob.current === job) {
+          calculationJob.current = null;
+          setRunning(false);
+        }
       }
     }, 20);
   };
@@ -579,22 +620,42 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
           >
             {running
               ? "후보 계산 중…"
-              : recommendations.length > 0
+              : recommendations.length + staleRecommendations.length > 0
                 ? "추천안 다시 계산"
                 : "추천안 계산"}
           </button>
+          {running && <button type="button" aria-label="추천 계산 취소" title="추천 계산 취소"
+            onClick={() => {
+              calculationJob.current?.abort();
+              calculationJob.current = null;
+              setRunning(false);
+              setMessage({ basis: inputBasis, text: "추천 계산을 취소했습니다. 기존 계획은 유지됩니다." });
+            }} style={{ ...primaryButton, padding: 8, display: "inline-flex" }}><X size={18} aria-hidden="true" /></button>}
         </div>
 
-        {(message || lastResult?.warnings.length) && (
+        {staleRecommendations.length > 0 && (
+          <div role="status" style={messageStyle}>
+            이전 추천 {staleRecommendations.length}개는 입력 기준이 없거나 현재 입력·계획과 달라
+            추천 순위와 근거를 표시하지 않습니다. 저장된 계획은 유지됩니다. 현재 입력으로 추천안을 다시 계산하세요.
+          </div>
+        )}
+
+        {(currentMessage || currentLastResult?.warnings.length) && (
           <div style={messageStyle}>
-            {message}
-            {lastResult?.warnings.map((warning) => (
+            {currentMessage}
+            {currentLastResult?.warnings.map((warning) => (
               <div key={warning}>· {warning}</div>
             ))}
           </div>
         )}
 
         <RejectionSummary summary={rejectionSummary} />
+
+        {currentLastResult && <DwellingComparisonTable evaluations={currentLastResult.evaluations} input={input} onCopy={(scenario) => {
+          const copy = clonePlanningScenario(scenario, `${scenario.name} 비교 편집안`);
+          setPlanningScenarios([...useProjectStore.getState().planningScenarios, copy]);
+          selectPlanningScenario(copy.id);
+        }} />}
 
         <div
           style={{
@@ -635,14 +696,6 @@ export function PlanningRecommendationPanelV2({ projectId }: { projectId: string
           />
         </div>
 
-        <style jsx>{`
-          @media (max-width: 980px) {
-            .recommendation-card-grid-v2,
-            .rejection-reason-grid {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        `}</style>
       </Panel>
     </section>
   );

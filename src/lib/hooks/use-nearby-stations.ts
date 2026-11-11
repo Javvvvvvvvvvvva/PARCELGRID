@@ -1,5 +1,7 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 import { useQuery } from "@tanstack/react-query";
 
 export interface NearbyStationMarker {

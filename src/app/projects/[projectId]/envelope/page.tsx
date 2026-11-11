@@ -14,7 +14,11 @@ import { ScenarioPlacementWorkspace } from "@/components/planning/ScenarioPlacem
 import { ScenarioParkingWorkspace } from "@/components/planning/ScenarioParkingWorkspace";
 import { ScenarioChangeWorkspace } from "@/components/planning/ScenarioChangeWorkspace";
 import { RegulatoryEvidencePanel } from "@/components/planning/RegulatoryEvidencePanel";
-import { assessRepresentativeCheckReadiness } from "@/lib/planning/representative-readiness";
+import { resolveStage3DashboardContext } from "@/lib/stage3/dashboard-model";
+import {
+  principalHasCapability,
+  useAccessSession,
+} from "@/lib/hooks/use-access-session";
 
 type StudioSection = "plan" | "design" | "verify" | "context" | "export";
 
@@ -63,6 +67,11 @@ export default function EnvelopePage({
 }) {
   const { projectId } = use(params);
   const router = useRouter();
+  const accessSession = useAccessSession();
+  const canEditPlan = principalHasCapability(
+    accessSession.data,
+    "project.update",
+  );
   const representativeScenarioId = useProjectStore(
     (state) => state.representativePlanningScenarioId
   );
@@ -72,41 +81,13 @@ export default function EnvelopePage({
   const planningScenarios = useProjectStore((state) => state.planningScenarios);
   const projectData = useProjectStore((state) => state.data);
   const financeScenarios = projectData?.scenarios ?? [];
-  const representativeScenario = planningScenarios.find(
-    (scenario) =>
-      scenario.id === representativeScenarioId &&
-      (!scenario.projectId || scenario.projectId === projectId)
-  );
-  const representativeCheckReadiness = representativeScenario
-    ? assessRepresentativeCheckReadiness(representativeScenario.checks)
-    : null;
-  const geometryReady = Boolean(
-    representativeScenarioId &&
-      representativeScenario &&
-      representativeGeometry &&
-      representativeGeometry.projectId === projectId &&
-      representativeGeometry.scenarioId === representativeScenarioId &&
-      representativeGeometry.scenarioVersion === representativeScenario.version &&
-      representativeCheckReadiness?.ready &&
-      representativeGeometry.validation.status !== "fail" &&
-      representativeGeometry.validation.representativeEligible
-  );
-  const handoffReady = Boolean(
-    geometryReady &&
-      financeScenarios.some((scenario) => scenario.id === representativeScenarioId)
-  );
-  const handoffMessage = !representativeScenarioId
-    ? "대표 계획안을 먼저 확정하세요"
-    : representativeCheckReadiness && !representativeCheckReadiness.ready
-      ? `법규·주차 검증 필요: ${
-          representativeCheckReadiness.blockers[0]?.message ??
-          "핵심 항목 미확인"
-        }`
-      : !geometryReady
-        ? "대표안 Geometry 검증을 다시 확인하세요"
-      : !handoffReady
-        ? "대표안 사업성을 재계산하고 있습니다"
-        : "대표 계획안 사업성 검토로 이동";
+  const handoff = resolveStage3DashboardContext({ projectId, parcel: projectData?.parcel,
+    representativeScenarioId, representativeGeometrySnapshot: representativeGeometry,
+    planningScenarios, financeScenarios });
+  const handoffReady = handoff.ready;
+  const handoffMessage = handoff.ready
+    ? handoff.geometry.analysisReference ? "예비 분석 기준안의 사업성 검토로 이동" : "대표 계획안 사업성 검토로 이동"
+    : handoff.message;
 
   const [activeSection, setActiveSection] = useState<StudioSection>("plan");
   const [visitedSections, setVisitedSections] = useState<StudioSection[]>([
@@ -185,8 +166,11 @@ export default function EnvelopePage({
 
       {visitedSections.includes("plan") && (
         <section hidden={activeSection !== "plan"} className="studio-section studio-plan">
-          <PlanningRecommendationPanelV2 projectId={projectId} />
-          <PlanningScenarioWorkspaceV4 projectId={projectId} embedded />
+          {!canEditPlan && <div className="studio-readonly">현재 계정은 계획안을 열람만 할 수 있습니다.</div>}
+          <fieldset className="studio-permission-scope" disabled={!canEditPlan}>
+            <PlanningRecommendationPanelV2 projectId={projectId} />
+            <PlanningScenarioWorkspaceV4 projectId={projectId} embedded />
+          </fieldset>
           <StudioStepFooter
             nextLabel="배치·주차 검토"
             onNext={() => selectSection("design")}
@@ -203,9 +187,12 @@ export default function EnvelopePage({
               <p>계획 매스의 위치·회전·주차 가능 대수를 조정하고 대안 간 차이를 확인합니다.</p>
             </div>
           </div>
-          <ScenarioPlacementWorkspace projectId={projectId} />
-          <ScenarioParkingWorkspace projectId={projectId} />
-          <ScenarioChangeWorkspace projectId={projectId} />
+          {!canEditPlan && <div className="studio-readonly">현재 계정은 배치와 주차안을 열람만 할 수 있습니다.</div>}
+          <fieldset className="studio-permission-scope" disabled={!canEditPlan}>
+            <ScenarioPlacementWorkspace projectId={projectId} />
+            <ScenarioParkingWorkspace projectId={projectId} />
+            <ScenarioChangeWorkspace projectId={projectId} />
+          </fieldset>
           <StudioStepFooter
             previousLabel="계획안"
             onPrevious={() => selectSection("plan")}
@@ -224,11 +211,11 @@ export default function EnvelopePage({
               <p>건폐율·용적률·높이의 원문 근거를 기록하고 정북일조·지적 도로·계획도로의 출처를 구분합니다.</p>
             </div>
           </div>
-          <div className="studio-panel-stack">
+          <fieldset className="studio-panel-stack studio-permission-scope" disabled={!canEditPlan}>
             <RegulatoryEvidencePanel projectId={projectId} />
             <PlanningGeometryContractPanel projectId={projectId} />
             <CadastralRoadContextPanel projectId={projectId} />
-          </div>
+          </fieldset>
           <StudioStepFooter
             previousLabel="배치·주차"
             onPrevious={() => selectSection("design")}
@@ -286,6 +273,21 @@ export default function EnvelopePage({
         .planning-studio-shell {
           min-height: 100%;
           background: var(--bg);
+        }
+        .studio-permission-scope {
+          min-width: 0;
+          margin: 0;
+          padding: 0;
+          border: 0;
+        }
+        .studio-readonly {
+          max-width: 1380px;
+          margin: 14px auto 0;
+          padding: 9px var(--s5);
+          color: var(--warn-fg);
+          background: var(--warn-soft);
+          font-size: 10px;
+          font-weight: 700;
         }
         .studio-flow-header {
           position: sticky;

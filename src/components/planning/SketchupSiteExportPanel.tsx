@@ -1,5 +1,7 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/ui/primitives";
 import { defaultAssumptions } from "@/lib/finance/scenario";
@@ -8,6 +10,7 @@ import {
   buildCadastralContext,
   type CadastralParcelFeature,
 } from "@/lib/geo/cadastral-context";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
 import { buildPlanningParkingGeometry } from "@/lib/planning/planning-parking-geometry";
 import {
@@ -31,6 +34,7 @@ interface ApiResponse {
     upisDataCode: string;
   };
   error?: string;
+  warnings?: string[];
 }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -71,6 +75,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   const [parcels, setParcels] = useState<CadastralParcelFeature[]>([]);
   const [sourceSummary, setSourceSummary] = useState<ApiResponse["sourceSummary"]>();
   const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [sourceWarnings, setSourceWarnings] = useState<string[]>([]);
   const [message, setMessage] = useState<Feedback | null>(null);
 
   const parcel = data?.parcel;
@@ -87,6 +92,9 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
+    setParcels([]);
+    setSourceSummary(undefined);
+    setSourceWarnings([]);
     if (
       !parcel ||
       manualParcel ||
@@ -124,7 +132,9 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
         return payload;
       })
       .then((payload) => {
+        if (controller.signal.aborted) return;
         setParcels(payload.parcels ?? []);
+        setSourceWarnings(payload.warnings ?? []);
         setSourceSummary(payload.sourceSummary);
         setLoadState("ready");
       })
@@ -143,19 +153,10 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   }, [manualParcel, parcel, targetPnu]);
 
   const packageData = useMemo(() => {
-    if (!scenario || !parcel || !targetBoundary || targetBoundary.length < 3 || !targetPnu) {
+    if (!scenario || !parcel || !hasParcelBoundary(parcel) || !targetPnu) {
       return null;
     }
 
-    const planning = buildPlanningGeometry({
-      projectId,
-      scenario,
-      boundary: targetBoundary,
-      lotAreaSqm: parcel.lotArea,
-      zoning: parcel.zoning ?? "",
-      roads: parcel.roads,
-      setback: parcel.setback,
-    }).snapshot;
     const legacyAssumptions =
       data?.scenarios.find((candidate) => candidate.recommended)?._raw
         .assumptions ??
@@ -163,6 +164,13 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       defaultAssumptions();
     const calculation = calculatePlanningScenario(scenario, {
       parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus:
+          parcel.inputProvenance?.zoning === "vworld-land-use"
+            ? "public-observation"
+            : "user-entered",
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
         lotAreaSqm: parcel.lotArea,
         maxFARPct: parcel.maxFAR,
         maxBCRPct: parcel.maxBCR,
@@ -178,11 +186,24 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       ),
       calculatedAt: data?.meta.lastSyncedAt,
     });
+    const planning = buildPlanningGeometry({
+      projectId,
+      scenario,
+      boundary: targetBoundary,
+      boundaryPolygons: parcel.boundaryPolygons,
+      lotAreaSqm: parcel.lotArea,
+      zoning: parcel.zoning ?? "",
+      roads: parcel.roads,
+      setback: parcel.setback,
+      sunlight: calculation.sunlight,
+      roofAllowanceM: calculation.metrics.roofAllowanceM,
+    }).snapshot;
     const parking = buildPlanningParkingGeometry({
       scenario,
       planning,
       requiredCars: calculation.parking.requiredCars,
       boundary: targetBoundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       roads: parcel.roads,
     });
     const basePackage = buildSketchupExportPackage({
@@ -193,6 +214,8 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
     const cadastral = buildCadastralContext({
       planning,
       targetPnu,
+      targetBoundary,
+      targetBoundaryPolygons: parcel.boundaryPolygons,
       parcels,
     });
     const audit = buildSiteDeliveryAudit({
@@ -204,7 +227,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
     return { planning, parking, basePackage, cadastral, audit };
   }, [data, parcel, parcels, projectId, scenario, targetBoundary, targetPnu]);
 
-  if (!parcel || !targetBoundary || !scenario || !packageData) return null;
+  if (!parcel || !scenario || !packageData) return null;
 
   const { planning, parking, basePackage, cadastral, audit } = packageData;
   const locked =
@@ -260,7 +283,8 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       const result = downloadSketchupSiteDeliveryExport({
         basePackage,
         cadastral,
-        targetBoundary,
+        targetBoundary: targetBoundary ?? [],
+        targetBoundaryPolygons: parcel.boundaryPolygons,
         sourceParcels: parcels,
       });
       setMessage({
@@ -306,7 +330,8 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       const result = downloadPlanningCadPackage({
         basePackage,
         cadastral,
-        targetBoundary,
+        targetBoundary: targetBoundary ?? [],
+        targetBoundaryPolygons: parcel.boundaryPolygons,
         sourceParcels: parcels,
       });
       setMessage({
@@ -325,27 +350,27 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
   };
 
   const rows: Array<[string, number, string]> = [
-    ["PG_PARCEL", 1, "대상 필지 경계"],
+    ["PG_PARCEL", basePackage.layers.find(layer => layer.name === "PG_PARCEL")?.objectCount ?? 0, "대상 필지 경계"],
     ["PG_PROPOSED_MASS", planning.building.floors.length, "검증된 계획 매스"],
     ["PG_PARKING_STALLS", parking.layout.stalls.length, "실제 주차면"],
     [
       "PG_PARKING_AISLE",
-      parking.layout.aisleShape.length >= 3 ? 1 : 0,
+      basePackage.layers.find(layer => layer.name === "PG_PARKING_AISLE")?.objectCount ?? 0,
       "차량 통로 외곽",
     ],
     [
       "PG_PARKING_CORE",
-      parking.layout.coreShape.length >= 3 ? 1 : 0,
+      basePackage.layers.find(layer => layer.name === "PG_PARKING_CORE")?.objectCount ?? 0,
       "필로티 주차 불가 코어",
     ],
     [
       "PG_PARKING_COLUMNS_REFERENCE",
-      parking.layout.columns.length,
+      basePackage.layers.find(layer => layer.name === "PG_PARKING_COLUMNS_REFERENCE")?.objectCount ?? 0,
       "구조설계 전 기둥 참고점",
     ],
     [
       "PG_PARKING_ACCESS_REFERENCE",
-      parking.layout.entryPath.length >= 2 ? 1 : 0,
+      basePackage.layers.find(layer => layer.name === "PG_PARKING_ACCESS_REFERENCE")?.objectCount ?? 0,
       "차량 진입 참고선",
     ],
     [
@@ -454,6 +479,7 @@ export function SketchupSiteExportPanel({ projectId }: { projectId: string }) {
       </div>
 
       {loadState === "loading" && <Notice>지적·UPIS 도로 경계를 조회하고 있습니다.</Notice>}
+      {sourceWarnings.map((warning) => <Notice key={warning}>{warning}</Notice>)}
       {manualParcel && (
         <Notice tone="fail">
           사용자 GeoJSON은 계획 검토에 사용할 수 있지만 측량·지적 원문은 아닙니다.

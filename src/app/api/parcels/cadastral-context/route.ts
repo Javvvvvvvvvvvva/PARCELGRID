@@ -1,37 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 import { fetchCadastralContextParcels } from "@/lib/integrations/vworld-cadastral-context";
 import {
   fetchUpisRoadBoundaries,
   VWORLD_UPIS_ROAD_DATA,
 } from "@/lib/integrations/vworld-upis-roads";
 import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
+import { requireApiCapability } from "@/lib/auth/request";
+import { createProviderDeadline } from "@/lib/http/provider-deadline";
+import { vworldEvidenceWarnings, vworldResultEvidence, vworldUnavailableEvidence } from "@/lib/integrations/vworld-evidence";
 
 export const runtime = "nodejs";
 
-interface RequestBody {
-  targetPnu?: string;
-  lat?: number;
-  lng?: number;
-  radiusM?: number;
-}
+const requestSchema = z.object({
+  targetPnu: z.string().trim().min(1).max(128),
+  lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180),
+  radiusM: z.number().positive().max(10_000).optional(),
+});
 
 export async function POST(request: NextRequest) {
-  let body: RequestBody;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const targetPnu = body.targetPnu?.trim();
-  const lat = Number(body.lat);
-  const lng = Number(body.lng);
-  if (!targetPnu || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+  const authorization = await requireApiCapability(request, "project.read");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(request, { maxBytes: JSON_REQUEST_LIMITS.lookup });
+  if (!input.ok) return input.response;
+  const parsed = requestSchema.safeParse(input.value);
+  if (!parsed.success) {
     return NextResponse.json(
       { error: "targetPnu, lat, lng가 필요합니다." },
       { status: 400 }
     );
   }
+  const { targetPnu, lat, lng } = parsed.data;
 
   const vworld = vworldRuntimeState();
   if (vworld.mode !== "enabled") {
@@ -50,21 +50,27 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const radiusM = Math.min(180, Math.max(40, Number(body.radiusM) || 100));
+  const radiusM = Math.min(180, Math.max(40, parsed.data.radiusM ?? 100));
   const center = { lat, lng };
 
   try {
+    const budget = createProviderDeadline(12_000, request.signal);
+    budget.check();
     const [cadastralResult, upisResult] = await Promise.allSettled([
       fetchCadastralContextParcels({
         targetPnu,
         center,
         radiusM,
         maxCount: 80,
+        signal: budget.signal,
+        outerDeadline: budget.deadline,
       }),
       fetchUpisRoadBoundaries({
         center,
         radiusM: Math.max(120, radiusM),
         maxCount: 40,
+        signal: budget.signal,
+        outerDeadline: budget.deadline,
       }),
     ]);
 
@@ -76,10 +82,27 @@ export async function POST(request: NextRequest) {
       upisResult.status === "fulfilled" ? upisResult.value.summaries : [];
 
     if (cadastralResult.status === "rejected") {
-      console.warn("주변 연속지적도 조회 실패:", cadastralResult.reason);
+      console.warn("주변 연속지적도 조회 실패");
     }
     if (upisResult.status === "rejected") {
-      console.warn("도시계획 도로 경계 조회 실패:", upisResult.reason);
+      console.warn("도시계획 도로 경계 조회 실패");
+    }
+    budget.check();
+    const sourceEvidence = {
+      cadastral: cadastralResult.status === "fulfilled"
+        ? vworldResultEvidence("LP_PA_CBND_BUBUN", cadastralParcels.length)
+        : vworldUnavailableEvidence("LP_PA_CBND_BUBUN", "request-failed"),
+      upis: upisResult.status === "fulfilled"
+        ? vworldResultEvidence("LT_C_UPISUQ151", upisRoads.length)
+        : vworldUnavailableEvidence("LT_C_UPISUQ151", "request-failed"),
+    };
+    if (cadastralResult.status === "rejected" && upisResult.status === "rejected") {
+      return NextResponse.json({
+        code: "VWORLD_CONTEXT_UNAVAILABLE",
+        error: "지적·도로 컨텍스트 데이터를 확인하지 못했습니다.",
+        sourceEvidence,
+        retryable: true,
+      }, { status: 502 });
     }
 
     const cadastralRoadCount = cadastralParcels.filter(
@@ -94,10 +117,12 @@ export async function POST(request: NextRequest) {
       source: "VWorld LP_PA_CBND_BUBUN + LT_C_UPISUQ151",
       targetPnu,
       parcels,
+      sourceEvidence,
+      queryCompleteness: "unconfirmed",
       sourceSummary: {
-        cadastralParcelCount: cadastralParcels.length,
-        cadastralRoadCount,
-        upisRoadBoundaryCount: upisRoads.length,
+        cadastralParcelCount: sourceEvidence.cadastral.resultCount,
+        cadastralRoadCount: cadastralResult.status === "fulfilled" ? cadastralRoadCount : null,
+        upisRoadBoundaryCount: sourceEvidence.upis.resultCount,
         activeRoadBoundarySource:
           cadastralRoadCount > 0
             ? "cadastral-road-parcel"
@@ -107,23 +132,19 @@ export async function POST(request: NextRequest) {
         upisDataCode: VWORLD_UPIS_ROAD_DATA,
       },
       upisRoadSummaries,
-      warnings: [
-        ...(cadastralResult.status === "rejected"
-          ? ["연속지적도 주변 필지 조회에 실패했습니다."]
-          : []),
-        ...(upisResult.status === "rejected"
-          ? ["도시계획 도로 경계 API 조회에 실패했습니다."]
-          : []),
-      ],
+      warnings: vworldEvidenceWarnings(Object.values(sourceEvidence)),
     });
-  } catch (error) {
-    console.error("지적·도로 context 조회 실패:", error);
+  } catch {
+    console.warn("지적·도로 컨텍스트 조회를 완료하지 못했습니다.");
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "지적·도로 context 조회 중 오류가 발생했습니다.",
+        code: "VWORLD_CONTEXT_UNAVAILABLE",
+        error: "지적·도로 컨텍스트 데이터를 확인하지 못했습니다.",
+        sourceEvidence: {
+          cadastral: vworldUnavailableEvidence("LP_PA_CBND_BUBUN", "request-failed"),
+          upis: vworldUnavailableEvidence("LT_C_UPISUQ151", "request-failed"),
+        },
+        retryable: true,
       },
       { status: 502 }
     );

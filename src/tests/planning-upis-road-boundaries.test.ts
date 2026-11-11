@@ -204,7 +204,10 @@ describe("VWorld UPIS road boundaries", () => {
       ],
     });
 
-    expect(parsed.parcels).toHaveLength(2);
+    expect(parsed.parcels).toHaveLength(1);
+    expect(parsed.parcels[0].pnu).toBe("UPIS-UPPERCASE-01-1");
+    expect(parsed.parcels[0].polygons).toHaveLength(2);
+    expect(parsed.parcels[0].boundary).toEqual([]);
     expect(parsed.summaries[0].featurePartCount).toBe(2);
     expect(parsed.summaries[0].executionCode).toBe("EMA0001");
   });

@@ -1,4 +1,5 @@
 import type { Parcel } from "@/lib/finance/types";
+import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
 import type { BuildingLookupResult } from "@/lib/integrations/molit-building";
 import { estimateFloorHeightM } from "@/lib/integrations/molit-building";
 import {
@@ -28,7 +29,10 @@ export function getBuildingRegistryStatus(
   info: BuildingLookupResult | null | undefined
 ): BuildingRegistryStatus {
   if (!info) return "unknown";
-  if (!info.hasBuilding) return "confirmed-empty";
+  if (!info.hasBuilding) {
+    const title = info.registry?.title;
+    return title?.status === "complete" && title.totalCount === 0 && title.fetchedCount === 0 && title.pagesFetched > 0 && title.rows.length === 0 && info.buildings.length === 0 ? "confirmed-empty" : "unknown";
+  }
   return mainBuilding(info) ? "present" : "unknown";
 }
 
@@ -51,7 +55,7 @@ function ageBullet(
   }
   if (status === "confirmed-empty") {
     return {
-      text: "건축물대장에 등록된 현재 건물이 없습니다. 실제 빈 토지 여부는 현장과 추가 자료로 확인해야 합니다.",
+      text: "조회 범위 내 건축물대장 표제부가 0건입니다. 실제 빈 토지 여부는 현장과 추가 자료로 확인해야 합니다.",
       tone: "neutral",
       kind: "observation",
     };
@@ -110,7 +114,8 @@ function sunBullet(parcel: Parcel): StatusSummaryBullet {
     };
   }
 
-  if (!parcel.boundary || parcel.boundary.length < 3) {
+  const region = resolvePlanningParcel(parcel);
+  if (!region.available) {
     return {
       text: "필지 경계 데이터가 부족해 정북일조 영향을 아직 판정할 수 없습니다.",
       tone: "neutral",
@@ -118,7 +123,12 @@ function sunBullet(parcel: Parcel): StatusSummaryBullet {
     };
   }
 
-  const northEdge = findNorthEdge(parcel.boundary);
+  if (!region.simple) {
+    return { text: "분리 조각·내부 제외 영역을 포함한 경계입니다. 단일 정북 경계 요약 대신 Stage 2의 전체 경계·층별 일조 외곽선을 확인해야 합니다. 적용 규정과 공식 경계는 미확정입니다.",
+      tone: "neutral", kind: "check" };
+  }
+
+  const northEdge = findNorthEdge(region.source[0].outer);
   const floorH = parcel.currentBuilding
     ? estimateFloorHeightM(parcel.currentBuilding) ?? 3
     : 3;
@@ -130,7 +140,16 @@ function sunBullet(parcel: Parcel): StatusSummaryBullet {
     heightM,
     refFloors,
     northEdge,
-    parcel.roads
+    parcel.roads,
+    {
+      address: parcel.address,
+      zoningStatus:
+        parcel.inputProvenance?.zoning === "vworld-land-use"
+          ? "public-observation"
+          : "user-entered",
+      legalUse: "unknown-residential",
+      legalUseStatus: "user-entered",
+    }
   );
 
   if (!ev.applies) {

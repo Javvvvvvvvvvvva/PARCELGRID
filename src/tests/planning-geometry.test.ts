@@ -1,16 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlanningGeometry,
+  planningGeometryInputBasis,
   planningRingCentroid,
   planningRingToLocalMeters,
   polygonSelfIntersects,
 } from "@/lib/planning/planning-geometry";
 import { polygonAreaSqm } from "@/lib/planning/planning-massing";
+import { canonicalProjectWorkspaceJson } from "@/lib/workspace/project-workspace";
 import {
   createBlankPlanningScenario,
   createFloorProgram,
   createFloorZone,
 } from "@/lib/planning/scenario-utils";
+
+it("checks a caller deadline during a long nonintersecting polygon scan", () => {
+  const points = Array.from({ length: 200 }, (_, i) => ({ x: 10 * Math.cos(i * Math.PI / 100), z: 10 * Math.sin(i * Math.PI / 100) }));
+  let checks = 0;
+  expect(() => polygonSelfIntersects(points, () => {
+    if (++checks === 2) throw new Error("Geometry deadline exceeded");
+  })).toThrow("Geometry deadline exceeded");
+  expect(checks).toBe(2);
+});
+
+it.each([1, 0.1, 10])("detects a small genuine crossing at scale %s without comparing squared orientation tolerances", scale => {
+  const points = [[0, 0], [10, 0], [10, 10], [5.005, 10], [5, 10.005], [5.005, 10.005], [5, 10], [0, 10]]
+    .map(([x, z]) => ({ x: x * scale, z: z * scale }));
+  expect(polygonSelfIntersects(points)).toBe(true);
+  expect(polygonSelfIntersects([...points].reverse())).toBe(true);
+});
 
 function squareBoundary(sizeM = 20): [number, number][] {
   const centerLng = 127.034;
@@ -73,6 +91,20 @@ function build(
 }
 
 describe("Planning Geometry Contract", () => {
+  it("preserves the original input basis across canonical workspace/JSONB key ordering", () => {
+    const scenario = scenarioWithArea(100);
+    Object.assign(scenario.placement, { rotationDeg: 7, offsetXM: 1, offsetZM: -2, roadSetbackM: 3, northSetbackM: 4 });
+    const basis = planningGeometryInputBasis(scenario);
+    const restored = JSON.parse(canonicalProjectWorkspaceJson(scenario));
+    expect(Object.keys(restored.placement)).not.toEqual(Object.keys(scenario.placement));
+    expect(planningGeometryInputBasis(restored)).toBe(basis);
+    for (const key of ["rotationDeg", "offsetXM", "offsetZM", "roadSetbackM", "northSetbackM"] as const) {
+      const edited = structuredClone(restored);
+      edited.placement[key] += 0.01;
+      expect(planningGeometryInputBasis(edited), key).not.toBe(basis);
+    }
+  });
+
   it("keeps program area and generated 3D footprint within strict tolerance", () => {
     const snapshot = build(100);
     const floor = snapshot.building.floors[0];

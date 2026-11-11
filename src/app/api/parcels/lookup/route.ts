@@ -21,7 +21,7 @@ import {
   geocodeAddress,
   type GeocodeResult,
 } from "@/lib/integrations/kakao";
-import { lookupCadastral, lookupZoningByPNU } from "@/lib/integrations/vworld";
+import { CadastralGeometryError, CadastralIdentityError, lookupCadastral, lookupZoningByPNU } from "@/lib/integrations/vworld";
 import {
   lookupBuildingByJibun,
   estimateUnitAreaSqm,
@@ -33,24 +33,28 @@ import { fetchCadastralContextParcels } from "@/lib/integrations/vworld-cadastra
 import type { ExistingBuildingGeometry } from "@/lib/geo/existing-building-geometry";
 import type { CadastralParcelFeature } from "@/lib/geo/cadastral-context";
 import { normalizeRoadLines } from "@/lib/geo/normalize-road-lines";
-import { manualParcelId } from "@/lib/parcels/parcel-id";
+import { manualParcelId, pnuFromParcelAddress } from "@/lib/parcels/parcel-id";
 import type {
   ManualLookupReasonCode,
   ParcelLookupBase,
 } from "@/lib/parcels/lookup-contract";
 import { vworldRuntimeState } from "@/lib/runtime/integration-mode";
+import { requireApiCapability } from "@/lib/auth/request";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
+import { vworldEvidenceWarnings, vworldResultEvidence, vworldUnavailableEvidence } from "@/lib/integrations/vworld-evidence";
 
 export const runtime = "nodejs";
 
 async function lookupCurrentBuilding(
   geo: GeocodeResult,
 ): Promise<BuildingLookupResult | null> {
+  if (!pnuFromParcelAddress(geo)) return null;
   try {
     return await lookupBuildingByJibun(
       geo.bCode,
       geo.mainAddressNo,
       geo.subAddressNo,
-      geo.mountainYn || "N",
+      geo.mountainYn,
     );
   } catch (error) {
     console.warn("MOLIT 건축물대장 조회 실패 (비치명적):", error);
@@ -94,32 +98,32 @@ async function manualLookupResponse(
   currentBuildingPromise: Promise<BuildingLookupResult | null>,
   code: ManualLookupReasonCode,
   message: string,
+  sourceGeometry?: CadastralGeometryError["sourceGeometry"],
 ) {
   const currentBuilding = await currentBuildingPromise;
+  const issue = code === "VWORLD_DISABLED" ? "disabled"
+    : code === "VWORLD_NOT_CONFIGURED" ? "not-configured" : "not-recorded";
+  const sourceEvidence = {
+    roads: vworldUnavailableEvidence("LT_L_SPRD", issue),
+    cadastral: vworldUnavailableEvidence("LP_PA_CBND_BUBUN", issue),
+    buildings: vworldUnavailableEvidence("dt_d010", issue),
+  };
   return NextResponse.json({
     ...baseLookupResult(geo, currentBuilding),
     mode: "manual-required" as const,
     reason: { code, message },
+    sourceEvidence,
+    warnings: vworldEvidenceWarnings(Object.values(sourceEvidence)),
+    ...(sourceGeometry ? { sourceGeometry } : {}),
   });
 }
 
 export async function POST(req: NextRequest) {
-  let body: { address?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        error: "주소 요청 형식을 읽을 수 없습니다.",
-        nextAction: "페이지를 새로고침한 뒤 다시 조회하세요.",
-        retryable: true,
-      },
-      { status: 400 },
-    );
-  }
-
-  const address = body.address?.trim();
+  const authorization = await requireApiCapability(req, "analysis.run");
+  if (!authorization.ok) return authorization.response;
+  const input = await readJsonObject(req, { maxBytes: JSON_REQUEST_LIMITS.lookup });
+  if (!input.ok) return input.response;
+  const address = typeof input.value.address === "string" ? input.value.address.trim() : "";
   if (!address) {
     return NextResponse.json(
       {
@@ -131,6 +135,7 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+  if (address.length > 200) return NextResponse.json({ code: "INVALID_ADDRESS", error: "주소는 200자 이내로 입력하세요." }, { status: 422 });
 
   try {
     const geo = await geocodeAddress(address);
@@ -165,15 +170,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const expectedPnu = pnuFromParcelAddress(geo);
+    if (!expectedPnu) {
+      return manualLookupResponse(geo, currentBuildingPromise, "CADASTRAL_IDENTITY_UNCONFIRMED",
+        "법정동·지번·산 여부가 충분히 확인되지 않았습니다. 일반 지번으로 추정하지 않고 정확한 PNU 확인을 기다립니다.");
+    }
     let cadastral: Awaited<ReturnType<typeof lookupCadastral>>;
     try {
       cadastral = await lookupCadastral(geo.lat, geo.lng, {
+        pnu: expectedPnu,
         mainAddressNo: geo.mainAddressNo,
         subAddressNo: geo.subAddressNo,
         mountainYn: geo.mountainYn,
       });
     } catch (error) {
-      console.warn("VWorld 지적 조회 실패, 수동 등록으로 전환:", error);
+      if (error instanceof CadastralGeometryError) {
+        return manualLookupResponse(geo, currentBuildingPromise, "CADASTRAL_TOPOLOGY_REVIEW",
+          "여러 조각 또는 내부 제외 영역이 있는 필지입니다. 원형 전체를 보존했으며 단일 경계로 축약하지 않았습니다. 현재 자동 설계와 면적 반영은 보류됩니다.", error.sourceGeometry);
+      }
+      if (error instanceof CadastralIdentityError) {
+        return manualLookupResponse(geo, currentBuildingPromise, "CADASTRAL_IDENTITY_AMBIGUOUS",
+          "조회된 필지 후보가 중복되거나 경계에서 여러 필지가 겹쳐 대상을 확정하지 못했습니다. 정확한 PNU와 지적 원문을 확인하세요.");
+      }
+      console.warn("VWorld 지적 조회 실패, 수동 등록으로 전환");
       return manualLookupResponse(
         geo,
         currentBuildingPromise,
@@ -214,7 +233,7 @@ export async function POST(req: NextRequest) {
       ]);
 
     if (zoningResult.status === "rejected") {
-      console.warn("VWorld 용도지역 조회 실패, 수동 등록으로 전환:", zoningResult.reason);
+      console.warn("VWorld 용도지역 조회 실패, 수동 등록으로 전환");
       return manualLookupResponse(
         geo,
         currentBuildingPromise,
@@ -231,7 +250,7 @@ export async function POST(req: NextRequest) {
     if (geometryResult.status === "fulfilled") {
       buildingGeometry = geometryResult.value;
     } else {
-      console.warn("V월드 GIS건물통합정보 조회 실패 (비치명적):", geometryResult.reason);
+      console.warn("V월드 GIS건물통합정보 조회 실패 (비치명적)");
       buildingGeometry = {
         source: "vworld-dt_d010",
         status: "error",
@@ -244,8 +263,20 @@ export async function POST(req: NextRequest) {
     if (cadastralContextResult.status === "fulfilled") {
       cadastralParcels = cadastralContextResult.value;
     } else {
-      console.warn("V월드 주변 연속지적도 조회 실패 (비치명적):", cadastralContextResult.reason);
+      console.warn("V월드 주변 연속지적도 조회 실패 (비치명적)");
     }
+
+    // Keep source evidence even when there is no building record to attach geometry to.
+    const sourceEvidence = {
+      roads: cadastral.roadsEvidence ?? vworldUnavailableEvidence("LT_L_SPRD", "not-recorded"),
+      cadastral: cadastralContextResult.status === "fulfilled"
+        ? vworldResultEvidence("LP_PA_CBND_BUBUN", cadastralParcels.length)
+        : vworldUnavailableEvidence("LP_PA_CBND_BUBUN", "request-failed"),
+      buildings: buildingGeometry.status === "error"
+        ? vworldUnavailableEvidence("dt_d010", "request-failed")
+        : vworldResultEvidence("dt_d010", buildingGeometry.footprints.length),
+    };
+    const warnings = vworldEvidenceWarnings(Object.values(sourceEvidence));
 
     const currentBuildingWithGeometry = attachExistingBuildingGeometry(
       currentBuildingResult,
@@ -273,6 +304,8 @@ export async function POST(req: NextRequest) {
       boundary: cadastral.boundary,
       roads: normalizedRoads,
       cadastralParcels,
+      sourceEvidence,
+      warnings,
       jimok: cadastral.jimok,
       jimokCode: cadastral.jimokCode,
       jimokCategory: cadastral.jimokCategory,
@@ -296,6 +329,7 @@ export async function POST(req: NextRequest) {
         geometry: "vworld-cadastral",
         zoning: "vworld-land-use",
         recordedAt: new Date().toISOString(),
+        ...(warnings.length > 0 ? { note: warnings.join(" ") } : {}),
       },
       currentBuilding: currentBuildingWithGeometry,
       existingUnitArea: estimateUnitAreaSqm(currentBuildingWithGeometry),

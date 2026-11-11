@@ -214,7 +214,9 @@ export function RoadOrientationPanel({ insight }: { insight: RoadOrientationInsi
 export function MarketSnapshotPanel({
   insight,
   stationLookupStatus = "ready",
+  transactionEvidence,
 }: {
+  transactionEvidence?: import("@/lib/integrations/molit-evidence").MolitRangeEvidence[];
   insight: MarketInsight;
   stationLookupStatus?: NearbyStationsStatus;
 }) {
@@ -251,7 +253,7 @@ export function MarketSnapshotPanel({
         background: "var(--border)",
       }}
     >
-      <MarketMetric label="수집 거래" value={`${num(insight.collectedCount)}건`} sub="전체 조회 결과" />
+      <MarketMetric label="수집 거래" value={`${num(insight.collectedCount)}건`} sub={!transactionEvidence?.length ? "조회 근거 미확보 · 0건 확정 아님" : transactionEvidence.every(item => item.status === "complete" && item.failedMonths.length === 0 && item.completedMonths.length > 0) ? "요청 범위 조회 완료 · 화면 적용 표본" : "일부 범위 미확인 · 확보 표본만 표시"} />
       <MarketMetric label="같은 동 거래" value={`${num(insight.sameDongCount)}건`} sub="법정동 기준" />
       <MarketMetric label="지도 표시" value={`${num(insight.mapDisplayCount)}건`} sub="지오코딩 성공 건수" />
       <MarketMetric label="최근 신축" value={`${num(insight.recentBuildCount)}건`} sub="최근 5년 준공" />

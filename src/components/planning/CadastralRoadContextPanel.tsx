@@ -1,12 +1,20 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+
 import { useEffect, useMemo, useState } from "react";
 import { Panel } from "@/components/ui/primitives";
+import { defaultAssumptions } from "@/lib/finance/scenario";
 import {
   buildCadastralContext,
   type CadastralParcelFeature,
 } from "@/lib/geo/cadastral-context";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
 import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import {
+  calculatePlanningScenario,
+  planningEconomicsAssumptionsFromLegacy,
+} from "@/lib/planning/scenario-calculator";
 import { downloadCadastralLineworkPackage } from "@/lib/planning/cadastral-linework-export";
 import { useProjectStore } from "@/lib/stores/project-store";
 import { num } from "@/lib/utils/format";
@@ -16,6 +24,7 @@ interface ApiResponse {
   targetPnu: string;
   parcels: CadastralParcelFeature[];
   error?: string;
+  warnings?: string[];
 }
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -36,7 +45,12 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
   const [sourceParcels, setSourceParcels] = useState<CadastralParcelFeature[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("idle");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  const [sourceWarnings, setSourceWarnings] = useState<string[]>([]);
+  const [downloadMessage, setDownloadMessage] = useState<{
+    tone: "success" | "fail";
+    text: string;
+  } | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const parcel = data?.parcel;
   const scenario =
@@ -53,6 +67,8 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
   const manualParcel = parcel?.inputProvenance?.mode === "manual";
 
   useEffect(() => {
+    setSourceParcels([]);
+    setSourceWarnings([]);
     if (
       !parcel ||
       manualParcel ||
@@ -90,7 +106,9 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
         return payload;
       })
       .then((payload) => {
+        if (controller.signal.aborted) return;
         setSourceParcels(payload.parcels ?? []);
+        setSourceWarnings(payload.warnings ?? []);
         setLoadState("ready");
       })
       .catch((error) => {
@@ -106,41 +124,88 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
   }, [manualParcel, parcel, targetPnu]);
 
   const planning = useMemo(() => {
-    if (!scenario || !parcel?.boundary || parcel.boundary.length < 3) return null;
+    if (!scenario || !parcel || !hasParcelBoundary(parcel)) return null;
+    const legacyAssumptions =
+      data?.scenarios.find((candidate) => candidate.recommended)?._raw.assumptions ??
+      data?.scenarios[0]?._raw.assumptions ??
+      defaultAssumptions();
+    const calculation = calculatePlanningScenario(scenario, {
+      parcel: {
+        address: parcel.address,
+        zoning: parcel.zoning,
+        zoningStatus: parcel.inputProvenance?.zoning === "vworld-land-use"
+          ? "public-observation" : "user-entered",
+        sunlightRuleAsOf: data?.meta.lastSyncedAt?.slice(0, 10),
+        lotAreaSqm: parcel.lotArea,
+        maxFARPct: parcel.maxFAR,
+        maxBCRPct: parcel.maxBCR,
+        heightLimitM: parcel.heightLimit ?? 0,
+        regulatoryConstraints: parcel.regulatoryConstraints,
+        roofAllowanceM: 1.4,
+        acquisitionCostManwon: parcel.acquiredPrice,
+        demolitionCostManwon: parcel.demolitionCost ?? 0,
+      },
+      assumptions: planningEconomicsAssumptionsFromLegacy(
+        legacyAssumptions,
+        `stage2-${data?.meta.version ?? "local"}`
+      ),
+      calculatedAt: data?.meta.lastSyncedAt,
+    });
     return buildPlanningGeometry({
       projectId,
       scenario,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       lotAreaSqm: parcel.lotArea,
       zoning: parcel.zoning ?? "",
       roads: parcel.roads,
       setback: parcel.setback,
+      sunlight: calculation.sunlight,
+      roofAllowanceM: calculation.metrics.roofAllowanceM,
     }).snapshot;
-  }, [parcel, projectId, scenario]);
+  }, [data, parcel, projectId, scenario]);
 
   const snapshot = useMemo(() => {
     if (!planning || !targetPnu) return null;
     return buildCadastralContext({
       planning,
       targetPnu,
+      targetBoundary: parcel?.boundary,
+      targetBoundaryPolygons: parcel?.boundaryPolygons,
       parcels: sourceParcels,
     });
-  }, [planning, sourceParcels, targetPnu]);
+  }, [planning, sourceParcels, targetPnu, parcel?.boundary, parcel?.boundaryPolygons]);
 
   if (manualParcel || !parcel || !scenario || !planning || !snapshot) return null;
 
   const primary = snapshot.frontages[0] ?? null;
   const widthAvailable = primary?.widthAvgM != null;
-  const canDownload = loadState === "ready" && sourceParcels.length > 0;
+  const snapshotUsable = snapshot.validation.usable &&
+    snapshot.validation.status !== "fail" &&
+    !snapshot.validation.issues.some((issue) => issue.severity === "fail");
+  const canDownload = loadState === "ready" && sourceParcels.length > 0 &&
+    snapshotUsable && !downloading;
 
-  const handleDownload = () => {
-    if (!canDownload || !parcel.boundary) return;
-    const result = downloadCadastralLineworkPackage({
-      snapshot,
-      targetBoundary: parcel.boundary,
-      sourceParcels,
-    });
-    setDownloadMessage(`${result.filename} 다운로드를 시작했습니다.`);
+  const handleDownload = async () => {
+    if (!canDownload || !hasParcelBoundary(parcel)) return;
+    setDownloading(true);
+    setDownloadMessage(null);
+    try {
+      const result = await downloadCadastralLineworkPackage({
+        snapshot,
+        targetBoundary: parcel.boundary ?? [],
+        targetBoundaryPolygons: parcel.boundaryPolygons,
+        sourceParcels,
+      });
+      setDownloadMessage({ tone: "success", text: `${result.filename} 다운로드를 시작했습니다.` });
+    } catch (error) {
+      setDownloadMessage({
+        tone: "fail",
+        text: error instanceof Error ? error.message : "지적도 패키지 다운로드에 실패했습니다.",
+      });
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -234,6 +299,7 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
       {loadState === "error" && (
         <Notice tone="fail">{loadError ?? "주변 연속지적도 조회 실패"}</Notice>
       )}
+      {sourceWarnings.map((warning) => <Notice key={warning} tone="warn">{warning}</Notice>)}
       {snapshot.validation.issues.length > 0 && loadState !== "loading" && (
         <Notice tone="warn">
           {snapshot.validation.issues.map((issue) => (
@@ -241,7 +307,7 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
           ))}
         </Notice>
       )}
-      {downloadMessage && <Notice tone="success">{downloadMessage}</Notice>}
+      {downloadMessage && <Notice tone={downloadMessage.tone}>{downloadMessage.text}</Notice>}
 
       {snapshot.frontages.length > 0 && (
         <div style={{ marginTop: 14, overflowX: "auto" }}>
@@ -297,9 +363,13 @@ export function CadastralRoadContextPanel({ projectId }: { projectId: string }) 
       >
         <div>
           <strong>
-            {canDownload
-              ? "지적·도로 선형 패키지 생성 가능"
-              : "주변 연속지적도 조회 후 다운로드 가능"}
+            {downloading
+              ? "지적·도로 선형 패키지 생성 중"
+              : canDownload
+                ? "지적·도로 선형 패키지 생성 가능"
+                : !snapshotUsable
+                  ? "지적·도로 경계 검증 후 다운로드 가능"
+                  : "주변 연속지적도 조회 후 다운로드 가능"}
           </strong>
           <div style={{ marginTop: 3, color: "var(--fg-muted)", maxWidth: 800 }}>
             ZIP에는 로컬 미터 DXF, WGS84 GeoJSON, 폭 샘플과 출처가 포함된 metadata가

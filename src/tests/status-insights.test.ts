@@ -114,6 +114,33 @@ describe("Stage 1 status insights", () => {
     expect(insight.frontageAvailable).toBe(true);
   });
 
+  it("uses full parcel parts for the frontage summary instead of the legacy first ring", () => {
+    const parcel = sampleParcel();
+    const outer = parcel.boundary!;
+    const second = outer.map(([lng, lat]): [number, number] => [lng + 0.001, lat]);
+    parcel.boundaryPolygons = [{ outer, holes: [] }, { outer: second, holes: [] }];
+    parcel.boundary = [];
+    parcel.roads = parcel.roads!.map(road => ({ ...road, name: "Second-part road",
+      points: road.points.map(([lng, lat]): [number, number] => [lng + 0.001, lat]) }));
+    const before = structuredClone(parcel);
+    const insight = buildRoadOrientationInsight(parcel);
+    expect(insight.orientationAvailable).toBe(true);
+    expect(insight.frontageAvailable).toBe(true);
+    expect(insight.roadName).toBe("Second-part road");
+    expect(insight.notes.join(" ")).toContain("전체 2개 조각");
+    expect(parcel).toEqual(before);
+  });
+
+  it("does not use a legacy ring when the authoritative full boundary is invalid", () => {
+    const parcel = sampleParcel();
+    parcel.boundaryPolygons = [];
+    const insight = buildRoadOrientationInsight(parcel);
+    expect(insight.orientationAvailable).toBe(false);
+    expect(insight.frontageAvailable).toBe(false);
+    expect(insight.frontLengthM).toBeNull();
+    expect(insight.northDirection).toBeNull();
+  });
+
   it("separates total market collection, same-dong evidence and map display", () => {
     const insight = buildMarketInsight(
       [comp("1", 1_000, true, 2024), comp("2", 1_400, true, 2010), comp("3", 2_000, false, 2025)],
@@ -170,4 +197,21 @@ describe("Stage 1 status insights", () => {
       "등록 건물 없음",
     );
   });
+});
+
+it("does not claim seed coordinates or geometry came from live providers", () => {
+ const p=sampleParcel();
+ const result=buildDataReadinessInsight(p,[],[]);
+ for(const label of ["주소·좌표","대지면적·PNU","필지 경계"]) {
+  const item=result.items.find(item=>item.label===label);
+  expect(item?.status).toBe("derived");expect(item?.source).toContain("출처 미확인");
+ }
+ p.inputProvenance={mode:"vworld",parcelFacts:"vworld-cadastral",geometry:"vworld-cadastral",zoning:"vworld-land-use",recordedAt:new Date().toISOString()};
+ const actual=buildDataReadinessInsight(p,[],[]);
+ expect(actual.items.find(item=>item.label==="대지면적·PNU")?.status).toBe("available");
+ p.inputProvenance={...p.inputProvenance,mode:"manual",parcelFacts:"user-entered",geometry:"unavailable",zoning:"user-entered"};
+ p.boundary=undefined;
+ const manual=buildDataReadinessInsight(p,[],[]);
+ expect(manual.items.find(item=>item.label==="대지면적·PNU")?.status).toBe("derived");
+ expect(manual.items.find(item=>item.label==="필지 경계")?.source).toBe("사용자 경계 미연결");
 });

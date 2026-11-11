@@ -1,96 +1,88 @@
 import type { CadastralParcelFeature } from "@/lib/geo/cadastral-context";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { validateLocalParcelTopology } from "@/lib/geo/parcel-topology-geometry";
+import { createProviderDeadline } from "@/lib/http/provider-deadline";
+import { planningRingToLocalMeters } from "@/lib/planning/planning-geometry";
+import { area, multiPolygon, pointToPolygonDistance } from "@turf/turf";
+import { z } from "zod";
+import { fetchVworldJson } from "./vworld-response";
 
 const KEY = process.env.VWORLD_API_KEY;
 const DATA_BASE = "https://api.vworld.kr/req/data";
 const DOMAIN = process.env.VWORLD_API_DOMAIN ?? "http://localhost:3000";
 
-interface RawFeature {
-  geometry?: {
-    type?: "Polygon" | "MultiPolygon" | string;
-    coordinates?: unknown;
-  };
-  properties?: {
-    pnu?: string;
-    jibun?: string;
-    bonbun?: string;
-    bubun?: string;
-    jimokCd?: string;
-    jimokName?: string;
-  };
-}
+const optionalText = z.string().trim().max(500).optional();
+const propertiesSchema = z.object({
+  pnu: z.string().trim().regex(/^\d{10}[12]\d{8}$/),
+  jibun: optionalText,
+  bonbun: optionalText,
+  bubun: optionalText,
+  jimokCd: optionalText,
+  jimokName: optionalText,
+});
+const featuresSchema = z.array(z.object({ geometry: z.unknown(), properties: propertiesSchema })).max(200);
 
 interface RawResponse {
   response?: {
     status?: "OK" | "NOT_FOUND" | "ERROR" | string;
     result?: {
       featureCollection?: {
-        features?: RawFeature[];
+        features?: unknown;
       };
     };
   };
 }
 
-function openRing(ring: [number, number][]): [number, number][] {
-  if (ring.length <= 1) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1] ? ring.slice(0, -1) : ring;
-}
+const longitude = z.number().finite().min(-180).max(180);
+const latitude = z.number().finite().min(-90).max(90);
+const position = z.union([
+  z.tuple([longitude, latitude]),
+  z.tuple([longitude, latitude, z.number().finite()]),
+]).transform(([lng, lat]): [number, number] => [lng, lat]);
+const ringSchema = z.array(position).min(4).max(10_000).refine(ring => {
+  const last = ring.at(-1);
+  return last != null && ring[0][0] === last[0] && ring[0][1] === last[1];
+});
+const polygonSchema = z.array(ringSchema).min(1).max(100);
+const geometrySchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("Polygon"), coordinates: polygonSchema }),
+  z.object({ type: z.literal("MultiPolygon"), coordinates: z.array(polygonSchema).min(1).max(200) }),
+]);
 
-function extractOuterRing(feature: RawFeature): [number, number][] {
-  const geometry = feature.geometry;
-  if (!geometry?.coordinates) return [];
-  if (geometry.type === "Polygon") {
-    const polygons = geometry.coordinates as number[][][];
-    return (polygons[0] ?? []) as [number, number][];
+// Shared by the two context providers; keep the source parts and holes intact.
+export function parseContextFeatureGeometry(
+  geometry: unknown,
+  center: { lng: number; lat: number },
+  checkDeadline: () => void,
+): Pick<CadastralParcelFeature, "boundary" | "lotAreaSqm" | "distanceM"> & { polygons: Wgs84ParcelPolygon[] } {
+  checkDeadline();
+  const parsed = geometrySchema.safeParse(geometry);
+  if (!parsed.success) throw new Error("V-World context geometry invalid");
+  const coordinates = parsed.data.type === "Polygon" ? [parsed.data.coordinates] : parsed.data.coordinates;
+  if (coordinates.reduce((sum, rings) => sum + rings.reduce((n, ring) => n + ring.length, 0), 0) > 10_000) {
+    throw new Error("V-World context geometry vertex limit exceeded");
   }
-  if (geometry.type === "MultiPolygon") {
-    const polygons = geometry.coordinates as number[][][][];
-    return (polygons[0]?.[0] ?? []) as [number, number][];
+  const polygons = coordinates.map(([outer, ...holes]) => ({ outer, holes }));
+  const project = (ring: [number, number][]) => planningRingToLocalMeters(ring, [center.lng, center.lat]);
+  if (!validateLocalParcelTopology(polygons.map(part => ({
+    outer: project(part.outer), holes: part.holes.map(project),
+  })), checkDeadline)) throw new Error("V-World context topology invalid");
+  const shape = multiPolygon(coordinates);
+  const measuredArea = area(shape);
+  const distance = Math.max(0, pointToPolygonDistance([center.lng, center.lat], shape, { units: "meters" }));
+  checkDeadline();
+  if (!Number.isFinite(measuredArea) || measuredArea <= 0 || !Number.isFinite(distance)) {
+    throw new Error("V-World context geometry measurement invalid");
   }
-  return [];
-}
-
-function polygonAreaSqm(ring: [number, number][]): number {
-  const points = openRing(ring);
-  if (points.length < 3) return 0;
-  const centerLat = points.reduce((sum, point) => sum + point[1], 0) / points.length;
-  const lngScale = 111_000 * Math.cos((centerLat * Math.PI) / 180);
-  const latScale = 111_000;
-  const origin = points[0];
-  let sum = 0;
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index];
-    const next = points[(index + 1) % points.length];
-    const currentX = (current[0] - origin[0]) * lngScale;
-    const currentY = (current[1] - origin[1]) * latScale;
-    const nextX = (next[0] - origin[0]) * lngScale;
-    const nextY = (next[1] - origin[1]) * latScale;
-    sum += currentX * nextY - nextX * currentY;
-  }
-  return Math.abs(sum) / 2;
-}
-
-function centroid(ring: [number, number][]): { lng: number; lat: number } | null {
-  const points = openRing(ring);
-  if (points.length < 3) return null;
   return {
-    lng: points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    lat: points.reduce((sum, point) => sum + point[1], 0) / points.length,
+    polygons,
+    boundary: polygons.length === 1 && polygons[0].holes.length === 0 ? polygons[0].outer : [],
+    lotAreaSqm: Math.round(measuredArea * 100) / 100,
+    distanceM: Math.round(distance * 10) / 10,
   };
 }
 
-function distanceM(
-  a: { lng: number; lat: number },
-  b: { lng: number; lat: number }
-): number {
-  const latM = (b.lat - a.lat) * 111_000;
-  const lngM =
-    (b.lng - a.lng) * 111_000 * Math.cos((a.lat * Math.PI) / 180);
-  return Math.hypot(latM, lngM);
-}
-
-function fallbackJibun(props: NonNullable<RawFeature["properties"]>): string {
+function fallbackJibun(props: z.infer<typeof propertiesSchema>): string {
   const bon = String(props.bonbun ?? "").replace(/^0+/, "");
   const bub = String(props.bubun ?? "").replace(/^0+/, "");
   return bub ? `${bon}-${bub}` : bon;
@@ -101,8 +93,11 @@ export async function fetchCadastralContextParcels(input: {
   targetPnu: string;
   radiusM?: number;
   maxCount?: number;
+  signal?: AbortSignal;
+  outerDeadline?: number;
 }): Promise<CadastralParcelFeature[]> {
   if (!KEY) return [];
+  const budget = createProviderDeadline(12_000, input.signal, input.outerDeadline);
   const radiusM = input.radiusM ?? 80;
   const maxCount = input.maxCount ?? 80;
   const latBuffer = radiusM / 111_000;
@@ -126,42 +121,49 @@ export async function fetchCadastralContextParcels(input: {
   url.searchParams.set("crs", "EPSG:4326");
   url.searchParams.set("domain", DOMAIN);
 
-  const response = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) throw new Error(`V-World cadastral context HTTP ${response.status}`);
-  const raw = (await response.json()) as RawResponse;
-  if (raw.response?.status !== "OK") return [];
+  const raw = (await fetchVworldJson(url.toString(), {
+    envelope: "data", signal: budget.signal, outerDeadline: budget.deadline,
+  })) as RawResponse;
+  budget.check();
+  if (raw.response?.status === "NOT_FOUND") return [];
+  if (raw.response?.status !== "OK") throw new Error("V-World cadastral context response invalid");
 
-  const features = raw.response.result?.featureCollection?.features ?? [];
+  const sourceFeatures = raw.response.result?.featureCollection?.features;
+  const result = featuresSchema.safeParse(sourceFeatures);
+  if (!result.success) throw new Error("V-World cadastral context properties invalid");
   const parcels: CadastralParcelFeature[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
 
-  for (const feature of features) {
-    const props = feature.properties ?? {};
-    const pnu = String(props.pnu ?? "").trim();
-    if (!pnu || pnu === input.targetPnu || seen.has(pnu)) continue;
-    const boundary = extractOuterRing(feature);
-    const center = centroid(boundary);
-    if (!center || boundary.length < 3) continue;
-    const distance = distanceM(input.center, center);
-    if (distance > radiusM * 1.35) continue;
-    const area = polygonAreaSqm(boundary);
-    if (!Number.isFinite(area) || area <= 0.5) continue;
+  for (const [index, feature] of result.data.entries()) {
+    budget.check();
+    const props = feature.properties;
+    const pnu = props.pnu;
+    for (const [value, expected] of [[props.bonbun, pnu.slice(11, 15)], [props.bubun, pnu.slice(15)]]) {
+      if (value && (!/^\d{1,4}$/.test(value) || Number(value) !== Number(expected))) {
+        throw new Error("V-World cadastral context identity inconsistent");
+      }
+    }
+    const signature = JSON.stringify((sourceFeatures as unknown[])[index]);
+    const previous = seen.get(pnu);
+    if (previous !== undefined) {
+      if (previous !== signature) throw new Error("V-World cadastral context duplicate identity conflict");
+      continue;
+    }
+    seen.set(pnu, signature);
+    const geometry = parseContextFeatureGeometry(feature.geometry, input.center, budget.check);
+    if (pnu === input.targetPnu || geometry.distanceM > radiusM * 1.35) continue;
 
-    seen.add(pnu);
     parcels.push({
       pnu,
       jibun: String(props.jibun ?? "").trim() || fallbackJibun(props),
       jimok: String(props.jimokName ?? "").trim(),
       jimokCode: String(props.jimokCd ?? "").trim(),
-      lotAreaSqm: Math.round(area * 100) / 100,
-      boundary,
-      distanceM: Math.round(distance * 10) / 10,
+      ...geometry,
       boundarySource: "continuous-cadastral",
     });
   }
 
+  budget.check();
   return parcels
     .sort((a, b) => {
       const aRoad = a.jimok === "도로" ? 0 : 1;

@@ -1,16 +1,24 @@
-import { ShapeUtils, Vector2 } from "three";
+import { ShapeUtils, Vector2, Vector3 } from "three";
 import type { CadastralContextSnapshot } from "@/lib/geo/cadastral-context";
+import { cadastralFrontageIdentity, cadastralTargetTopologyScope } from "@/lib/geo/cadastral-context";
+import { localParcelPolygons, type Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { validateLocalParcelTopology } from "@/lib/geo/parcel-topology-geometry";
 import type { LocalPlanPoint } from "@/lib/planning/planning-massing";
 import {
+  assertCadastralExportSnapshot,
+  createContextExportDeadline,
   buildCadastralLineworkPackage,
+  parcelExportProvenance,
 } from "@/lib/planning/cadastral-linework-export";
 import {
   buildSketchupDaeExport,
   createStoredZip,
 } from "@/lib/planning/sketchup-dae-export";
 import type { SketchupExportPackageSnapshot } from "@/lib/planning/sketchup-export-package";
+import { buildSiteDeliveryAudit } from "@/lib/planning/site-delivery-audit";
 
-export const SKETCHUP_SITE_EXPORT_VERSION = "sketchup-site-export-v1" as const;
+export const SKETCHUP_SITE_EXPORT_VERSION = "sketchup-site-export-v2" as const;
+const SITE_COORDINATE_PRECISION_M = 0.000001;
 
 interface MeshData {
   id: string;
@@ -111,24 +119,43 @@ function prismMesh(input: {
   layer: string;
   materialId: string;
   outer: LocalPlanPoint[];
+  holes?: LocalPlanPoint[][];
   bottomY: number;
   topY: number;
+  checkDeadline: () => void;
 }): MeshData | null {
-  const outer = openRing(input.outer);
-  if (outer.length < 3 || input.topY <= input.bottomY) return null;
-  const contour = outer.map((point) => new Vector2(point.x, point.z));
-  const capFaces = ShapeUtils.triangulateShape(contour, []);
-  if (capFaces.length === 0) return null;
+  input.checkDeadline();
+  // Triangulate and serialize on the same micrometer grid as DXF. Projection noise
+  // otherwise creates sliver bridge triangles that collapse in float32 CAD receivers.
+  const snapRing = (ring: LocalPlanPoint[]) => openRing(ring).map((point) => ({
+    x: Number(point.x.toFixed(6)), z: Number(point.z.toFixed(6)),
+  }));
+  const outer = snapRing(input.outer);
+  const holes = (input.holes ?? []).map(snapRing);
+  if (!validateLocalParcelTopology([{ outer, holes }], input.checkDeadline) ||
+    !Number.isFinite(input.bottomY) || !Number.isFinite(input.topY) || input.topY <= input.bottomY) {
+    throw new Error(`Site mesh ${input.id} is invalid at export precision.`);
+  }
+  // Clockwise outer walls face away from the solid; hole walls face into the void.
+  const rings = [outer, ...holes].map((ring, index) => {
+    const clockwise = ShapeUtils.isClockWise(ring.map((point) => new Vector2(point.x, point.z)));
+    return clockwise === (index === 0) ? ring : [...ring].reverse();
+  });
+  const vectors = rings.map((ring) => ring.map((point) => new Vector2(point.x, point.z)));
+  const points = rings.flat();
+  const capFaces = ShapeUtils.triangulateShape(vectors[0], vectors.slice(1));
+  input.checkDeadline();
+  if (capFaces.length === 0) throw new Error(`Site mesh ${input.id} could not be triangulated.`);
 
   const positions: number[] = [];
-  for (const point of outer) positions.push(point.x, input.bottomY, point.z);
-  for (const point of outer) positions.push(point.x, input.topY, point.z);
+  for (const point of points) positions.push(point.x, input.bottomY, point.z);
+  for (const point of points) positions.push(point.x, input.topY, point.z);
 
   const triangles: number[] = [];
-  const topOffset = outer.length;
+  const topOffset = points.length;
   for (const face of capFaces) {
     const [a, b, c] = face;
-    const winding = ensureTopWinding(outer[a], outer[b], outer[c]);
+    const winding = ensureTopWinding(points[a], points[b], points[c]);
     const ordered = [face[winding[0]], face[winding[1]], face[winding[2]]];
     triangles.push(
       ordered[0] + topOffset,
@@ -137,14 +164,44 @@ function prismMesh(input: {
     );
     triangles.push(ordered[2], ordered[1], ordered[0]);
   }
-  for (let index = 0; index < outer.length; index += 1) {
-    const next = (index + 1) % outer.length;
-    const bottomA = index;
-    const bottomB = next;
-    const topA = bottomA + topOffset;
-    const topB = bottomB + topOffset;
-    triangles.push(bottomA, bottomB, topB, bottomA, topB, topA);
+  let ringStart = 0;
+  for (const ring of rings) {
+    for (let index = 0; index < ring.length; index += 1) {
+      const next = (index + 1) % ring.length;
+      const bottomA = ringStart + index;
+      const bottomB = ringStart + next;
+      const topA = bottomA + topOffset;
+      const topB = bottomB + topOffset;
+      triangles.push(bottomA, bottomB, topB, bottomA, topB, topA);
+    }
+    ringStart += ring.length;
   }
+
+  // Check the receiver's float32 metre-to-millimetre conversion as well as connectivity.
+  const receiverPoints = Array.from({ length: positions.length / 3 }, (_, index) => new Vector3(
+    ...positions.slice(index * 3, index * 3 + 3).map((value) => Math.fround(Math.fround(value) * 1000)) as [number, number, number]
+  ));
+  const edges = new Map<string, { count: number; direction: number }>();
+  for (let index = 0; index < triangles.length; index += 3) {
+    input.checkDeadline();
+    const face = triangles.slice(index, index + 3);
+    const [a, b, c] = face.map((vertex) => receiverPoints[vertex]);
+    if (b.clone().sub(a).cross(c.clone().sub(a)).length() <= 0.000001) {
+      throw new Error(`Site mesh ${input.id} has a facet that collapses at receiver precision.`);
+    }
+    face.forEach((from, corner) => {
+      const to = face[(corner + 1) % 3];
+      const key = from < to ? `${from}:${to}` : `${to}:${from}`;
+      const edge = edges.get(key) ?? { count: 0, direction: 0 };
+      edge.count++;
+      edge.direction += from < to ? 1 : -1;
+      edges.set(key, edge);
+    });
+  }
+  if ([...edges.values()].some((edge) => edge.count !== 2 || edge.direction !== 0)) {
+    throw new Error(`Site mesh ${input.id} is not watertight after triangulation.`);
+  }
+  input.checkDeadline();
 
   return {
     id: xmlId(input.id),
@@ -165,6 +222,7 @@ function lineMeshes(input: {
   widthM: number;
   bottomY: number;
   topY: number;
+  checkDeadline: () => void;
 }): MeshData[] {
   const meshes: MeshData[] = [];
   for (let index = 0; index < input.points.length - 1; index += 1) {
@@ -182,6 +240,7 @@ function lineMeshes(input: {
       outer: polygon,
       bottomY: input.bottomY,
       topY: input.topY,
+      checkDeadline: input.checkDeadline,
     });
     if (mesh) meshes.push(mesh);
   }
@@ -218,37 +277,46 @@ function geometryXml(mesh: MeshData): string {
 function createSiteMeshes(input: {
   cadastral: CadastralContextSnapshot;
   planning: SketchupExportPackageSnapshot["planning"];
+  checkDeadline: () => void;
 }): MeshData[] {
   const meshes: MeshData[] = [];
 
   for (const parcel of input.cadastral.adjacentParcels) {
-    const ring = openRing(parcel.polygon);
-    meshes.push(
-      ...lineMeshes({
-        layer: "PG_ADJACENT_PARCELS",
-        name: parcel.jibun || parcel.pnu,
-        idPrefix: `adjacent-${parcel.pnu}`,
-        materialId: "mat-adjacent",
-        points: [...ring, ring[0]],
-        widthM: 0.055,
-        bottomY: 0.025,
-        topY: 0.045,
-      })
-    );
+    localParcelPolygons(parcel).forEach((polygon, partIndex) => {
+      [polygon.outer, ...polygon.holes].forEach((points, ringIndex) => {
+        const ring = openRing(points);
+        if (ring.length < 3) return;
+        meshes.push(...lineMeshes({
+          layer: "PG_ADJACENT_PARCELS",
+          name: `${parcel.jibun || parcel.pnu} / part ${partIndex + 1} / ${ringIndex === 0 ? "outer" : `hole ${ringIndex}`}`,
+          idPrefix: `adjacent-${parcel.pnu}-part-${partIndex}-ring-${ringIndex}`,
+          materialId: "mat-adjacent",
+          points: [...ring, ring[0]],
+          widthM: 0.055,
+          bottomY: 0.025,
+          topY: 0.045,
+          checkDeadline: input.checkDeadline,
+        }));
+      });
+    });
   }
 
   for (const parcel of input.cadastral.roadParcels) {
-    const upis = parcel.jimokCode === "UPIS-UQ151";
-    const mesh = prismMesh({
-      id: `${upis ? "upis-road" : "cadastral-road"}-${parcel.pnu}`,
-      name: parcel.jibun || parcel.pnu,
-      layer: upis ? "PG_ROAD_BOUNDARY_UPIS" : "PG_ROAD_PARCELS_CADASTRAL",
-      materialId: upis ? "mat-road-upis" : "mat-road-cadastral",
-      outer: parcel.polygon,
-      bottomY: -0.025,
-      topY: -0.005,
+    const upis = parcelExportProvenance(parcel).boundarySource === "upis-planned-road";
+    localParcelPolygons(parcel).forEach((polygon, partIndex) => {
+      const mesh = prismMesh({
+        id: `${upis ? "upis-road" : "cadastral-road"}-${parcel.pnu}-part-${partIndex}`,
+        name: `${parcel.jibun || parcel.pnu} / part ${partIndex + 1}`,
+        layer: upis ? "PG_ROAD_BOUNDARY_UPIS" : "PG_ROAD_PARCELS_CADASTRAL",
+        materialId: upis ? "mat-road-upis" : "mat-road-cadastral",
+        outer: polygon.outer,
+        holes: polygon.holes,
+        bottomY: -0.025,
+        topY: -0.005,
+        checkDeadline: input.checkDeadline,
+      });
+      if (mesh) meshes.push(mesh);
     });
-    if (mesh) meshes.push(mesh);
   }
 
   input.planning.roads.forEach((road, roadIndex) => {
@@ -262,22 +330,25 @@ function createSiteMeshes(input: {
         widthM: 0.12,
         bottomY: 0.025,
         topY: 0.045,
+        checkDeadline: input.checkDeadline,
       })
     );
   });
 
   for (const frontage of input.cadastral.frontages) {
     if (frontage.status === "planned-road-reference") continue;
+    const identity = `${frontage.roadParcelPnu}-target-${frontage.targetPolygonIndex ?? 0}-${frontage.targetRingIndex ?? 0}-${frontage.targetEdgeIndex}-road-${frontage.roadPolygonIndex ?? 0}-${frontage.roadRingIndex ?? 0}-${frontage.roadEdgeIndex ?? "legacy"}`;
     meshes.push(
       ...lineMeshes({
         layer: "PG_FRONTAGE",
         name: `Frontage ${frontage.roadParcelJibun || frontage.roadParcelPnu}`,
-        idPrefix: `frontage-${frontage.roadParcelPnu}`,
+        idPrefix: `frontage-${identity}`,
         materialId: "mat-frontage",
         points: frontage.frontage,
         widthM: 0.16,
         bottomY: 0.055,
         topY: 0.08,
+        checkDeadline: input.checkDeadline,
       })
     );
     frontage.widthSamples.forEach((sample, sampleIndex) => {
@@ -285,12 +356,13 @@ function createSiteMeshes(input: {
         ...lineMeshes({
           layer: "PG_ROAD_WIDTH_SAMPLES",
           name: `Width ${sample.widthM.toFixed(3)}m`,
-          idPrefix: `width-${frontage.roadParcelPnu}-${sampleIndex}`,
+          idPrefix: `width-${identity}-${sampleIndex}`,
           materialId: "mat-width",
           points: [sample.from, sample.to],
           widthM: 0.085,
           bottomY: 0.05,
           topY: 0.075,
+          checkDeadline: input.checkDeadline,
         })
       );
     });
@@ -324,7 +396,7 @@ function visualSceneXml(
       return `<node id="${layer}-node" name="${layer}" type="NODE">${children}</node>`;
     })
     .join("");
-  const metadata = `<node id="PG_SITE_METADATA-node" name="PG_SITE_METADATA" type="NODE"><extra><technique profile="PARCELGRID"><site_hash>${siteHash}</site_hash><cadastral_hash>${cadastral.cadastralHash}</cadastral_hash><unit>meter</unit><north_axis>-Z</north_axis><east_axis>+X</east_axis><origin_lng>${cadastral.coordinateSystem.originLngLat[0]}</origin_lng><origin_lat>${cadastral.coordinateSystem.originLngLat[1]}</origin_lat></technique></extra></node>`;
+  const metadata = `<node id="PG_SITE_METADATA-node" name="PG_SITE_METADATA" type="NODE"><extra><technique profile="PARCELGRID"><site_hash>${siteHash}</site_hash><cadastral_hash>${cadastral.cadastralHash}</cadastral_hash><unit>meter</unit><north_axis>-Z</north_axis><east_axis>+X</east_axis><origin_lng>${cadastral.coordinateSystem.originLngLat[0]}</origin_lng><origin_lat>${cadastral.coordinateSystem.originLngLat[1]}</origin_lat><target_topology>${xmlEscape(JSON.stringify(cadastral.targetParcel))}</target_topology><frontage_identities>${xmlEscape(JSON.stringify(cadastral.frontages.map(cadastralFrontageIdentity)))}</frontage_identities></technique></extra></node>`;
   return `<library_visual_scenes><visual_scene id="ParcelGridSiteScene" name="PARCELGRID ${siteHash}"><node id="PARCELGRID_SITE_CONTEXT" name="PARCELGRID_SITE_${siteHash}" type="NODE">${layers}${metadata}</node></visual_scene></library_visual_scenes>`;
 }
 
@@ -333,11 +405,15 @@ export function buildSiteContextDae(input: {
   cadastral: CadastralContextSnapshot;
   siteHash: string;
 }): string {
+  const checkDeadline = createContextExportDeadline();
+  assertCadastralExportSnapshot(input.cadastral, checkDeadline);
   const meshes = createSiteMeshes({
     cadastral: input.cadastral,
     planning: input.basePackage.planning,
+    checkDeadline,
   });
   const geometries = meshes.map(geometryXml).join("");
+  checkDeadline();
   const created = xmlEscape(input.basePackage.generatedAt);
   return `<?xml version="1.0" encoding="utf-8"?>\n<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1"><asset><contributor><authoring_tool>PARCELGRID ${SKETCHUP_SITE_EXPORT_VERSION}</authoring_tool><comments>${input.siteHash} | cadastral and UPIS road context</comments></contributor><created>${created}</created><modified>${created}</modified><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>${materialLibraries()}<library_geometries>${geometries}</library_geometries>${visualSceneXml(meshes, input.siteHash, input.cadastral)}<scene><instance_visual_scene url="#ParcelGridSiteScene"/></scene></COLLADA>`;
 }
@@ -380,6 +456,7 @@ function buildReadme(input: {
     `- WGS84 원점: ${input.basePackage.planning.coordinateSystem.originLngLat.join(", ")}`,
     "",
     "주의",
+    "- 대상·인접 필지·도로는 모든 분리 도형과 내부 홀을 보존합니다. 접도 식별자는 snapshot의 조각·링·변 순서를 기준으로 합니다.",
     "- PG_PROPOSED_MASS만 검증된 설계 시작 기준 매스입니다.",
     "- PG_ROAD_BOUNDARY_UPIS는 도시계획 도로 도형이며 현황 포장·차도·보도 경계나 측량 성과도를 대체하지 않습니다.",
     "- 도로 폭 최소/평균/최대값은 연속지적도 도로 필지가 확인된 경우에만 수직 샘플로 계산합니다.",
@@ -391,13 +468,25 @@ function buildReadme(input: {
 export function buildSketchupSiteExport(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: Parameters<typeof buildCadastralLineworkPackage>[0]["sourceParcels"];
 }): SketchupSiteExportResult {
   if (!input.basePackage.validation.exportable) {
     throw new Error(
       input.basePackage.validation.blockingReasons[0] ??
         "계획 매스 Geometry Contract를 통과하지 못했습니다."
+    );
+  }
+  const deliveryAudit = buildSiteDeliveryAudit({
+    planning: input.basePackage.planning,
+    context: input.basePackage.context,
+    cadastral: input.cadastral,
+  });
+  if (!deliveryAudit.exportable) {
+    throw new Error(
+      deliveryAudit.checks.find((check) => check.status === "fail")?.message ??
+        "SketchUp site delivery audit failed."
     );
   }
 
@@ -407,12 +496,13 @@ export function buildSketchupSiteExport(input: {
     context: input.basePackage.contextGeometryHash,
     cadastral: input.cadastral.cadastralHash,
   });
-  const modelExport = buildSketchupDaeExport(input.basePackage);
   const lineworkExport = buildCadastralLineworkPackage({
     snapshot: input.cadastral,
     targetBoundary: input.targetBoundary,
+    targetBoundaryPolygons: input.targetBoundaryPolygons,
     sourceParcels: input.sourceParcels,
   });
+  const modelExport = buildSketchupDaeExport(input.basePackage);
   const base = safeFilename(
     `PARCELGRID-${input.basePackage.projectId}-${input.basePackage.planning.scenarioName}-${siteHash}`
   );
@@ -428,6 +518,12 @@ export function buildSketchupSiteExport(input: {
   const metadataText = `${JSON.stringify(
     {
       exportVersion: SKETCHUP_SITE_EXPORT_VERSION,
+      sourceBinding: "validated-snapshot",
+      siteCoordinatePrecisionM: SITE_COORDINATE_PRECISION_M,
+      deliveryAudit,
+      topologyScope: { target: cadastralTargetTopologyScope(input.cadastral.targetParcel), neighbors: "all-components-and-holes" },
+      targetParcel: input.cadastral.targetParcel,
+      frontageIdentityScope: "snapshot-ring-order",
       siteHash,
       generatedAt: input.basePackage.generatedAt,
       hashes: {
@@ -444,10 +540,9 @@ export function buildSketchupSiteExport(input: {
       roadBoundaries: input.cadastral.roadParcels.map((parcel) => ({
         id: parcel.pnu,
         label: parcel.jibun,
-        source:
-          parcel.jimokCode === "UPIS-UQ151"
-            ? "VWorld LT_C_UPISUQ151"
-            : "VWorld LP_PA_CBND_BUBUN",
+        ...parcelExportProvenance(parcel),
+        componentCount: localParcelPolygons(parcel).length,
+        holeCount: localParcelPolygons(parcel).reduce((sum, part) => sum + part.holes.length, 0),
         measuredAreaSqm: parcel.measuredAreaSqm,
         distanceM: parcel.distanceM,
       })),
@@ -495,7 +590,8 @@ export function buildSketchupSiteExport(input: {
 export function downloadSketchupSiteExport(input: {
   basePackage: SketchupExportPackageSnapshot;
   cadastral: CadastralContextSnapshot;
-  targetBoundary: [number, number][];
+  targetBoundary?: [number, number][];
+  targetBoundaryPolygons?: Wgs84ParcelPolygon[];
   sourceParcels: Parameters<typeof buildCadastralLineworkPackage>[0]["sourceParcels"];
 }): SketchupSiteExportResult {
   const result = buildSketchupSiteExport(input);

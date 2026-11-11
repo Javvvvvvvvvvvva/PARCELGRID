@@ -9,6 +9,7 @@ import type {
   PlanningRecommendationObjective,
   PlanningScenario,
 } from "@/lib/planning/types";
+import { planningRecommendationInputBasis } from "@/lib/planning/recommendation-basis";
 
 export type RecommendationProfitMode =
   | "profit-maximization"
@@ -28,13 +29,14 @@ export interface RecommendationRejectionSummary {
 }
 
 export interface PlanningRecommendationAnalysis extends PlanningRecommendationSet {
+  inputBasis?: string;
   sharedPrimaryCandidate: boolean;
   profitMode: RecommendationProfitMode | null;
   combinedPrimary: PlanningScenario | null;
   rejectionSummary: RecommendationRejectionSummary;
   /** 층별 외곽선·배치·층간 연결을 통과해 3D 상한 비교가 가능한 후보 수. */
   legalGeometryCandidateCount: number;
-  /** 입력된 산술 법정 용적률 상한. 3D 실현 용적률과 구분한다. */
+  /** 입력된 입력 용적률 상한. 3D 실현 용적률과 구분한다. */
   arithmeticLegalFarCapPct: number | null;
 }
 
@@ -108,6 +110,8 @@ function stableZone(zone: PlanningScenario["floorPrograms"][number]["zones"][num
       zone.saleableAreaSqm == null ? null : round(zone.saleableAreaSqm, 3),
     rentableAreaSqm:
       zone.rentableAreaSqm == null ? null : round(zone.rentableAreaSqm, 3),
+    parkingExclusiveAreaSqm: zone.parkingExclusiveAreaSqm == null ? null : round(zone.parkingExclusiveAreaSqm, 3),
+    parkingExclusiveAreaStatus: zone.parkingExclusiveAreaStatus ?? null,
   };
 }
 
@@ -272,6 +276,7 @@ export function isLegalGeometryCandidate(
   candidate: RecommendationCandidateEvaluation
 ): boolean {
   return (
+    candidate.geometryEligible &&
     candidate.calculation.metrics.aboveGroundFloors > 0 &&
     legalGeometryFailureCodes(candidate).length === 0
   );
@@ -368,7 +373,7 @@ function buildableLegalReference(
     (check) => check.status === "review" || check.status === "unknown"
   ).length;
   const warnings = [
-    "산술 법정 상한 자체가 아니라 층별 법규 외곽선·배치·층간 연결을 통과한 상위 실현 용적률 후보 중 층판이 안정적인 비교안입니다.",
+    "입력 산술 상한 자체가 아니라 층별 법규 외곽선·배치·층간 연결을 통과한 상위 실현 용적률 후보 중 층판이 안정적인 비교안입니다.",
   ];
   if (maximumFarGapPct > 0.05) {
     warnings.push(
@@ -393,7 +398,7 @@ function buildableLegalReference(
     `배치 가능 실현 용적률 ${realizedFarPct.toFixed(1)}%`,
     ...(capPct != null
       ? [
-          `산술 법정 용적률 ${capPct.toFixed(1)}% 대비 ${(
+          `입력 용적률 ${capPct.toFixed(1)}% 대비 ${(
             (realizedFarPct / capPct) *
             100
           ).toFixed(1)}% 실현`,
@@ -410,7 +415,7 @@ function buildableLegalReference(
     id: `${selected.scenario.id}-legal-buildable`,
     name: "배치 가능 상한 참고안",
     description:
-      "법규 외곽선과 실제 배치·층간 연결을 통과한 최고 실현 용적률 2% 범위 안에서, 지나치게 작은 상층과 불필요한 층수를 피한 3D 비교안입니다. 산술 법정 용적률 상한과는 구분하며 주차는 별도 제약으로 남을 수 있습니다.",
+      "법규 외곽선과 실제 배치·층간 연결을 통과한 최고 실현 용적률 2% 범위 안에서, 지나치게 작은 상층과 불필요한 층수를 피한 3D 비교안입니다. 입력 용적률 상한과는 구분하며 주차는 별도 제약으로 남을 수 있습니다.",
     origin: "algorithm-max",
     status: "saved",
     recommendation: enhanceMetadata(
@@ -440,6 +445,20 @@ export function analyzePlanningRecommendations(
   legalFarCapPct?: number
 ): PlanningRecommendationAnalysis {
   const rejectionSummary = summarizeRecommendationRejections(result.evaluations);
+  if (result.searchStatus !== "complete") {
+    return {
+      ...result,
+      architecturalFeasibility: null,
+      profitOptimal: null,
+      legalCeilingReference: null,
+      combinedPrimary: null,
+      sharedPrimaryCandidate: false,
+      profitMode: null,
+      legalGeometryCandidateCount: 0,
+      arithmeticLegalFarCapPct: legalFarCapPct != null && Number.isFinite(legalFarCapPct) ? legalFarCapPct : null,
+      rejectionSummary,
+    };
+  }
   const safe = enhancedScenario(result.architecturalFeasibility, {
     rejectionSummary,
   });
@@ -495,7 +514,7 @@ export function analyzePlanningRecommendations(
   const warnings = [...result.warnings];
   if (!legalReference.scenario) {
     warnings.push(
-      "층별 법규 외곽선·배치·층간 연결을 통과하는 상한 비교 후보가 없어 3D 법적 상한안을 생성하지 않았습니다. 산술 법정 상한은 필지 지표에서만 확인하세요."
+      "층별 법규 외곽선·배치·층간 연결을 통과하는 상한 비교 후보가 없어 3D 법적 상한안을 생성하지 않았습니다. 입력 산술 상한은 필지 지표에서만 확인하세요."
     );
   }
 
@@ -520,8 +539,46 @@ export function analyzePlanningRecommendations(
 export function generatePlanningRecommendationsV2(
   input: PlanningRecommendationEngineInput
 ): PlanningRecommendationAnalysis {
-  return analyzePlanningRecommendations(
-    generatePlanningRecommendations(input),
+  const resolvedInput = { ...input, generatedAt: input.generatedAt ?? new Date().toISOString() };
+  const inputBasis = planningRecommendationInputBasis(resolvedInput);
+  const result = analyzePlanningRecommendations(
+    generatePlanningRecommendations(resolvedInput),
     input.parcel.maxFARPct
   );
+  const bind = (scenario: PlanningScenario | null): PlanningScenario | null =>
+    scenario?.recommendation ? {
+      ...scenario,
+      recommendation: {
+        ...scenario.recommendation,
+        inputBasis,
+        generatedScenarioVersion: scenario.version,
+        candidateKey: recommendationCandidateKey(scenario),
+      },
+    } : scenario;
+  return {
+    ...result,
+    inputBasis,
+    architecturalFeasibility: bind(result.architecturalFeasibility),
+    profitOptimal: bind(result.profitOptimal),
+    legalCeilingReference: bind(result.legalCeilingReference),
+    combinedPrimary: bind(result.combinedPrimary),
+  };
+}
+
+/** Preserve old plans, but never present their rank/reasons as a recommendation for different inputs. */
+export function selectCurrentPlanningRecommendations(
+  scenarios: PlanningScenario[], projectId: string, inputBasis: string | null,
+): { current: PlanningScenario[]; stale: PlanningScenario[] } {
+  const current: PlanningScenario[] = [];
+  const stale: PlanningScenario[] = [];
+  for (const scenario of scenarios) {
+    if (scenario.projectId !== projectId || !scenario.recommendation) continue;
+    const metadata = scenario.recommendation;
+    const matches = Boolean(inputBasis && metadata.inputBasis === inputBasis
+      && metadata.generatedScenarioVersion === scenario.version
+      && scenario.status === "saved"
+      && metadata.candidateKey === recommendationCandidateKey(scenario));
+    (matches ? current : stale).push(scenario);
+  }
+  return { current, stale };
 }

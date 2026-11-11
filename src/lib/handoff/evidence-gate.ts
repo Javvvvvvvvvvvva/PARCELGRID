@@ -1,3 +1,5 @@
+import { transactionEvidenceComplete, type MolitRangeEvidence } from "@/lib/integrations/molit-evidence";
+
 export type EvidenceStatus =
   | "system-confirmed"
   | "expert-review"
@@ -7,6 +9,7 @@ export type HandoffDiscipline =
   | "architect"
   | "developer"
   | "finance-tax"
+  | "insurance-risk"
   | "sales-marketing";
 
 export interface EvidenceGateInput {
@@ -16,6 +19,7 @@ export interface EvidenceGateInput {
   roadReferenceCount: number;
   regulatorySourceBacked?: boolean;
   saleCompCount: number;
+  transactionEvidence?: MolitRangeEvidence[];
   saleEstimateVersion?: string | null;
   acquisitionEstimateVersion?: string | null;
   financeModelVersion?: string | null;
@@ -73,7 +77,7 @@ function sourceStatus(
 export function buildEvidenceGate(input: EvidenceGateInput): EvidenceGate {
   const geometryReady = Boolean(input.geometryHash);
   const roadReferenceReady = input.roadReferenceCount > 0;
-  const saleEvidenceReady = input.saleCompCount > 0;
+  const saleEvidenceReady = input.saleCompCount > 0 && transactionEvidenceComplete(input.transactionEvidence);
   const acquisitionEvidenceReady = Boolean(input.acquisitionEstimateVersion);
   const financeLedgerReady = Boolean(input.financeModelVersion);
 
@@ -104,7 +108,7 @@ export function buildEvidenceGate(input: EvidenceGateInput): EvidenceGate {
           critical: true,
           source: input.regulatorySourceBacked
             ? "원문 번호·기준일·확인자와 함께 등록된 규제 수치"
-            : "VWorld 용도지역과 전국 상한 참고만 있음",
+            : "참고·사용자 입력값 또는 근거 미확보 · 필지별 원문 확인 필요",
           nextAction: input.regulatorySourceBacked
             ? "건축사가 적용 조례·지구단위계획·높이 지정과 최신성을 재확인"
             : "Stage 2 법규 원장에 적용 조례·고시 원문과 수치를 기록",
@@ -223,6 +227,52 @@ export function buildEvidenceGate(input: EvidenceGateInput): EvidenceGate {
       ],
     },
     {
+      discipline: "insurance-risk",
+      title: "보험·리스크 심사",
+      owner: "공사·배상·재산 위험",
+      description:
+        "대표 매스, 공사비와 위험 원장을 보험 목적가액·담보·면책·자기부담금 관점에서 검토합니다.",
+      items: [
+        {
+          id: "insurance-value-basis",
+          label: "보험 목적가액 기준",
+          status:
+            geometryReady && financeLedgerReady
+              ? "expert-review"
+              : "missing",
+          critical: true,
+          source:
+            geometryReady && financeLedgerReady
+              ? `${input.financeModelVersion} · 대표 Geometry와 공사비 원장`
+              : "대표 Geometry 또는 공사비 원장 없음",
+          nextAction:
+            "보험 심사자가 공사비·철거·기존 건물·잔존물 제거 범위를 목적가액과 대조",
+        },
+        {
+          id: "construction-liability-scope",
+          label: "공사·제3자 배상 담보",
+          status: geometryReady ? "expert-review" : "missing",
+          critical: true,
+          source: geometryReady
+            ? "대표 계획과 Stage 4 위험 항목"
+            : "검토할 대표 계획 없음",
+          nextAction:
+            "CAR/EAR, 제3자 배상, 인접재산·진동·붕괴 위험과 공사기간을 검토서에 기록",
+        },
+        {
+          id: "insurance-exclusions",
+          label: "면책·자기부담금·선행조건",
+          status: geometryReady ? "expert-review" : "missing",
+          critical: false,
+          source: geometryReady
+            ? "보험사 인수심사 문서 연결 필요"
+            : "보험 검토 기준 없음",
+          nextAction:
+            "면책, 보상한도, 자기부담금, 방재·현장조사 선행조건을 근거 문서로 남김",
+        },
+      ],
+    },
+    {
       discipline: "sales-marketing",
       title: "분양·홍보",
       owner: "상품·가격·근거",
@@ -236,7 +286,7 @@ export function buildEvidenceGate(input: EvidenceGateInput): EvidenceGate {
           ...sourceStatus(
             saleEvidenceReady,
             `${input.saleEstimateVersion ?? "버전 미기록"} · 실거래 ${input.saleCompCount}건`,
-            "채택 가능한 실거래 사례 없음"
+            "실거래 사례 또는 전체 조회 완료 근거 없음"
           ),
           nextAction:
             "중개사·분양대행사가 상품·준공연도·입지 차이를 반영해 채택 사례를 승인",

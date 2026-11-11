@@ -1,11 +1,15 @@
 "use client";
 
 import type { FinancialSourceMap } from "@/lib/finance/source-data-gate";
+import type { ExpertTaxInputContract } from "@/lib/finance/after-tax-ledger";
 import type {
   PriceVerificationRecord,
   PriceVerificationTarget,
 } from "@/lib/finance/price-verification";
-import type { ExpertReviewMap } from "@/lib/handoff/review-workflow";
+import {
+  validateExpertReview,
+  type ExpertReviewMap,
+} from "@/lib/handoff/review-workflow";
 import {
   buildReviewSnapshotKey,
   validateReviewSnapshotAlignment,
@@ -18,9 +22,10 @@ import type {
   Stage3FeasibilitySnapshot,
 } from "@/lib/stores/project-store";
 import type { AssumptionSet } from "@/lib/finance/types";
+import { validateParcelBoundaryInput } from "@/lib/geo/manual-parcel-boundary";
 
 export const PROJECT_TRANSFER_FORMAT = "parcelgrid-project-transfer" as const;
-export const PROJECT_TRANSFER_VERSION = 1 as const;
+export const PROJECT_TRANSFER_VERSION = 2 as const;
 
 export interface ProjectTransferPayload {
   projectData: ProjectComputed | null;
@@ -32,6 +37,7 @@ export interface ProjectTransferPayload {
   draftAssumptions: Record<string, Partial<AssumptionSet>>;
   draftAcquisitionPrice: number | null;
   financialSources: FinancialSourceMap;
+  expertTaxContracts: ExpertTaxInputContract[];
   stage3Snapshot: Stage3FeasibilitySnapshot | null;
   priceVerifications: Partial<
     Record<PriceVerificationTarget, PriceVerificationRecord>
@@ -198,6 +204,22 @@ export function parseProjectTransferBundle(
   const scenarioIds = new Set(
     planningScenarios.map((scenario) => scenario.id)
   );
+  if (!Array.isArray(bundle.payload.expertTaxContracts)) {
+    errors.push("세무 전문가 입력 계약 형식이 올바르지 않습니다.");
+  } else {
+    const invalidTaxContract = bundle.payload.expertTaxContracts.find(
+      (contract) =>
+        !isRecord(contract) ||
+        contract.projectId !== bundle.projectId ||
+        typeof contract.scenarioId !== "string" ||
+        !scenarioIds.has(contract.scenarioId) ||
+        (contract.strategy !== "stabilized-sale" &&
+          contract.strategy !== "long-term-hold")
+    );
+    if (invalidTaxContract) {
+      errors.push("다른 프로젝트·계획안의 세무 입력 계약이 포함돼 있습니다.");
+    }
+  }
   if (
     bundle.payload.representativeScenarioId &&
     !scenarioIds.has(bundle.payload.representativeScenarioId)
@@ -210,11 +232,24 @@ export function parseProjectTransferBundle(
   ) {
     errors.push("선택 계획안이 패키지의 계획안 목록에 없습니다.");
   }
+  if (bundle.payload.projectData != null) {
+    const parcel = isRecord(bundle.payload.projectData) ? bundle.payload.projectData.parcel : null;
+    if (!isRecord(parcel) || parcel.id !== bundle.projectId) {
+      errors.push("현황 데이터의 프로젝트 ID가 다릅니다.");
+    }
+    if (isRecord(parcel)) {
+      try {
+        validateParcelBoundaryInput(parcel);
+      } catch {
+        errors.push("인계 부지 경계가 잘못되었거나 경계 검증 한도를 초과했습니다.");
+      }
+    }
+  }
   if (
-    bundle.payload.projectData &&
-    bundle.payload.projectData.parcel.id !== bundle.projectId
+    bundle.payload.representativeScenarioId &&
+    !bundle.payload.projectData
   ) {
-    errors.push("현황 데이터의 프로젝트 ID가 다릅니다.");
+    errors.push("대표 계획안의 부지·법규 기준 데이터가 없습니다.");
   }
 
   const geometry = bundle.payload.representativeGeometry;
@@ -248,9 +283,7 @@ export function parseProjectTransferBundle(
     const alignment = validateReviewSnapshotAlignment({
       snapshot: stage3Snapshot,
       geometry,
-      currentScenario: representative
-        ? { id: representative.id, version: representative.version }
-        : null,
+      currentScenario: representative ?? null,
     });
     errors.push(...alignment.errors);
     if (stage3Snapshot.projectId !== bundle.projectId) {
@@ -262,15 +295,20 @@ export function parseProjectTransferBundle(
         snapshot: stage3Snapshot,
         financialSources: bundle.payload.financialSources ?? {},
         priceVerifications: bundle.payload.priceVerifications ?? {},
+        expertTaxContracts: bundle.payload.expertTaxContracts ?? [],
+        planningScenario: representative ?? null,
+        geometry,
       });
-      const staleApproval = Object.values(
+      const invalidReview = Object.values(
         bundle.payload.expertReviews ?? {}
-      ).find(
-        (review) =>
-          review?.status === "approved" && review.snapshotKey !== reviewKey
-      );
-      if (staleApproval) {
-        errors.push("현재 저장본과 일치하지 않는 전문가 승인이 포함돼 있습니다.");
+      ).find((review) => {
+        if (!review) return false;
+        return !validateExpertReview(review, reviewKey).valid;
+      });
+      if (invalidReview) {
+        errors.push(
+          "현재 저장본·역할·상태 이력과 일치하지 않는 전문가 검토 기록이 포함돼 있습니다."
+        );
       }
     }
   } else if (Object.keys(bundle.payload.expertReviews ?? {}).length > 0) {
@@ -303,6 +341,20 @@ export function detachTransferredSourceDocuments(
         : record,
     ])
   ) as FinancialSourceMap;
+}
+
+export function detachTransferredTaxDocuments(
+  contracts: ExpertTaxInputContract[]
+): ExpertTaxInputContract[] {
+  return contracts.map((contract) => {
+    const detached = { ...contract };
+    delete detached.document;
+    return {
+      ...detached,
+      reviewStatus: "draft",
+      updatedAt: new Date().toISOString(),
+    };
+  });
 }
 
 export function serializeProjectTransferBundle(

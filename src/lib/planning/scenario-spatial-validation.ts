@@ -1,19 +1,17 @@
+import { planningEnvelopeSteps } from "@/lib/planning/envelope-steps";
 import {
   calcBuildableArea,
   type LngLat,
 } from "@/lib/finance/buildable-area";
-import {
-  analyzeFrontage,
-  legalEdgeSetbacksFromFrontage,
-} from "@/lib/geo/road-frontage";
+import { analyzeParcelFrontage } from "@/lib/geo/road-frontage";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { resolvePlanningParcel } from "./planning-parcel";
 import {
   assessPlanningPlacement,
   type PlanningPlacementAssessment,
 } from "@/lib/planning/placement-assessment";
 import {
   buildPlanningMassModel,
-  polygonAreaSqm,
-  type LocalPlanPoint,
   type PlanningEnvelopeStep,
   type PlanningMassModel,
 } from "@/lib/planning/planning-massing";
@@ -22,7 +20,14 @@ import type {
   PlanningScenario,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
+import {
+  toSunlightGeometryProfile,
+  type SunlightRegulationResult,
+} from "@/lib/regulatory/sunlight-rules";
 import type { RoadLine, SetbackSpec } from "@/components/ui/MassingView";
+import { interiorPlanningCheck } from "./interior-layout";
+import { roomPlanningCheck } from "./room-layout";
+import { assessEgressCore, egressPlanningCheck } from "./egress-core";
 
 export interface PlanningSpatialValidation {
   model: PlanningMassModel;
@@ -30,36 +35,6 @@ export interface PlanningSpatialValidation {
   assessment: PlanningPlacementAssessment;
   checks: PlanningCheck[];
   warnings: string[];
-}
-
-function openRing(ring: LngLat[]): LngLat[] {
-  if (ring.length < 2) return ring;
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  return first[0] === last[0] && first[1] === last[1]
-    ? ring.slice(0, -1)
-    : ring;
-}
-
-function ringCentroid(ring: LngLat[]): LngLat {
-  const points = openRing(ring);
-  if (points.length === 0) return [0, 0];
-  return [
-    points.reduce((sum, point) => sum + point[0], 0) / points.length,
-    points.reduce((sum, point) => sum + point[1], 0) / points.length,
-  ];
-}
-
-function ringToLocalMeters(
-  ring: LngLat[],
-  origin: LngLat
-): LocalPlanPoint[] {
-  const [originLng, originLat] = origin;
-  const longitudeScale = Math.cos((originLat * Math.PI) / 180);
-  return openRing(ring).map(([lng, lat]) => ({
-    x: (lng - originLng) * 111_000 * longitudeScale,
-    z: -(lat - originLat) * 111_000,
-  }));
 }
 
 function round(value: number, digits = 1): number {
@@ -86,7 +61,7 @@ function buildSpatialChecks(
   const areaDetails = areaFailures
     .map(
       (floor) =>
-        `${floor.label} ${round(floor.capacityShortfallSqm)}㎡ 초과`
+        `${floor.label} ${round(floor.capacityShortfallSqm)}㎡ 미확보`
     )
     .join(" · ");
   const placementDetails = placementFailures
@@ -102,13 +77,13 @@ function buildSpatialChecks(
   const checks: PlanningCheck[] = [
     {
       code: "spatial-area-capacity",
-      label: "층별 법규 외곽선",
+      label: "층별 면적 수용",
       status: areaFailures.length > 0 ? "fail" : "pass",
       message:
         areaFailures.length > 0
-          ? `${areaFailures.length}개 층이 법규 외곽선보다 총 ${round(
+          ? `${areaFailures.length}개 층의 요청 면적 중 총 ${round(
               assessment.totalCapacityShortfallSqm
-            )}㎡ 큽니다. ${areaDetails}`
+            )}㎡를 자동 생성 평면에 확보하지 못했습니다. ${areaDetails}. 탐색 한계와 부지 제약을 추가 검토해야 하며 건축 불가 확정이 아닙니다.`
           : "모든 층의 프로그램 면적이 층별 법규 외곽선 안에 수용됩니다.",
       source: "3D 층별 건축가능영역·프로그램 면적 비교",
     },
@@ -118,7 +93,7 @@ function buildSpatialChecks(
       status: placementFailures.length > 0 ? "fail" : "pass",
       message:
         placementFailures.length > 0
-          ? `${placementDetails}이 이동·회전 후 법규 외곽선을 벗어납니다.`
+          ? `${placementDetails}의 형상 생성 또는 이동·회전 후 영역 포함 검사를 통과하지 못했습니다. 미완료·빈 형상은 적합으로 간주하지 않습니다.`
           : "현재 이동·회전·후퇴 조건에서 모든 층이 법규 외곽선 안에 있습니다.",
       source: "3D 배치 외곽선 포함 판정",
     },
@@ -138,10 +113,10 @@ function buildSpatialChecks(
     checks.push({
       code: "spatial-envelope-data",
       label: "배치 데이터",
-      status: "review",
+      status: "unknown",
       message: `${unavailableFloors
         .map((floor) => floor.label)
-        .join(", ")}은 정확한 법규 외곽선이 없어 대지 경계를 대체 사용했습니다.`,
+        .join(", ")}은 층별 외곽선을 확인하지 못해 생성·검증을 보류했습니다. 대지나 다른 층으로 대체하지 않았습니다.`,
       source: "건축가능영역 엔진",
     });
   } else if (warnings.length > 0) {
@@ -162,16 +137,19 @@ export function calculatePlanningSpatialValidation(
   zoning: string,
   scenario: PlanningScenario,
   roads?: RoadLine[],
-  _setback?: SetbackSpec
+  _setback?: SetbackSpec,
+  sunlight?: SunlightRegulationResult,
+  roofAllowanceM = 1.4,
+  boundaryPolygons?: Wgs84ParcelPolygon[]
 ): PlanningSpatialValidation | null {
   // 사용자 디자인 이격은 법적 envelope를 바꾸지 않는다는 계약을 유지한다.
   void _setback;
-  if (!boundary || boundary.length < 3) return null;
-
-  const origin = ringCentroid(boundary);
-  const groundFloors = scenario.floorPrograms.filter(
-    (floor) => floor.level > 0
-  );
+  const parcel = resolvePlanningParcel({ boundary, boundaryPolygons });
+  if (!parcel.available) return null;
+  const { origin } = parcel;
+  const groundFloors = scenario.floorPrograms
+    .filter((floor) => floor.level > 0)
+    .sort((a, b) => a.level - b.level);
   const maxFloor = Math.max(
     1,
     ...groundFloors.map((floor) => floor.level)
@@ -184,12 +162,14 @@ export function calculatePlanningSpatialValidation(
         ) / groundFloors.length
       : 3;
 
-  const frontage =
-    roads && roads.length > 0 ? analyzeFrontage(boundary, roads) : null;
+  const frontage = analyzeParcelFrontage(parcel.source, roads ?? [], origin);
   // Stage 2의 통합 통과/실패 판정은 대표안·3D·Export와 같은
   // 법적 최대 외곽선을 사용한다. 사용자 설계 여유거리는 별도 UI 안내값이며
   // 법규 판정으로 섞지 않는다.
-  const edgeSetbacks = legalEdgeSetbacksFromFrontage(frontage);
+  const edgeSetbacksByPolygon = frontage?.edgeSetbacksByPolygon;
+  const sunlightProfile = sunlight
+    ? toSunlightGeometryProfile(sunlight)
+    : undefined;
 
   const buildable = calcBuildableArea(
     boundary,
@@ -197,7 +177,15 @@ export function calculatePlanningSpatialValidation(
     maxFloor,
     averageFloorHeight,
     /주거/.test(zoning),
-    edgeSetbacks
+    undefined,
+    {
+      polygons: parcel.source,
+      edgeSetbacksByPolygon,
+      sunlightProfile,
+      floorHeightsM: groundFloors.map((floor) => floor.floorHeightM),
+      floorLevels: groundFloors.map((floor) => floor.level),
+      roofAllowanceM,
+    }
   );
   const basementBuildable = calcBuildableArea(
     boundary,
@@ -205,42 +193,11 @@ export function calculatePlanningSpatialValidation(
     1,
     3,
     false,
-    edgeSetbacks
+    undefined,
+    { reportSunApplicability: false, polygons: parcel.source, edgeSetbacksByPolygon }
   );
 
-  const fallbackRing = buildable.buildable2DRing ?? boundary;
-  const firstStep = buildable.stepped3D.find((step) => step.ringLngLat);
-  const basementRing = basementBuildable.buildable2DRing ?? boundary;
-
-  const envelopeSteps: PlanningEnvelopeStep[] = scenario.floorPrograms.map(
-    (floor) => {
-      const step =
-        floor.level > 0
-          ? buildable.stepped3D.find(
-              (candidate) => candidate.floor === floor.level
-            )
-          : undefined;
-      const ring =
-        floor.level < 0
-          ? basementRing
-          : step?.ringLngLat ?? firstStep?.ringLngLat ?? fallbackRing;
-      const shape = ringToLocalMeters(ring, origin);
-      return {
-        level: floor.level,
-        shape,
-        envelopeAreaSqm:
-          floor.level < 0
-            ? polygonAreaSqm(shape)
-            : step?.floorPlateSqm ?? polygonAreaSqm(shape),
-        requiredSetbackM:
-          floor.level < 0 ? 0 : step?.requiredSetbackM ?? 0,
-        envelopeAvailable:
-          floor.level < 0
-            ? Boolean(basementBuildable.buildable2DRing)
-            : Boolean(step?.ringLngLat ?? buildable.buildable2DRing),
-      };
-    }
-  );
+  const envelopeSteps = planningEnvelopeSteps(scenario.floorPrograms, buildable, basementBuildable, origin);
 
   const model = buildPlanningMassModel(
     scenario.floorPrograms,
@@ -254,7 +211,16 @@ export function calculatePlanningSpatialValidation(
     model,
     envelopeSteps,
     assessment,
-    checks: buildSpatialChecks(model, assessment, warnings),
+    checks: [
+      ...buildSpatialChecks(model, assessment, warnings),
+      ...scenario.floorPrograms.filter(floor => floor.interiorLayout || floor.zones.some(zone => zone.useType === "residential"))
+        .map(floor => interiorPlanningCheck(floor, model.floors.find(mass => mass.id === floor.id)?.shape)),
+      ...scenario.floorPrograms.filter(floor => floor.zones.some(zone => zone.useType === "residential"))
+        .map(floor => roomPlanningCheck(floor, model.floors.find(mass => mass.id === floor.id)?.shape)),
+      ...(scenario.floorPrograms.some(floor => floor.zones.some(zone => zone.useType === "residential"))
+        ? [egressPlanningCheck(assessEgressCore({ scenario, floors: model.floors,
+          parcelShape: parcel.simple ? parcel.polygons[0].outer : [], parcelPolygons: parcel.polygons }))] : []),
+    ],
     warnings,
   };
 }

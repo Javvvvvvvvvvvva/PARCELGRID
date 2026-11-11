@@ -4,7 +4,7 @@
  * UPDATED: 지역 분류를 6단계로 세분화하여 한국 부동산 시장의 실제
  * 가격 분포를 반영합니다.
  *
- * 지역 6단계 (강남 3구 기준 분양가 multiplier):
+ * 지역 6단계 (내부 기준 단가 대비 예비 multiplier):
  *   gangnam-core    1.30×  강남/서초/송파
  *   mid-prime       1.05×  용산/마포/성동/광진
  *   seoul-standard  0.85×  영등포/양천/강서/동작/관악/중구/종로 등
@@ -15,9 +15,35 @@
 
 import type { Parcel, Scenario, BuildingProgram } from "@/lib/finance/types";
 import { defaultAssumptions, defaultProgram } from "@/lib/finance/scenario";
+import {
+  classifyZoningFamily,
+  screenZoningUse,
+  type ZoningFamily,
+  type ZoningScreenableUse,
+  type ZoningUseScreeningResult,
+} from "@/lib/regulatory/zoning-use-screening";
+import type { BuildingUseCode } from "@/lib/regulatory/building-use-catalog";
+
+const SQM_PER_PYEONG = 3.305785;
+
+function wonPerPyeongToWonPerSqm(wonPerPyeong: number): number {
+  return wonPerPyeong / SQM_PER_PYEONG;
+}
 
 export interface GenerateOptions {
-  scenarioTypes?: Array<"officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family">;
+  scenarioTypes?: ZoningScreenableUse[];
+  /** Legal-source snapshot date. Defaults to the current bundled ruleset. */
+  asOf?: string;
+}
+
+type CandidateStrategy = NonNullable<Scenario["generation"]>["strategy"];
+
+interface CandidateDefinition {
+  name: string;
+  tag: string;
+  type: ZoningScreenableUse;
+  legalUseCode: BuildingUseCode;
+  strategy: CandidateStrategy;
 }
 
 type PricingTier =
@@ -91,15 +117,107 @@ function adjustProgramForLot(
   return program;
 }
 
+function applyStrategy(
+  program: BuildingProgram,
+  strategy: CandidateStrategy,
+): BuildingProgram {
+  if (strategy === "sale-exit") {
+    if (
+      program.type === "single-house" ||
+      program.type === "multi-family" ||
+      program.type === "urban-housing"
+    ) {
+      return {
+        ...program,
+        mix: { residentialSale: 1, residentialLease: 0, retail: 0 },
+      };
+    }
+    if (program.type === "officetel") {
+      return {
+        ...program,
+        units: { ...program.units, retail: 0 },
+        mix: { residentialSale: 1, residentialLease: 0, retail: 0 },
+      };
+    }
+    return program;
+  }
+
+  if (
+    program.type === "single-house" ||
+    program.type === "multi-family" ||
+    program.type === "urban-housing"
+  ) {
+    return {
+      ...program,
+      mix: { residentialSale: 0, residentialLease: 1, retail: 0 },
+    };
+  }
+  if (program.type === "officetel") {
+    return {
+      ...program,
+      units: { ...program.units, retail: 0 },
+      mix: { residentialSale: 0, residentialLease: 1, retail: 0 },
+    };
+  }
+  if (program.type === "office") {
+    return {
+      ...program,
+      units: { ...program.units, retail: 0 },
+      mix: { residentialSale: 0, residentialLease: 1, retail: 0 },
+    };
+  }
+  return program;
+}
+
+function buildCandidateProgram(
+  candidate: CandidateDefinition,
+  parcel: Parcel,
+): BuildingProgram {
+  const adjusted = adjustProgramForLot(
+    applyStrategy(
+      defaultProgram(candidate.type, parcel.maxFAR, parcel.maxBCR),
+      candidate.strategy,
+    ),
+    candidate.type,
+    parcel,
+  );
+  return {
+    ...adjusted,
+    far: Math.min(adjusted.far, adjusted.bcr * adjusted.floorsAbove),
+  };
+}
+
+function legalUseFacts(
+  program: BuildingProgram,
+  parcel: Parcel,
+): {
+  aboveGroundFloors: number;
+  residentialFloors?: number;
+  useAreaSqm: number;
+  householdCount?: number;
+} {
+  const residential =
+    program.type === "single-house" ||
+    program.type === "multi-family" ||
+    program.type === "urban-housing";
+
+  return {
+    aboveGroundFloors: program.floorsAbove,
+    residentialFloors: residential ? program.floorsAbove : undefined,
+    useAreaSqm: parcel.lotArea * (program.far / 100),
+    householdCount: residential ? program.units.residential : undefined,
+  };
+}
+
 function buildScenario(
   id: string,
-  name: string,
-  shortName: string,
-  tag: string,
-  type: "officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family",
+  candidate: CandidateDefinition,
   parcel: Parcel,
-  tier: PricingTier
+  tier: PricingTier,
+  useScreening: ZoningUseScreeningResult,
+  program: BuildingProgram,
 ): Scenario {
+  const { name, tag, type, strategy } = candidate;
   const baseA = defaultAssumptions();
   const { saleMult, rentMult, capDelta, interestDelta } = tierMultipliers(tier);
 
@@ -110,9 +228,15 @@ function buildScenario(
   let interestRate = baseA.interestRate;
 
   if (type === "officetel") {
-    // baseline values are calibrated for officetel in 강남
+    if (strategy === "stabilized-lease-exit") salePricePerSqM = 0;
   } else if (type === "urban-housing") {
-    salePricePerSqM = 17_200_000;
+    if (strategy === "sale-exit") {
+      salePricePerSqM = 17_200_000;
+      rentPerSqMMonth = 0;
+      vacancyRate = 0;
+    } else {
+      salePricePerSqM = 0;
+    }
     capRate = 4.6;
   } else if (type === "retail") {
     rentPerSqMMonth = 52_000;
@@ -132,33 +256,36 @@ function buildScenario(
     capRate = 5.5;
   } else if (type === "single-house") {
     // 단독주택 신축매매 — 100% 매매. 평당 1,800만 (지역 multiplier 별도 적용)
-    salePricePerSqM = 18_000_000;
+    salePricePerSqM = wonPerPyeongToWonPerSqm(18_000_000);
     rentPerSqMMonth = 0;
     vacancyRate = 0;
-    capRate = 0;
   } else if (type === "multi-family") {
-    // 다가구주택 신축매매 — 100% 매매. 평당 1,500만 (분양보다 약간 낮음 — 통매매)
-    salePricePerSqM = 15_000_000;
-    rentPerSqMMonth = 0;
-    vacancyRate = 0;
-    capRate = 0;
+    if (strategy === "sale-exit") {
+      // 다가구 통매각 — 평당 1,500만 내부 기준(지역 multiplier 별도 적용)
+      salePricePerSqM = wonPerPyeongToWonPerSqm(15_000_000);
+      rentPerSqMMonth = 0;
+      vacancyRate = 0;
+    } else {
+      salePricePerSqM = 0;
+    }
   }
 
-  // Outer regions have higher vacancy risk
-  if (tier === "seoul-outer" || tier === "metro-outskirt" || tier === "rural") {
+  // 임대수입이 있는 외곽 후보에만 추가 공실 위험을 반영한다.
+  if (
+    rentPerSqMMonth > 0 &&
+    (tier === "seoul-outer" ||
+      tier === "metro-outskirt" ||
+      tier === "rural")
+  ) {
     vacancyRate = vacancyRate + 1.5;
   }
 
   return {
     id,
     name,
-    shortName,
+    shortName: id,
     tag,
-    program: adjustProgramForLot(
-      defaultProgram(type, parcel.maxFAR, parcel.maxBCR),
-      type,
-      parcel
-    ),
+    program,
     assumptions: {
       ...baseA,
       salePricePerSqM: Math.round(salePricePerSqM * saleMult),
@@ -167,111 +294,159 @@ function buildScenario(
       capRate: capRate + capDelta,
       interestRate: interestRate + interestDelta,
     },
+    generation: {
+      modelVersion: "scenario-generation-2026.2",
+      strategy,
+      strategyLabel:
+        strategy === "sale-exit" ? "분양·통매각" : "임대 안정화 후 매각",
+      useScreening,
+    },
   };
 }
 
-function pickScenariosForZoning(zoning: string): Array<{
-  id: string;
-  name: string;
-  shortName: string;
-  tag: string;
-  type: "officetel" | "urban-housing" | "retail" | "coliving" | "office";
-}> {
-  if (/주거지역/.test(zoning)) {
+function generatedLegalUseCode(type: ZoningScreenableUse): BuildingUseCode {
+  switch (type) {
+    case "single-house":
+      return "BA-A1-1-A";
+    case "multi-family":
+      return "BA-A1-1-C";
+    case "urban-housing":
+      return "BA-A1-2-A";
+    case "retail":
+      return "BA-A1-3-A";
+    case "office":
+      return "BA-A1-14-B-1";
+    case "officetel":
+      return "BA-A1-14-B-2";
+    case "coliving":
+      throw new Error("코리빙은 법정 세부용도 선택 전 자동 생성할 수 없습니다.");
+  }
+}
+
+function sale(
+  name: string,
+  type: ZoningScreenableUse,
+  tag = "매각형",
+): CandidateDefinition {
+  return {
+    name,
+    tag,
+    type,
+    legalUseCode: generatedLegalUseCode(type),
+    strategy: "sale-exit",
+  };
+}
+
+function lease(
+  name: string,
+  type: ZoningScreenableUse,
+  tag = "임대형",
+): CandidateDefinition {
+  return {
+    name,
+    tag,
+    type,
+    legalUseCode: generatedLegalUseCode(type),
+    strategy: "stabilized-lease-exit",
+  };
+}
+
+function residentialCandidates(
+  family: ZoningFamily,
+  lotPyeong: number,
+): CandidateDefinition[] {
+  if (
+    family === "first-exclusive-residential" ||
+    family === "second-exclusive-residential"
+  ) {
     return [
-      { id: "S1", name: "오피스텔 + 근생", shortName: "S1", tag: "고수익형", type: "officetel" },
-      { id: "S2", name: "도시형생활주택", shortName: "S2", tag: "안정형", type: "urban-housing" },
-      { id: "S3", name: "근린생활시설", shortName: "S3", tag: "보수형", type: "retail" },
-      { id: "S4", name: "공유주거 (코리빙)", shortName: "S4", tag: "신규형", type: "coliving" },
+      sale("단독주택 신축매매", "single-house"),
+      sale("다가구주택 통매각", "multi-family"),
+      lease("다가구 임대 안정화 후 매각", "multi-family"),
     ];
   }
 
-  if (/상업지역/.test(zoning)) {
-    return [
-      { id: "S1", name: "오피스 빌딩", shortName: "S1", tag: "안정형", type: "office" },
-      { id: "S2", name: "오피스텔 + 근생", shortName: "S2", tag: "고수익형", type: "officetel" },
-      { id: "S3", name: "근린생활 (상가)", shortName: "S3", tag: "보수형", type: "retail" },
-      { id: "S4", name: "공유주거 (코리빙)", shortName: "S4", tag: "신규형", type: "coliving" },
-    ];
+  const lowRise = [
+    sale("단독주택 신축매매", "single-house"),
+    sale("다가구주택 통매각", "multi-family"),
+    lease("다가구 임대 안정화 후 매각", "multi-family"),
+    lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail", "용도확정"),
+  ];
+  if (family === "first-general-residential" || lotPyeong < 50) {
+    return lowRise;
   }
 
-  if (/공업지역/.test(zoning)) {
+  const urbanStrategies = [
+    sale("도시형생활주택 분양", "urban-housing"),
+    lease("도시형생활주택 임대 안정화 후 매각", "urban-housing"),
+  ];
+  if (lotPyeong < 100) {
     return [
-      { id: "S1", name: "지식산업센터", shortName: "S1", tag: "표준형", type: "office" },
-      { id: "S2", name: "근린생활시설", shortName: "S2", tag: "보수형", type: "retail" },
-      { id: "S3", name: "오피스텔", shortName: "S3", tag: "혼합형", type: "officetel" },
-      { id: "S4", name: "공유주거 (코리빙)", shortName: "S4", tag: "신규형", type: "coliving" },
+      sale("다가구주택 통매각", "multi-family"),
+      lease("다가구 임대 안정화 후 매각", "multi-family"),
+      sale("단독주택 신축매매", "single-house"),
+      ...urbanStrategies,
+      lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail", "용도확정"),
     ];
   }
 
   return [
-    { id: "S1", name: "근린생활시설", shortName: "S1", tag: "보수형", type: "retail" },
-    { id: "S2", name: "오피스텔", shortName: "S2", tag: "표준형", type: "officetel" },
-    { id: "S3", name: "도시형생활주택", shortName: "S3", tag: "혼합형", type: "urban-housing" },
-    { id: "S4", name: "공유주거 (코리빙)", shortName: "S4", tag: "신규형", type: "coliving" },
+    ...urbanStrategies,
+    sale("다가구주택 통매각", "multi-family"),
+    lease("다가구 임대 안정화 후 매각", "multi-family"),
+    lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail", "용도확정"),
   ];
 }
 
-
 /**
- * 부지 크기에 맞는 시나리오 선택 (Smart Picker).
- *
- * 본인 도구의 진짜 차별화:
- * - 작은 부지 (< 50평): 단독 + 다가구 + 근생
- * - 중간 부지 (50-100평): 다가구 + 단독 + 도시형 + 근생
- * - 큰 부지 (100-200평): 도시형 + 다가구 + 오피스텔 + 코리빙
- * - 대형 부지 (200평+): 기존 다세대 4종
- *
- * 다른 PropTech는 부지 크기 무시하고 다세대만 시도 → 작은 부지에서 의미없는 답.
- * 본인 도구는 부지에 맞는 사업만 제안 → 정직한 답.
+ * Generate a bounded candidate space from an exact zoning family.
+ * Unsupported or ambiguous zones intentionally return no candidates.
  */
-function pickScenariosForSize(
-  parcel: Parcel,
-  zoningPicks: Array<{
-    id: string;
-    name: string;
-    shortName: string;
-    tag: string;
-    type: "officetel" | "urban-housing" | "retail" | "coliving" | "office" | "single-house" | "multi-family";
-  }>
-): typeof zoningPicks {
-  const lotPyeong = parcel.lotArea / 3.305785;
+function pickCandidateDefinitions(parcel: Parcel): CandidateDefinition[] {
+  const family = classifyZoningFamily(parcel.zoning);
+  const lotPyeong = parcel.lotArea / SQM_PER_PYEONG;
 
-  // 주거지역에서만 단독/다가구 의미 있음
-  const isResidential = /주거지역/.test(parcel.zoning);
-  if (!isResidential) return zoningPicks;
-
-  if (lotPyeong < 50) {
-    // 작은 부지: 다세대 시행 거의 안 됨 → 단독/다가구 위주
-    return [
-      { id: "S1", name: "단독주택 신축매매", shortName: "S1", tag: "표준형", type: "single-house" },
-      { id: "S2", name: "다가구주택 신축매매", shortName: "S2", tag: "수익형", type: "multi-family" },
-      { id: "S3", name: "근린생활시설 (저층)", shortName: "S3", tag: "보수형", type: "retail" },
-    ];
+  switch (family) {
+    case "first-exclusive-residential":
+    case "second-exclusive-residential":
+    case "first-general-residential":
+    case "second-general-residential":
+    case "third-general-residential":
+      return residentialCandidates(family, lotPyeong);
+    case "semi-residential":
+      return [
+        sale("도시형생활주택 분양", "urban-housing"),
+        lease("도시형생활주택 임대 안정화 후 매각", "urban-housing"),
+        lease("일반업무시설 임대 안정화 후 매각", "office"),
+        sale("오피스텔 분양", "officetel"),
+        lease("오피스텔 임대 안정화 후 매각", "officetel"),
+        lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail"),
+      ];
+    case "central-commercial":
+    case "general-commercial":
+    case "neighborhood-commercial":
+      return [
+        lease("일반업무시설 임대 안정화 후 매각", "office"),
+        sale("오피스텔 분양", "officetel"),
+        lease("오피스텔 임대 안정화 후 매각", "officetel"),
+        lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail"),
+      ];
+    case "distribution-commercial":
+      return [lease("제1종 근린생활시설 소매점 임대 안정화 후 매각", "retail")];
+    case "semi-industrial":
+      return [
+        lease("일반업무시설 임대 검토", "office", "조례검토"),
+        lease("제1종 근린생활시설 소매점 임대 검토", "retail", "조례검토"),
+      ];
+    case "exclusive-industrial":
+    case "general-industrial":
+    case "green":
+    case "management":
+    case "agricultural-forest":
+    case "natural-environment":
+    case "unknown":
+      return [];
   }
-
-  if (lotPyeong < 100) {
-    // 중간 부지: 다가구 + 단독 + 도시형 일부
-    return [
-      { id: "S1", name: "다가구주택 신축매매", shortName: "S1", tag: "수익형", type: "multi-family" },
-      { id: "S2", name: "단독주택 신축매매", shortName: "S2", tag: "안정형", type: "single-house" },
-      { id: "S3", name: "도시형생활주택", shortName: "S3", tag: "고수익형", type: "urban-housing" },
-      { id: "S4", name: "근린생활시설", shortName: "S4", tag: "보수형", type: "retail" },
-    ];
-  }
-
-  if (lotPyeong < 200) {
-    // 큰 부지: 다세대 위주 + 다가구 한 개
-    return [
-      { id: "S1", name: "도시형생활주택", shortName: "S1", tag: "안정형", type: "urban-housing" },
-      { id: "S2", name: "오피스텔 + 근생", shortName: "S2", tag: "고수익형", type: "officetel" },
-      { id: "S3", name: "다가구주택 신축매매", shortName: "S3", tag: "회수형", type: "multi-family" },
-      { id: "S4", name: "근린생활시설", shortName: "S4", tag: "보수형", type: "retail" },
-    ];
-  }
-
-  // 200평 이상: 기존 4종 그대로
-  return zoningPicks;
 }
 
 export function generateScenariosForParcel(
@@ -279,16 +454,29 @@ export function generateScenariosForParcel(
   options: GenerateOptions = {}
 ): Scenario[] {
   const tier = pricingTier(parcel.address);
-  const zoningPicks = pickScenariosForZoning(parcel.zoning);
-  // Smart Picker: 부지 크기 따라 시나리오 자동 조정
-  const picks = pickScenariosForSize(parcel, zoningPicks);
+  const picks = pickCandidateDefinitions(parcel);
 
   let filtered = picks;
   if (options.scenarioTypes && options.scenarioTypes.length > 0) {
     filtered = picks.filter((p) => options.scenarioTypes!.includes(p.type));
   }
 
-  return filtered.map((pick) =>
-    buildScenario(pick.id, pick.name, pick.shortName, pick.tag, pick.type, parcel, tier)
-  );
+  return filtered
+    .map((candidate) => {
+      const program = buildCandidateProgram(candidate, parcel);
+      return {
+        candidate,
+        program,
+        useScreening: screenZoningUse(parcel.zoning, candidate.type, {
+          address: parcel.address,
+          asOf: options.asOf,
+          legalUseCode: candidate.legalUseCode,
+          ...legalUseFacts(program, parcel),
+        }),
+      };
+    })
+    .filter(({ useScreening }) => useScreening.autoGeneratable)
+    .map(({ candidate, useScreening, program }, index) =>
+      buildScenario(`S${index + 1}`, candidate, parcel, tier, useScreening, program),
+    );
 }

@@ -1,6 +1,7 @@
 export interface RoadPolyline {
   name: string | null;
   points: [number, number][];
+  topology?: "source-part";
 }
 
 const MIN_DISCONTINUITY_M = 20;
@@ -43,6 +44,11 @@ export function normalizeRoadLines(roads: RoadPolyline[]): RoadPolyline[] {
   for (const road of roads) {
     const points = dedupeConsecutive(road.points ?? []);
     if (points.length < 2) continue;
+
+    if (road.topology === "source-part") {
+      normalized.push({ name: road.name, points, topology: "source-part" });
+      continue;
+    }
 
     const distances = points
       .slice(1)

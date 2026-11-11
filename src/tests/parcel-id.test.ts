@@ -5,6 +5,14 @@ import {
 } from "@/lib/parcels/parcel-id";
 
 describe("parcel identity", () => {
+  it.each([undefined, "", "unknown", "n"])("does not infer ordinary land from an unknown mountain flag %s", mountainYn => {
+    const address = { bCode: "1132010500", mainAddressNo: "281", subAddressNo: "23", mountainYn, lat: 37, lng: 127 };
+    expect(pnuFromParcelAddress(address)).toBeNull();
+    expect(manualParcelId(address)).toBe("manual-37000000-127000000");
+  });
+  it("rejects a zero main lot number", () => {
+    expect(pnuFromParcelAddress({ bCode: "1132010500", mainAddressNo: "0000", mountainYn: "N" })).toBeNull();
+  });
   it("derives the 19-digit PNU from Kakao legal-dong and lot numbers", () => {
     expect(
       pnuFromParcelAddress({

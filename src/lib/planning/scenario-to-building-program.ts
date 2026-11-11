@@ -1,18 +1,22 @@
 import {
   FINANCIAL_GEOMETRY_CONTRACT_VERSION,
+  STAGE2_ECONOMICS_CONTRACT_VERSION,
   type BuildingProgram,
   type BuildingType,
+  type FinancialRevenueAreaPools,
 } from "@/lib/finance/types";
-import { resolveZoneRevenueModel } from "@/lib/planning/scenario-utils";
+import { resolvePlanningGeometrySource } from "@/lib/planning/geometry-source";
+import { planningRevenueAreas } from "@/lib/planning/revenue-pools";
+import { evaluateQuantityCost } from "@/lib/planning/quantity-cost";
+import { quantityCostPlanBasis, type QuantityCostContract } from "@/lib/planning/quantity-cost-contract";
+import { calculatePlanningMaterialAdjustment } from "@/lib/planning/materials";
+import { additionalDwellingCostManwon } from "@/lib/planning/dwelling-program";
 import type {
-  FloorUseType,
   PlanningScenario,
   PlanningScenarioCalculation,
 } from "@/lib/planning/types";
 
-function nonNegative(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
+export { planningRevenueAreas } from "@/lib/planning/revenue-pools";
 
 function buildingTypeForScenario(scenario: PlanningScenario): BuildingType {
   switch (scenario.primaryUse) {
@@ -31,63 +35,6 @@ function buildingTypeForScenario(scenario: PlanningScenario): BuildingType {
   }
 }
 
-function isCommercial(useType: FloorUseType): boolean {
-  return useType === "retail" || useType === "office";
-}
-
-interface RevenueAreas {
-  residentialSaleSqm: number;
-  residentialLeaseSqm: number;
-  retailSqm: number;
-}
-
-/**
- * Stage 2 층별 구역을 Stage 3 금융 엔진의 세 가지 수익 풀로 변환한다.
- *
- * - 주거 매각 → residentialSale
- * - 주거 임대 → residentialLease
- * - 상가·업무 임대 → retail
- * - 상가·업무 매각은 현재 금융 엔진에 별도 상업 매각 풀이 없으므로
- *   매각 풀에 포함한다. 이후 상업 매각 단가 분리 시 확장할 수 있다.
- */
-export function planningRevenueAreas(scenario: PlanningScenario): RevenueAreas {
-  const result: RevenueAreas = {
-    residentialSaleSqm: 0,
-    residentialLeaseSqm: 0,
-    retailSqm: 0,
-  };
-
-  for (const floor of scenario.floorPrograms) {
-    for (const zone of floor.zones) {
-      const areaSqm = nonNegative(zone.areaSqm);
-      const revenueModel = resolveZoneRevenueModel(zone);
-
-      if (revenueModel === "sale") {
-        const saleableAreaSqm = Math.min(
-          areaSqm,
-          nonNegative(zone.saleableAreaSqm ?? areaSqm)
-        );
-        result.residentialSaleSqm += saleableAreaSqm;
-        continue;
-      }
-
-      if (revenueModel === "lease") {
-        const rentableAreaSqm = Math.min(
-          areaSqm,
-          nonNegative(zone.rentableAreaSqm ?? areaSqm)
-        );
-        if (isCommercial(zone.useType)) {
-          result.retailSqm += rentableAreaSqm;
-        } else if (zone.useType === "residential") {
-          result.residentialLeaseSqm += rentableAreaSqm;
-        }
-      }
-    }
-  }
-
-  return result;
-}
-
 function fallbackMix(type: BuildingType): BuildingProgram["mix"] {
   if (type === "retail" || type === "office") {
     return { residentialSale: 0, residentialLease: 0, retail: 1 };
@@ -97,17 +44,100 @@ function fallbackMix(type: BuildingType): BuildingProgram["mix"] {
 
 function mixFromRevenueAreas(
   type: BuildingType,
-  areas: RevenueAreas
+  areas: FinancialRevenueAreaPools
 ): BuildingProgram["mix"] {
+  const saleArea =
+    areas.residentialSaleSqm + areas.retailSaleSqm + areas.officeSaleSqm;
+  const commercialLeaseArea = areas.retailLeaseSqm + areas.officeLeaseSqm;
   const total =
-    areas.residentialSaleSqm + areas.residentialLeaseSqm + areas.retailSqm;
+    saleArea + areas.residentialLeaseSqm + commercialLeaseArea;
   if (total <= 0) return fallbackMix(type);
 
   return {
-    residentialSale: areas.residentialSaleSqm / total,
+    // BuildingProgram.mix is retained for legacy screens. The area contract is
+    // the authoritative six-pool revenue source for all current plans.
+    residentialSale: saleArea / total,
     residentialLease: areas.residentialLeaseSqm / total,
-    retail: areas.retailSqm / total,
+    retail: commercialLeaseArea / total,
   };
+}
+
+export interface PlanningBuildingProgramOptions {
+  geometryHash?: string;
+}
+
+function validateQuantityCostSnapshot(
+  scenario: PlanningScenario,
+  calculation: PlanningScenarioCalculation,
+  contract: QuantityCostContract,
+  adjustmentManwon: number,
+): void {
+  const preview = calculation.economicsPreview;
+  const inputs = preview.costInputs!;
+  const basis = quantityCostPlanBasis(scenario.quantityCost);
+  if (!basis || preview.quantityCostInputBasis !== basis ||
+      preview.quantityCostStatus !== "ready" || preview.status !== "estimated") {
+    throw new Error("Stage 2/3 상세 수량 원가와 계산 입력 기준이 다릅니다. 현재 계획을 다시 계산해야 합니다.");
+  }
+  const matches = (actual: unknown, expected: number, tolerance = 0.0051): boolean =>
+    typeof actual === "number" && Number.isFinite(actual) && Number.isFinite(expected) &&
+    Math.abs(actual - expected) <= tolerance;
+  if (!matches(calculation.metrics.aboveGroundProgramAreaSqm, contract.constructionAreas.aboveGroundSqm) ||
+      !matches(calculation.metrics.basementProgramAreaSqm, contract.constructionAreas.basementSqm) ||
+      !matches(calculation.metrics.constructionAreaSqm, contract.constructionAreas.aboveGroundSqm + contract.constructionAreas.basementSqm)) {
+    throw new Error("Stage 2/3 상세 수량 원가와 계산 면적이 다릅니다.");
+  }
+  if (Object.values(inputs).some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0) ||
+      !Number.isFinite(preview.acquisitionCostManwon) || preview.acquisitionCostManwon < 0 ||
+      !Number.isFinite(preview.demolitionCostManwon) || preview.demolitionCostManwon < 0) {
+    throw new Error("Stage 2/3 상세 수량 원가의 비용 입력이 올바르지 않습니다.");
+  }
+
+  // Derive from raw amounts, not individually rounded preview components.
+  const base = contract.baseConstructionCostWon / 10_000;
+  const material = calculatePlanningMaterialAdjustment(scenario).adjustmentManwon;
+  const dwelling = additionalDwellingCostManwon(scenario.floorPrograms, scenario.dwellingProgram);
+  const hard = base + material + dwelling + adjustmentManwon;
+  if (!Number.isFinite(hard) || hard < 0) {
+    throw new Error("Stage 2/3 상세 수량 원가를 반영한 공사비가 올바르지 않습니다.");
+  }
+  const soft = hard * inputs.softCostRatePct / 100;
+  const contingency = (hard + soft) * inputs.contingencyRatePct / 100;
+  const construction = hard + soft + contingency;
+  const interest = construction * inputs.financingCostRatePct / 100;
+  const pfFee = construction * inputs.ltcTargetPct / 100 * inputs.pfUpfrontFeeRatePct / 100;
+  const financing = interest + pfFee + inputs.trustFeeManwon;
+  const expected = {
+    baseConstructionCostManwon: base,
+    materialAdjustmentCostManwon: material,
+    additionalDwellingCostManwon: dwelling,
+    quantityCostAdjustmentManwon: adjustmentManwon,
+    constructionCostManwon: hard,
+    softCostManwon: soft,
+    contingencyCostManwon: contingency,
+    interestEstimateManwon: interest,
+    pfFeeManwon: pfFee,
+    trustFeeManwon: inputs.trustFeeManwon,
+    financingCostManwon: financing,
+    acquisitionTaxManwon: inputs.acquisitionTaxManwon,
+    acquisitionOtherCostManwon: inputs.acquisitionOtherCostManwon,
+    tenantRelocationCostManwon: inputs.tenantRelocationCostManwon,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (!matches(preview[key as keyof typeof expected], value)) {
+      throw new Error(`Stage 2/3 상세 수량 원가의 비용 스냅샷이 다릅니다: ${key}`);
+    }
+  }
+  const total = preview.acquisitionCostManwon + preview.demolitionCostManwon +
+    inputs.acquisitionTaxManwon + inputs.acquisitionOtherCostManwon + inputs.tenantRelocationCostManwon +
+    construction + financing;
+  const revenue = calculation.revenueProjection.totalRevenueManwon;
+  // Acquisition and demolition are available only as rounded snapshot values.
+  if (!matches(preview.totalCostManwon, total, 0.0151) ||
+      !matches(preview.expectedRevenueManwon, revenue) ||
+      !matches(preview.profitManwon, revenue - total, 0.0151)) {
+    throw new Error("Stage 2/3 상세 수량 원가의 총사업비·매출·손익 스냅샷이 다릅니다.");
+  }
 }
 
 /**
@@ -118,7 +148,8 @@ function mixFromRevenueAreas(
  */
 export function planningScenarioToBuildingProgram(
   scenario: PlanningScenario,
-  calculation: PlanningScenarioCalculation
+  calculation: PlanningScenarioCalculation,
+  options: PlanningBuildingProgramOptions = {},
 ): BuildingProgram {
   if (scenario.id !== calculation.scenarioId) {
     throw new Error(
@@ -128,6 +159,31 @@ export function planningScenarioToBuildingProgram(
 
   const type = buildingTypeForScenario(scenario);
   const revenueAreas = planningRevenueAreas(scenario);
+  const geometrySource = resolvePlanningGeometrySource(scenario);
+  let quantityCostAdjustment: QuantityCostContract | undefined;
+  if (scenario.quantityCost !== undefined) {
+    const inputs = calculation.economicsPreview.costInputs;
+    if (!inputs) {
+      throw new Error("Stage 2/3 상세 수량 원가를 검증할 기본 공사비 입력이 없습니다.");
+    }
+    const quantityCost = evaluateQuantityCost(scenario, {
+      constructionCostPerSqmWon: inputs.constructionCostPerSqmWon,
+      basementCostMultiplier: inputs.basementCostMultiplier,
+    });
+    if (
+      quantityCost.status !== "ready" ||
+      quantityCost.contract === null ||
+      quantityCost.adjustmentManwon === null ||
+      !Number.isFinite(quantityCost.adjustmentManwon) ||
+      calculation.economicsPreview.status === "stale"
+    ) {
+      throw new Error(
+        `Stage 2/3 상세 수량 원가를 다시 검증해야 합니다: ${quantityCost.issues.join(" · ") || quantityCost.status}`
+      );
+    }
+    validateQuantityCostSnapshot(scenario, calculation, quantityCost.contract, quantityCost.adjustmentManwon);
+    quantityCostAdjustment = quantityCost.contract;
+  }
 
   return {
     type,
@@ -150,25 +206,75 @@ export function planningScenarioToBuildingProgram(
       saleableAreaSqm: calculation.metrics.saleableAreaSqm,
       rentableAreaSqm: calculation.metrics.rentableAreaSqm,
       revenueAreas,
-      providedParkingSpaces: calculation.parking.providedCars,
-      requiredParkingSpaces: calculation.parking.requiredCars,
-      materialAdjustmentCostManwon:
-        calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
-      planningAssumptionsVersion:
-        calculation.economicsPreview.assumptionsVersion,
-      geometrySource: scenario.geometrySource
+      revenueProjection: calculation.revenueProjection,
+      stage2Economics: calculation.economicsPreview.costInputs
         ? {
-            mode: scenario.geometrySource.mode,
-            exactGeometryAvailable:
-              scenario.geometrySource.exactGeometryAvailable,
-            locked: scenario.geometrySource.locked,
-            geometryHash:
-              scenario.geometrySource.lockedGeometryHash ??
-              scenario.geometrySource.sourceGeometryHash,
-            verificationVersion:
-              scenario.geometrySource.verificationVersion,
+            modelVersion: STAGE2_ECONOMICS_CONTRACT_VERSION,
+            assumptionsVersion:
+              calculation.economicsPreview.assumptionsVersion,
+            inputs: calculation.economicsPreview.costInputs,
+            acquisitionCostManwon:
+              calculation.economicsPreview.acquisitionCostManwon,
+            acquisitionTaxManwon:
+              calculation.economicsPreview.acquisitionTaxManwon ?? 0,
+            acquisitionOtherCostManwon:
+              calculation.economicsPreview.acquisitionOtherCostManwon ?? 0,
+            demolitionCostManwon:
+              calculation.economicsPreview.demolitionCostManwon,
+            tenantRelocationCostManwon:
+              calculation.economicsPreview.tenantRelocationCostManwon ?? 0,
+            hardCostManwon:
+              calculation.economicsPreview.constructionCostManwon,
+            softCostManwon: calculation.economicsPreview.softCostManwon,
+            contingencyCostManwon:
+              calculation.economicsPreview.contingencyCostManwon,
+            interestEstimateManwon:
+              calculation.economicsPreview.interestEstimateManwon ?? 0,
+            pfFeeManwon: calculation.economicsPreview.pfFeeManwon ?? 0,
+            trustFeeManwon:
+              calculation.economicsPreview.trustFeeManwon ?? 0,
+            financingCostManwon:
+              calculation.economicsPreview.financingCostManwon,
+            totalCostManwon: calculation.economicsPreview.totalCostManwon,
+            totalRevenueManwon:
+              calculation.economicsPreview.expectedRevenueManwon,
+            profitManwon: calculation.economicsPreview.profitManwon,
           }
         : undefined,
+      providedParkingSpaces: calculation.parking.providedCars,
+      requiredParkingSpaces: calculation.parking.requiredCars,
+      parkingRequirement: {
+        rule: calculation.parking.rule,
+        decisionGrade: calculation.parking.decisionGrade,
+        estimated: calculation.parking.estimated,
+        components: calculation.parking.components,
+        basis: calculation.parking.basis,
+        warnings: calculation.parking.warnings,
+      },
+      sunlightAssessment: calculation.sunlight,
+      materialAdjustmentCostManwon:
+        calculation.economicsPreview.materialAdjustmentCostManwon ?? 0,
+      ...(quantityCostAdjustment ? { quantityCostAdjustment } : {}),
+      dwellingCostAdjustment: scenario.dwellingProgram ? {
+        unitCount: calculation.metrics.residentialUnitCount,
+        baselineDwellingCount: scenario.dwellingProgram.baselineDwellingCount,
+        costPerAdditionalUnitWon: scenario.dwellingProgram.additionalDwellingCostWon,
+        costManwon: calculation.economicsPreview.additionalDwellingCostManwon ?? 0,
+        evidenceStatus: scenario.dwellingProgram.costEvidenceStatus,
+        source: scenario.dwellingProgram.costSource,
+      } : undefined,
+      planningAssumptionsVersion:
+        calculation.economicsPreview.assumptionsVersion,
+      geometrySource: {
+        mode: geometrySource.mode,
+        exactGeometryAvailable: geometrySource.exactGeometryAvailable,
+        locked: Boolean(options.geometryHash || geometrySource.locked),
+        geometryHash:
+          options.geometryHash ??
+          geometrySource.lockedGeometryHash ??
+          geometrySource.sourceGeometryHash,
+        verificationVersion: geometrySource.verificationVersion,
+      },
     },
     units: {
       residential: calculation.metrics.residentialUnitCount,

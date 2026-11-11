@@ -105,6 +105,7 @@ describe("Planning CAD export", () => {
         jibun: "소로3류",
         jimok: "도로",
         jimokCode: "UPIS-UQ151",
+        boundarySource: "upis-planned-road" as const,
         lotAreaSqm: 187.5,
         boundary: roadBoundary,
         distanceM: 13,
@@ -188,6 +189,8 @@ describe("Planning CAD export", () => {
     expect(result.readmeText).toContain("1000배");
     expect(result.readmeText).toContain("Save As로 DWG");
     expect(result.readmeText).toContain("화면 · SketchUp · CAD 정합성");
+    expect(result.readmeText).toContain("대상·인접 필지·도로의 모든 분리 도형과 내부 홀");
+    expect(result.readmeText).not.toContain("대상 필지는 단일 외곽선만 지원");
 
     expect(() =>
       buildPlanningCadPackage({

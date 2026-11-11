@@ -1,6 +1,13 @@
 "use client";
 
+import { sessionFetch as fetch } from "@/lib/auth/client-session";
+import { hasParcelBoundary } from "@/lib/geo/parcel-topology";
+import { sessionDraftStorage } from "@/lib/auth/client-session";
 
+
+import { buildingRegistryLabel } from "@/lib/building-registry/evidence";
+import { BuildingRegistryEvidencePanel } from "@/components/ui/BuildingRegistryEvidence";
+import { TransactionEvidence } from "@/components/ui/TransactionEvidence";
 import AcquisitionPriceInput from "@/components/AcquisitionPriceInput";
 import ManualParcelIntake from "@/components/project/ManualParcelIntake";
 import { sqmToPyeong, type RawTransaction } from "@/lib/priceDistribution";
@@ -36,6 +43,11 @@ import type {
   ParcelLookupManualRequired,
   ParcelLookupResponse,
 } from "@/lib/parcels/lookup-contract";
+import {
+  principalHasCapability,
+  useAccessSession,
+} from "@/lib/hooks/use-access-session";
+import { SessionBadge } from "@/components/auth/SessionBadge";
 
 /* ─────────────────────────── 타입 ─────────────────────────── */
 
@@ -46,6 +58,7 @@ interface EstimateResult extends AcquisitionEstimateSnapshot {
   marketMedianManwon?: number;
   details?: AcquisitionEstimateSnapshot["details"];
   transactionCount?: number;
+  transactionEvidence?: import("@/lib/integrations/molit-evidence").MolitRangeEvidence[];
   transactions?: Array<{
     priceManwon: number;
     areaSqm: number;
@@ -58,6 +71,11 @@ interface EstimateResult extends AcquisitionEstimateSnapshot {
 
 export default function NewParcelPage() {
   const router = useRouter();
+  const accessSession = useAccessSession();
+  const canRunAnalysis = principalHasCapability(
+    accessSession.data,
+    "analysis.run",
+  );
   const [address, setAddress] = useState("");
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
@@ -173,6 +191,7 @@ export default function NewParcelPage() {
       pnu: parcel.pnu,
       lotArea: parcel.lotArea,
       boundary: parcel.boundary,
+      boundaryPolygons: parcel.boundaryPolygons,
       roads: parcel.roads,
       zoning: parcel.zoning,
       zoneCode: parcel.zoneCode,
@@ -209,6 +228,7 @@ export default function NewParcelPage() {
                 }
               : undefined,
             transactionCount: estimate.transactionCount,
+            transactionEvidence: estimate.transactionEvidence,
             details: estimate.details,
           }
         : undefined,
@@ -218,11 +238,28 @@ export default function NewParcelPage() {
       currentBuilding: parcel.currentBuilding ?? null,
     };
 
-    sessionStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(storedParcel));
+    sessionDraftStorage.setItem("parcelgrid:draft-parcel", JSON.stringify(storedParcel));
     router.push(`/projects/${parcel.pnu}/status`);
   }
 
   // ─── UI ───────────────────────────────────────────────────────────
+  if (accessSession.data && !canRunAnalysis) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+        <TopBar crumb={["새 부지 분석"]} right={<SessionBadge />} />
+        <main style={{ maxWidth: 720, margin: "72px auto", padding: 24 }}>
+          <Panel title="새 분석 권한이 없습니다">
+            <p style={{ margin: 0, color: "var(--fg-muted)", lineHeight: 1.65 }}>
+              현재 계정은 기존 프로젝트를 열람할 수 있지만 새 부지 조회와 분석을 실행할 수 없습니다.
+            </p>
+            <Link href="/" className="ui-btn" style={{ marginTop: 14 }}>
+              프로젝트로 돌아가기
+            </Link>
+          </Panel>
+        </main>
+      </div>
+    );
+  }
   return (
     <div
       style={{
@@ -232,7 +269,7 @@ export default function NewParcelPage() {
         background: "var(--bg)",
       }}
     >
-      <TopBar crumb={["새 부지 분석"]} />
+      <TopBar crumb={["새 부지 분석"]} right={<SessionBadge />} />
 
       {/* Content */}
       <div
@@ -431,7 +468,13 @@ export default function NewParcelPage() {
                 }}
               >
                 토지·규제 값은 사용자 입력이며 원문 확인 전입니다. 필지 경계는{" "}
-                {parcel.boundary ? "업로드한 GeoJSON" : "연결되지 않음"} 상태로 저장됩니다.
+                {hasParcelBoundary(parcel) ? "업로드한 GeoJSON" : "연결되지 않음"} 상태로 저장됩니다.
+              </div>
+            )}
+
+            {!!parcel.warnings?.length && (
+              <div role="note" style={{ marginBottom: "var(--s4)", padding: "10px 12px", borderLeft: "3px solid var(--warn)", background: "var(--warn-soft)", color: "var(--warn-fg)", fontSize: 12, lineHeight: 1.55 }}>
+                {parcel.warnings.map((warning) => <p key={warning} style={{ margin: "4px 0" }}>{warning}</p>)}
               </div>
             )}
 
@@ -449,14 +492,14 @@ export default function NewParcelPage() {
                     sub={pyeong(parcel.lotArea)}
                   />
                   <DataRow
-                    label="건폐율 전국 상한 참고"
+                    label={parcel.inputProvenance?.mode === "manual" ? "건폐율 사용자 검토값" : "건폐율 전국 상한 참고"}
                     value={parcel.maxBCR > 0 ? `${parcel.maxBCR}%` : "미확인"}
-                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
+                    sub={parcel.inputProvenance?.mode === "manual" ? "사용자 입력 · 법적 상한 확정 아님" : "시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"}
                   />
                   <DataRow
-                    label="용적률 전국 상한 참고"
+                    label={parcel.inputProvenance?.mode === "manual" ? "용적률 사용자 검토값" : "용적률 전국 상한 참고"}
                     value={parcel.maxFAR > 0 ? `${parcel.maxFAR}%` : "미확인"}
-                    sub="시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"
+                    sub={parcel.inputProvenance?.mode === "manual" ? "사용자 입력 · 법적 상한 확정 아님" : "시행령 범위 · 관할 조례·지구단위계획 원문 확인 전"}
                   />
                   <DataRow
                     label="필지별 최고높이"
@@ -487,6 +530,7 @@ export default function NewParcelPage() {
                 </Panel>
 
                 <Panel title="현재 건물" source="MOLIT 건축물대장">
+                  <BuildingRegistryEvidencePanel info={parcel.currentBuilding} />
                   {parcel.currentBuilding && parcel.currentBuilding.hasBuilding ? (
                     <CurrentBuildingBox
                       info={parcel.currentBuilding}
@@ -505,8 +549,8 @@ export default function NewParcelPage() {
                         gap: "var(--s2)",
                       }}
                     >
-                      <Dot kind="pos" />
-                      건축물대장상 등록 건물 없음 · 현장 확인 필요
+                      <Dot kind="warn" />
+                      {buildingRegistryLabel(parcel.currentBuilding)}
                     </div>
                   ) : (
                     <div
@@ -605,6 +649,7 @@ export default function NewParcelPage() {
                         : `활성 추정 · 동일 지목 ${estimate.details?.sampleSize ?? 0}건`}
                     </div>
                     <div className="mono" style={{ marginTop: 2 }}>
+                      <TransactionEvidence evidence={estimate.transactionEvidence} />
                       토지 분포 {estimate.transactionCount ?? 0}건 · 중앙값 {Math.round(estimate.marketMedianPerPyeong ?? 0).toLocaleString()}만원/평
                     </div>
                   </div>

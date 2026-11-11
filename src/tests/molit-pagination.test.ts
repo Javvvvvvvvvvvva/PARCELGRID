@@ -20,9 +20,9 @@ function molitXml(page: number): string {
         <jimok>대</jimok>
       </item>
     </items>
-    <numOfRows>100</numOfRows>
+    <numOfRows>1</numOfRows>
     <pageNo>${page}</pageNo>
-    <totalCount>205</totalCount>
+    <totalCount>3</totalCount>
   </body>
 </response>`;
 }
@@ -52,7 +52,7 @@ describe("fetchMolitRange", () => {
       type: "land",
       startYearMonth: "202601",
       endYearMonth: "202601",
-      pageSize: 100,
+      pageSize: 1,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);

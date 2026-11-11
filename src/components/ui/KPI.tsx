@@ -48,7 +48,7 @@ export function DecisionBanner({ scenario, onCompare, onDetail }: DecisionBanner
     <div className="ui-decision">
       <div className="ui-decision__rec">
         <div>
-          <div className="ui-decision__rec-label">권장 시나리오</div>
+          <div className="ui-decision__rec-label">현재 비교 기준</div>
           <div className="ui-decision__rec-val">
             {scenario.id} · {scenario.name}
           </div>
@@ -64,8 +64,12 @@ export function DecisionBanner({ scenario, onCompare, onDetail }: DecisionBanner
           <div className="ui-decision__stat-val">{won(scenario.equity)}</div>
         </div>
         <div>
-          <div className="ui-decision__stat-label">DSCR</div>
-          <div className="ui-decision__stat-val">{scenario.dscr.toFixed(2)}</div>
+          <div className="ui-decision__stat-label">장기대출 DSCR</div>
+          <div className="ui-decision__stat-val">
+            {scenario.dscrStatus === "takeout-amortizing"
+              ? scenario.dscr.toFixed(2)
+              : "N/A"}
+          </div>
         </div>
         <div>
           <div className="ui-decision__stat-label">IRR</div>

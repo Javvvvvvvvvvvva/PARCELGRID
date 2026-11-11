@@ -15,6 +15,14 @@
  * V2: 북측 도로 판별 / V3: 다중 북측경계 / V4: 지자체 조례 (로드맵).
  */
 
+import {
+  evaluateSunlightRegulation,
+  isNorthSunlightResidentialZone,
+  requiredNorthSunlightSetback,
+  type SunlightInputStatus,
+  type SunlightLegalUse,
+} from "@/lib/regulatory/sunlight-rules";
+
 export type LngLat = [number, number];
 
 export interface NorthEdgeResult {
@@ -56,8 +64,7 @@ export function findNorthEdge(boundary: LngLat[]): NorthEdgeResult | null {
 
 /** 정북일조: 건물 높이 → 필요 북측 이격 (m) */
 export function requiredNorthSetback(buildingHeightM: number): number {
-  if (buildingHeightM <= 10) return 1.5;
-  return buildingHeightM / 2;
+  return requiredNorthSunlightSetback(buildingHeightM);
 }
 
 /** 정북일조: 북측 이격 거리 → 가능 최대 높이 (m) */
@@ -205,9 +212,7 @@ export const SUN_CHECK_CAVEAT =
 
 /** 정북일조가 적용되는 용도지역인지 (일반 건축물 §61①) */
 export function sunRestrictionApplies(zoning: string): boolean {
-  // 전용주거지역·일반주거지역만 (제1·2·3종 포함). 준주거는 일반건축물 미적용.
-  if (zoning.includes("준주거")) return false;
-  return zoning.includes("주거지역");
+  return isNorthSunlightResidentialZone(zoning);
 }
 
 /** 북측 변이 도로에 접하는지 (roads 위치 기반) */
@@ -243,6 +248,15 @@ export interface SunEvaluation {
   warnings: string[];
 }
 
+export interface SunEvaluationContext {
+  address?: string;
+  jurisdictionCode?: string;
+  asOf?: string;
+  zoningStatus?: SunlightInputStatus;
+  legalUse?: SunlightLegalUse;
+  legalUseStatus?: SunlightInputStatus;
+}
+
 /**
  * 정북일조 종합 판정 — 모든 조건 포괄.
  * 데이터 있는 조건은 정확히, 없는 조건은 경고 (가정 금지).
@@ -258,63 +272,50 @@ export function evaluateSunSetback(
   heightM: number,
   floors: number,
   northEdge: NorthEdgeResult | null,
-  roads?: { name: string | null; points: LngLat[] }[]
+  roads?: { name: string | null; points: LngLat[] }[],
+  context: SunEvaluationContext = {}
 ): SunEvaluation {
-  const warnings: string[] = [];
-
-  // 1) 용도지역 판정
-  if (!sunRestrictionApplies(zoning)) {
-    return {
-      applies: false,
-      exemptByOrdinance: false,
-      requiredSetbackM: 0,
-      northIsRoad: false,
-      conclusion: `${zoning} — 일반 건축물 정북일조 미적용 (전용·일반주거지역만 적용)`,
-      warnings: zoning.includes("준주거")
-        ? ["준주거지역: 공동주택(아파트)이면 채광방향 §61② 별도 적용"]
-        : [],
-    };
-  }
-
-  // 2) 2층 이하 & 높이 8m 이하 → 조례 배제 가능
-  if (floors <= 2 && heightM <= 8) {
-    return {
-      applies: true,
-      exemptByOrdinance: true,
-      requiredSetbackM: 0,
-      northIsRoad: false,
-      conclusion: `2층 이하·높이 ${heightM.toFixed(1)}m (8m 이하) — 조례로 사선제한 배제 가능`,
-      warnings: ["배제 여부는 해당 지자체 건축조례 확인 필요"],
-    };
-  }
-
-  // 3) 북측 도로 판별
   const northRoad = northEdge
     ? isNorthEdgeAbuttingRoad(northEdge, roads)
     : { isRoad: false, roadName: null };
-
-  // 4) 기본 이격 (10m 개정 기준)
-  const requiredSetbackM = heightM <= 10 ? 1.5 : heightM / 2;
-
-  // 5) 경고 — 데이터 없는 배제조건 (가정 금지)
-  if (northRoad.isRoad) {
-    warnings.push(
-      "북측이 도로에 접함 — 너비 20m 이상이고 정북 대지도 20m 도로 접하면 적용 배제 가능 (도로 너비 데이터 없음, 확인 필요)"
-    );
-  }
-  warnings.push(
-    "정북방향 인접대지 용도지역 미확인 — 전용·일반주거 아니면 적용 배제 가능 (시행령 §86②3)"
-  );
-  warnings.push(
-    "정북방향 공원·하천 등 공지, 지표면 고저차 미반영 — 별도 확인 필요"
-  );
+  const result = evaluateSunlightRegulation({
+    context: {
+      address: context.address,
+      jurisdictionCode: context.jurisdictionCode,
+      asOf: context.asOf,
+    },
+    zoning,
+    zoningStatus: context.zoningStatus ?? "user-entered",
+    buildingHeightM: heightM,
+    floorsAbove: floors,
+    legalUse: context.legalUse ?? "general-building",
+    legalUseStatus: context.legalUseStatus ?? "user-entered",
+    northBoundary: northRoad.isRoad
+      ? {
+          separatorType: "road",
+          separatorStatus: "public-observation",
+        }
+      : undefined,
+    daylight: {
+      sameLotBuildingCount: 1,
+      sameLotBuildingCountStatus: "source-backed",
+    },
+  });
+  const north = result.north;
 
   return {
-    applies: true,
-    exemptByOrdinance: false,
-    requiredSetbackM,
+    applies: north.geometryApplies,
+    exemptByOrdinance: north.exception === "local-low-rise",
+    requiredSetbackM: north.effectiveDistanceM ?? 0,
     northIsRoad: northRoad.isRoad,
-    conclusion: `건물 ${heightM.toFixed(1)}m → 북측 경계서 ${requiredSetbackM.toFixed(1)}m 이격 필요`,
-    warnings,
+    conclusion:
+      north.applicability === "not-applicable"
+        ? north.basis.join(" · ")
+        : "건물 " +
+          heightM.toFixed(1) +
+          "m → 북측 유효 이격 " +
+          (north.effectiveDistanceM ?? 0).toFixed(1) +
+          "m 필요",
+    warnings: result.warnings,
   };
 }

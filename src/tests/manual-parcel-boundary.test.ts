@@ -55,7 +55,7 @@ describe("manual parcel GeoJSON", () => {
           coordinates: [[[37.648, 127.034], [37.649, 127.034], [37.648, 127.035]]],
         }),
       ),
-    ).toThrow("국내 WGS84");
+    ).toThrow("WGS84");
   });
 
   it("rejects a self-intersecting parcel ring", () => {

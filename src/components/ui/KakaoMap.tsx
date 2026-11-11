@@ -10,7 +10,9 @@
  * "왜 이 가격인지"를 지도로 납득 (건축가 조언).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Wgs84ParcelPolygon } from "@/lib/geo/parcel-topology";
+import { resolvePlanningParcel } from "@/lib/planning/planning-parcel";
 
 const SDK_ID = "kakao-map-sdk";
 const JS_KEY = process.env.NEXT_PUBLIC_KAKAO_JS_KEY;
@@ -21,32 +23,42 @@ declare global {
   }
 }
 
-function loadKakaoSdk(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") return reject(new Error("no window"));
-    if (window.kakao && window.kakao.maps) {
-      resolve();
-      return;
-    }
+let sdkPromise: Promise<void> | undefined;
+
+export function loadKakaoSdk(): Promise<void> {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  // autoload=false exposes maps before constructors are ready. Every caller
+  // must wait for maps.load, including Strict Mode effects and remounts.
+  if (typeof window.kakao?.maps?.LatLng === "function" && typeof window.kakao?.maps?.Map === "function") return Promise.resolve();
+  if (sdkPromise) return sdkPromise;
+  sdkPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Kakao 지도 초기화 시간 초과 · 네트워크·키·등록 도메인을 확인하세요")), 15_000);
+    const fail = () => { clearTimeout(timer); reject(new Error("Kakao SDK 로드 실패 · 네트워크·키·등록 도메인을 확인하세요")); };
+    const initialize = () => {
+      if (typeof window.kakao?.maps?.load !== "function") { fail(); return; }
+      window.kakao.maps.load(() => {
+        clearTimeout(timer);
+        if (typeof window.kakao?.maps?.LatLng !== "function" || typeof window.kakao?.maps?.Map !== "function") { fail(); return; }
+        resolve();
+      });
+    };
+    if (window.kakao?.maps) { initialize(); return; }
     const existing = document.getElementById(SDK_ID) as HTMLScriptElement | null;
     if (existing) {
-      existing.addEventListener("load", () => window.kakao.maps.load(() => resolve()));
+      existing.addEventListener("load", initialize, { once: true });
+      existing.addEventListener("error", fail, { once: true });
       return;
     }
-    if (!JS_KEY) {
-      reject(new Error("NEXT_PUBLIC_KAKAO_JS_KEY 없음"));
-      return;
-    }
+    if (!JS_KEY) { clearTimeout(timer); reject(new Error("NEXT_PUBLIC_KAKAO_JS_KEY 없음")); return; }
     const script = document.createElement("script");
     script.id = SDK_ID;
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${JS_KEY}&autoload=false`;
+    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${JS_KEY}&autoload=false`;
     script.async = true;
-    script.onload = () => {
-      window.kakao.maps.load(() => resolve());
-    };
-    script.onerror = () => reject(new Error("Kakao SDK 로드 실패"));
+    script.onload = initialize;
+    script.onerror = fail;
     document.head.appendChild(script);
   });
+  return sdkPromise;
 }
 
 export interface StationMarker {
@@ -69,6 +81,17 @@ export interface CompMarker {
   type: string;
   /** 매각가 알고리즘이 참고한 사례 (saleEstimate.cases 매칭) — 지도 강조 */
   referenced?: boolean;
+}
+
+function clampMapLevel(map: any, bounds: any, parcelPoints: any[], maxLevel: number, minLevel = 1) {
+  const fittedLevel = map.getLevel();
+  const level = Math.max(minLevel, Math.min(fittedLevel, maxLevel));
+  if (level === fittedLevel) return;
+  map.setLevel(level);
+  // A preferred zoom must not crop a distant parcel part after fitting it.
+  if (level < fittedLevel && parcelPoints.some((point) => !map.getBounds().contain(point))) {
+    map.setBounds(bounds, 44, 44, 44, 44);
+  }
 }
 
 /** 평당가 → 색상 (낮음 파랑 ↔ 높음 빨강). min~max 정규화. */
@@ -105,6 +128,7 @@ export function KakaoMap({
   height = 420,
   /** 필지 경계 폴리곤 [lng, lat][] */
   boundary,
+  boundaryPolygons,
   /** true면 대상지 중심 확대 유지 (실거래 전체 fit 안 함) */
   focusSubject = false,
   /** 초기 줌 (1=가장 가까움, 14=멀음). focusSubject 시 2~3 권장 */
@@ -132,6 +156,7 @@ export function KakaoMap({
   onSelectComp?: (id: string) => void;
   height?: number;
   boundary?: [number, number][];
+  boundaryPolygons?: Wgs84ParcelPolygon[];
   focusSubject?: boolean;
   zoomLevel?: number;
   roads?: { name: string | null; points: [number, number][] }[];
@@ -143,6 +168,10 @@ export function KakaoMap({
   const mapRef = useRef<any>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
+  const parcelPolygons = useMemo(
+    () => resolvePlanningParcel({ boundary, boundaryPolygons }).source,
+    [boundary, boundaryPolygons],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -164,19 +193,25 @@ export function KakaoMap({
         const fitBounds = new kakao.maps.LatLngBounds();
         fitBounds.extend(center);
 
-        // 필지 경계 폴리곤
-        if (boundary && boundary.length >= 3) {
-          const path = boundary.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng));
+        const parcelPoints: any[] = [];
+        for (const part of parcelPolygons) {
+          const paths = [part.outer, ...part.holes].map((ring) =>
+            ring.map(([lng, lat]) => new kakao.maps.LatLng(lat, lng))
+          );
           new kakao.maps.Polygon({
             map,
-            path,
+            // Kakao's donut contract: https://apis.map.kakao.com/web/sample/donut/
+            path: part.holes.length ? paths : paths[0],
             strokeWeight: 2.5,
             strokeColor: "#2563eb",
             strokeOpacity: 0.95,
             fillColor: "#3b82f6",
             fillOpacity: 0.15,
           });
-          path.forEach((p: { getLat: () => number; getLng: () => number }) => fitBounds.extend(p));
+          paths[0].forEach((point) => {
+            fitBounds.extend(point);
+            parcelPoints.push(point);
+          });
         }
 
         // 인접 도로 + 도로명 (선택)
@@ -317,12 +352,10 @@ export function KakaoMap({
 
         // 통합 줌 — 대상지 + 주변 실거래·도로
         map.setBounds(fitBounds, 44, 44, 44, 44);
-        const lv = map.getLevel();
         if (focusSubject) {
-          if (lv > maxZoomOutLevel) map.setLevel(maxZoomOutLevel);
-          if (lv < 2) map.setLevel(2);
-        } else if (boundary && boundary.length >= 3) {
-          if (lv > 5) map.setLevel(5);
+          clampMapLevel(map, fitBounds, parcelPoints, maxZoomOutLevel, 2);
+        } else if (parcelPolygons.length) {
+          clampMapLevel(map, fitBounds, parcelPoints, 5);
         }
 
         setStatus("ready");
@@ -346,7 +379,7 @@ export function KakaoMap({
     stations,
     selectedId,
     onSelectComp,
-    boundary,
+    parcelPolygons,
     focusSubject,
     zoomLevel,
     roads,
@@ -372,17 +405,17 @@ export function KakaoMap({
     map.setCenter(new kakao.maps.LatLng(centerLat, centerLng));
     const bounds = new kakao.maps.LatLngBounds();
     bounds.extend(new kakao.maps.LatLng(centerLat, centerLng));
-    if (boundary && boundary.length >= 3) {
-      boundary.forEach(([lng, lat]) => bounds.extend(new kakao.maps.LatLng(lat, lng)));
-    }
+    const parcelPoints = parcelPolygons.flatMap((part) => part.outer.map(([lng, lat]) =>
+      new kakao.maps.LatLng(lat, lng)
+    ));
+    parcelPoints.forEach((point) => bounds.extend(point));
     comps.forEach((c) => {
       if (haversineM(centerLat, centerLng, c.lat, c.lng) <= nearbyRadiusM) {
         bounds.extend(new kakao.maps.LatLng(c.lat, c.lng));
       }
     });
     map.setBounds(bounds, 44, 44, 44, 44);
-    if (map.getLevel() > maxZoomOutLevel) map.setLevel(maxZoomOutLevel);
-    if (map.getLevel() < 2) map.setLevel(2);
+    clampMapLevel(map, bounds, parcelPoints, maxZoomOutLevel, 2);
   };
 
   return (

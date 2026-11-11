@@ -9,6 +9,14 @@ import {
 } from "../../lib/finance/source-document";
 
 describe("source document security", () => {
+  it("validates the full bounded CSV without splitting a UTF-8 character at byte 4096", () => {
+    const bytes = new TextEncoder().encode("x".repeat(4095) + "한글,값\n");
+    expect(validateSourceDocumentBytes("csv", bytes)).toEqual([]);
+    bytes[4099] = 0xff;
+    expect(validateSourceDocumentBytes("csv", bytes)).not.toEqual([]);
+    bytes[4099] = 0;
+    expect(validateSourceDocumentBytes("csv", bytes)).not.toEqual([]);
+  });
   it("accepts supported document types within the server upload limit", () => {
     const result = validateSourceDocumentFile({
       name: "견적서.pdf",

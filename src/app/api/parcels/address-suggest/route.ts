@@ -7,10 +7,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { searchAddressSuggestions } from "@/lib/integrations/kakao";
+import { requireApiCapability } from "@/lib/auth/request";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
+  const authorization = await requireApiCapability(req, "analysis.run");
+  if (!authorization.ok) return authorization.response;
   const q = req.nextUrl.searchParams.get("q")?.trim() ?? "";
 
   if (q.length < 2) {

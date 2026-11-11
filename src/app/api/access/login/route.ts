@@ -1,16 +1,37 @@
 import { NextResponse } from "next/server";
+import { JSON_REQUEST_LIMITS, readJsonObject } from "@/lib/http/json-request";
 import {
+  authenticateSiteAccess,
   createSiteAccessToken,
   isSiteAccessConfigured,
-  matchesSitePassword,
+  siteAccessConfiguration,
   siteAccessCookie,
+  siteAccessSessionMaxAge,
 } from "@/lib/site-access";
+import {
+  AuthorizationBackendUnavailableError,
+  authorizationUnavailableResponse,
+  publicPrincipal,
+  resolveCurrentPrincipal,
+} from "@/lib/auth/request";
 import {
   clearSiteAccessAttempts,
   reserveSiteAccessAttempt,
 } from "@/lib/runtime/site-access-rate-limit";
 
 export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const configuration = siteAccessConfiguration();
+  return NextResponse.json(
+    {
+      configured: configuration.configured,
+      requiresEmail: configuration.requiresEmail,
+      sessionHours: siteAccessSessionMaxAge() / 60 / 60,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
 
 function requestIdentity(request: Request): string {
   const forwarded = request.headers
@@ -32,7 +53,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const identity = requestIdentity(request);
+  const input = await readJsonObject(request, { maxBytes: JSON_REQUEST_LIMITS.login, maxDepth: 4, maxNodes: 32 });
+  if (!input.ok) return input.response;
+  const body = input.value;
+  const email = typeof body?.email === "string" ? body.email : "";
+  const password = typeof body?.password === "string" ? body.password : "";
+  const identity = `${requestIdentity(request)}:${email.trim().toLowerCase()}`;
   const attempt = reserveSiteAccessAttempt({ identity });
   if (!attempt.allowed) {
     const retryAfter = Math.max(
@@ -50,28 +76,60 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = (await request.json().catch(() => null)) as
-    | { password?: unknown }
-    | null;
-  const password = typeof body?.password === "string" ? body.password : "";
-
-  if (!(await matchesSitePassword(password))) {
+  const authenticatedPrincipal = await authenticateSiteAccess({ email, password });
+  if (!authenticatedPrincipal) {
     return NextResponse.json(
       { error: "비밀번호가 올바르지 않습니다." },
       { status: 401 },
     );
   }
 
+  let principal;
+  try {
+    principal = await resolveCurrentPrincipal(authenticatedPrincipal);
+  } catch (error) {
+    if (error instanceof AuthorizationBackendUnavailableError) {
+      return authorizationUnavailableResponse();
+    }
+    throw error;
+  }
+  if (!principal) {
+    return NextResponse.json(
+      {
+        code: "MEMBERSHIP_FORBIDDEN",
+        error: "활성 조직 멤버십을 확인할 수 없습니다.",
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   clearSiteAccessAttempts(identity);
-  const response = NextResponse.json({ ok: true });
+  const response = NextResponse.json({
+    ok: true,
+    principal: publicPrincipal(principal),
+  });
   response.cookies.set({
     name: siteAccessCookie.name,
-    value: await createSiteAccessToken(),
+    value: await createSiteAccessToken(authenticatedPrincipal),
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: siteAccessCookie.maxAge,
+    maxAge: siteAccessSessionMaxAge(),
+  });
+  return response;
+}
+
+export async function DELETE() {
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set({
+    name: siteAccessCookie.name,
+    value: "",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
   });
   return response;
 }

@@ -19,31 +19,12 @@
  */
 
 import type { BuildingProgram, BuildingType } from "@/lib/finance/types";
+import {
+  calcParking,
+  type CalcParkingOptions,
+} from "@/lib/finance/parking";
 
 /* ─────────────────────────── 주차 의무대수 ─────────────────────────── */
-
-/**
- * 용도별 주차 의무 (1대당 시설면적, m²).
- * 작을수록 더 많은 주차 필요.
- *
- * 서울시 부설주차장 설치기준 (2024-2025 기준).
- */
-const PARKING_PER_SQM: Record<BuildingType, number> = {
-  // 오피스텔: 호당 1대 → 전용 60-85m² 평균 기준 75m²/대
-  officetel: 75,
-  // 공유주거: 전용 30-50m² 평균, 완화 적용
-  coliving: 100,
-  // 도시형생활주택: 세대당 0.6-0.7대 → 평균 85m²/대
-  "urban-housing": 85,
-  // 근린생활시설: 시설면적 134m²당 1대
-  retail: 134,
-  "single-house": 250, // 단독: 1-2대 (가구당) — 가장 적음
-  "multi-family": 130, // 다가구: 호당 0.5-0.7대
-  // 사무실/업무시설: 시설면적 134m²당 1대
-  office: 134,
-  // 복합용도: 가중평균 (주거+상가 절반씩 가정)
-  mixed: 100,
-};
 
 /**
  * 주차 1대당 점유 면적 (m², 차로 + 회전 공간 포함).
@@ -66,44 +47,41 @@ export interface ParkingResult {
 
 export function calculateParking(
   program: BuildingProgram,
-  gfa: number
+  gfa: number,
+  options: Pick<CalcParkingOptions, "context"> = {}
 ): ParkingResult {
-  const type = program.type;
-  const sqmPerSpace = PARKING_PER_SQM[type] ?? 100;
-
-  // 용도별 GFA 분배
-  // 주거 (분양 + 임대) vs 상가
   const residentialRatio =
     program.mix.residentialSale + program.mix.residentialLease;
   const retailRatio = program.mix.retail;
-
-  const residentialGFA = gfa * residentialRatio;
-  const retailGFA = gfa * retailRatio;
-
-  // 주거: 용도 기준 (officetel/coliving 등)
-  const residentialSpaces = residentialGFA > 0
-    ? Math.ceil(residentialGFA / sqmPerSpace)
-    : 0;
-
-  // 상가: 134m²당 1대 고정
-  const retailSpaces = retailGFA > 0
-    ? Math.ceil(retailGFA / 134)
-    : 0;
-
-  const requiredSpaces = residentialSpaces + retailSpaces;
+  const residentialAreaSqm =
+    program.type === "single-house" || program.type === "multi-family"
+      ? gfa
+      : program.type === "retail" || program.type === "office"
+        ? 0
+        : gfa * residentialRatio;
+  const retailAreaSqm =
+    program.type === "retail" ? gfa : gfa * retailRatio;
+  const officeAreaSqm =
+    program.type === "office" ? Math.max(0, gfa - retailAreaSqm) : 0;
+  const parking = calcParking(
+    program.type,
+    gfa,
+    program.units.residential,
+    program.units.retail,
+    {
+      context: options.context,
+      residentialAreaSqm,
+      retailAreaSqm,
+      officeAreaSqm,
+    }
+  );
+  const requiredSpaces = parking.requiredCars;
   const parkingArea = requiredSpaces * SQM_PER_PARKING_SPACE;
-
-  const reasoning =
-    residentialSpaces > 0 && retailSpaces > 0
-      ? `주거 ${residentialSpaces}대 (${residentialGFA.toFixed(0)}m² ÷ ${sqmPerSpace}m²) + 상가 ${retailSpaces}대`
-      : residentialSpaces > 0
-        ? `주거 ${residentialSpaces}대 (${residentialGFA.toFixed(0)}m² ÷ ${sqmPerSpace}m²)`
-        : `상가 ${retailSpaces}대 (${retailGFA.toFixed(0)}m² ÷ 134m²)`;
 
   return {
     requiredSpaces,
     parkingArea,
-    reasoning,
+    reasoning: `${parking.basis} · ${parking.rule.id}`,
   };
 }
 
@@ -229,9 +207,10 @@ export interface EffectiveGFAResult {
 
 export function calculateEffectiveGFA(
   program: BuildingProgram,
-  rawGFA: number
+  rawGFA: number,
+  parkingOptions: Pick<CalcParkingOptions, "context"> = {}
 ): EffectiveGFAResult {
-  const parking = calculateParking(program, rawGFA);
+  const parking = calculateParking(program, rawGFA, parkingOptions);
   const core = calculateCore(program.floorsAbove, rawGFA, program.type);
 
   // 보수적 계산: 주차 + 코어 + 공용 모두 GFA에서 차감

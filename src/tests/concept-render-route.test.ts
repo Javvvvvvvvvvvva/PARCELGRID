@@ -19,14 +19,14 @@ describe("concept render API", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
   const originalModel = process.env.OPENAI_IMAGE_MODEL;
   const originalStorage = process.env.CONCEPT_RENDER_STORAGE_DIR;
-  const originalSourceKey = process.env.SOURCE_DOCUMENT_UPLOAD_KEY;
+  const originalAuditStorage = process.env.AUDIT_LEDGER_STORAGE_DIR;
   let storageDirectory = "";
 
   beforeEach(async () => {
     resetConceptRenderQuotaForTests();
     storageDirectory = await mkdtemp(path.join(os.tmpdir(), "parcelgrid-render-"));
     process.env.CONCEPT_RENDER_STORAGE_DIR = storageDirectory;
-    delete process.env.SOURCE_DOCUMENT_UPLOAD_KEY;
+    process.env.AUDIT_LEDGER_STORAGE_DIR = path.join(storageDirectory, "audit");
   });
 
   afterEach(async () => {
@@ -38,8 +38,8 @@ describe("concept render API", () => {
     else process.env.OPENAI_IMAGE_MODEL = originalModel;
     if (originalStorage == null) delete process.env.CONCEPT_RENDER_STORAGE_DIR;
     else process.env.CONCEPT_RENDER_STORAGE_DIR = originalStorage;
-    if (originalSourceKey == null) delete process.env.SOURCE_DOCUMENT_UPLOAD_KEY;
-    else process.env.SOURCE_DOCUMENT_UPLOAD_KEY = originalSourceKey;
+    if (originalAuditStorage == null) delete process.env.AUDIT_LEDGER_STORAGE_DIR;
+    else process.env.AUDIT_LEDGER_STORAGE_DIR = originalAuditStorage;
   });
 
   it("returns a configuration error before accepting image bytes without a key", async () => {
@@ -63,7 +63,8 @@ describe("concept render API", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: string, init?: RequestInit) => {
-        captured.upstream = init?.body as FormData;
+        expect(init?.body).toBeInstanceOf(ArrayBuffer);
+        captured.upstream = await new Request("http://localhost/synthetic-provider", init).formData();
         return new Response(
           JSON.stringify({
             data: [{ b64_json: Buffer.from(PNG).toString("base64") }],

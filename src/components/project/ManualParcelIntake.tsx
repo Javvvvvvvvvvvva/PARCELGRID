@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import { FileUp } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { Download, FileUp } from "lucide-react";
 import { Button, Panel } from "@/components/ui/primitives";
 import {
   boundaryAreaDifferencePct,
   boundaryCenterDistanceM,
   parseManualParcelBoundaryGeoJson,
+  PARCEL_BOUNDARY_INPUT_LIMITS,
   type ParsedManualParcelBoundary,
 } from "@/lib/geo/manual-parcel-boundary";
 import type {
@@ -23,7 +24,7 @@ interface ManualParcelIntakeProps {
   onApply: (parcel: ParcelLookupComplete) => void;
 }
 
-const MAX_GEOJSON_BYTES = 5 * 1024 * 1024;
+const MAX_GEOJSON_BYTES = PARCEL_BOUNDARY_INPUT_LIMITS.maxBytes;
 
 function numeric(value: string): number | null {
   if (!value.trim()) return null;
@@ -60,6 +61,8 @@ export default function ManualParcelIntake({
     useState<ParsedManualParcelBoundary | null>(null);
   const [boundaryFileName, setBoundaryFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const boundaryLoadId = useRef(0);
+  const [boundaryLoading, setBoundaryLoading] = useState(false);
 
   const officialArea = numeric(lotArea);
   const areaDifference = boundary
@@ -72,30 +75,49 @@ export default function ManualParcelIntake({
       )
     : null;
 
+  const downloadSourceGeometry = () => {
+    const source = lookup.sourceGeometry;
+    if (!source) return;
+    const feature = { type: "Feature", properties: { pnu: source.pnu, source: "VWorld LP_PA_CBND_BUBUN", verification: "unconfirmed", measuredAreaSqm: source.measuredAreaSqm },
+      geometry: { type: "MultiPolygon", coordinates: source.polygons } };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(feature, null, 2)], { type: "application/geo+json" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = `parcel-${source.pnu}-source.geojson`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const loadBoundary = async (file: File | null) => {
+    const loadId = ++boundaryLoadId.current;
+    setBoundaryLoading(false);
     setError(null);
     setBoundary(null);
     setBoundaryFileName(null);
     if (!file) return;
     if (file.size > MAX_GEOJSON_BYTES) {
-      setError("필지 GeoJSON은 5MB 이하여야 합니다.");
+      setError("필지 GeoJSON은 1,500,000바이트 이하여야 합니다.");
       return;
     }
+    setBoundaryLoading(true);
     try {
       const parsed = parseManualParcelBoundaryGeoJson(await file.text());
+      if (loadId !== boundaryLoadId.current) return;
       setBoundary(parsed);
       setBoundaryFileName(file.name);
-      if (!lotArea.trim()) setLotArea(parsed.measuredAreaSqm.toFixed(2));
+      setLotArea(current => current.trim() ? current : parsed.measuredAreaSqm.toFixed(2));
     } catch (loadError) {
+      if (loadId !== boundaryLoadId.current) return;
       setError(
         loadError instanceof Error
           ? loadError.message
           : "필지 GeoJSON을 읽을 수 없습니다.",
       );
+    } finally {
+      if (loadId === boundaryLoadId.current) setBoundaryLoading(false);
     }
   };
 
   const apply = () => {
+    if (boundaryLoading) return;
     setError(null);
     const area = numeric(lotArea);
     const far = numeric(maxFAR);
@@ -190,6 +212,7 @@ export default function ManualParcelIntake({
       mode: "manual",
       lotArea: area,
       boundary: boundary?.boundary,
+      boundaryPolygons: boundary?.polygons,
       roads: [],
       jimok,
       jimokCode: "",
@@ -225,6 +248,14 @@ export default function ManualParcelIntake({
             제한됩니다.
           </span>
         </div>
+
+        {lookup.sourceGeometry && (
+          <div className="manual-alert" role="note">
+            <span>원형 {lookup.sourceGeometry.polygons.length}개 조각 · 내부 제외 영역 {lookup.sourceGeometry.polygons.reduce((sum, rings) => sum + rings.length - 1, 0)}개 · 기하 참고면적 <span style={{ whiteSpace: "nowrap" }}>{lookup.sourceGeometry.measuredAreaSqm.toFixed(2)}㎡</span></span>
+            <span>공부상 면적·위상 적합성은 미확정입니다. 내부 영역을 채우거나 조각을 삭제한 경계로 대체하지 마세요.</span>
+            <Button onClick={downloadSourceGeometry}><Download size={14} aria-hidden="true" /> 원형 GeoJSON</Button>
+          </div>
+        )}
 
         <div className="manual-fields">
           <Field label="공부상 대지면적" required>
@@ -327,12 +358,12 @@ export default function ManualParcelIntake({
           <div>
             <strong>필지 경계 GeoJSON</strong>
             <span>
-              WGS84 Polygon 한 개를 연결하면 Stage 2 형상 검토를 이어갈 수 있습니다.
+              WGS84 Polygon·MultiPolygon · 공식 경계 미확정
             </span>
           </div>
           <label className="file-button">
             <FileUp size={15} aria-hidden="true" />
-            <span>{boundaryFileName ?? "GeoJSON 선택"}</span>
+            <span>{boundaryLoading ? "경계 확인 중" : boundaryFileName ?? "GeoJSON 선택"}</span>
             <input
               type="file"
               accept=".geojson,.json,application/geo+json,application/json"
@@ -344,6 +375,7 @@ export default function ManualParcelIntake({
         {boundary && (
           <p className={areaDifference != null && areaDifference > 3 ? "area-note warn" : "area-note"}>
             계산면적 {boundary.measuredAreaSqm.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}㎡
+            {` · ${boundary.polygons.length}개 조각 · 내부 제외 영역 ${boundary.polygons.reduce((sum, part) => sum + part.holes.length, 0)}개`}
             {areaDifference != null
               ? ` · 공부상 면적과 ${areaDifference.toFixed(1)}% 차이`
               : ""}
@@ -355,7 +387,7 @@ export default function ManualParcelIntake({
         {error && <p className="manual-error">{error}</p>}
 
         <div className="manual-actions">
-          <Button type="button" variant="primary" onClick={apply}>
+          <Button type="button" variant="primary" onClick={apply} disabled={boundaryLoading}>
             수동 토지 정보 적용
           </Button>
         </div>

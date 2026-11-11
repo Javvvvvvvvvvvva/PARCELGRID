@@ -63,12 +63,126 @@ describe("calculateScenario", () => {
     expect(r.profitMargin).toBeLessThan(60);
   });
 
-  it("returns sensible numeric ranges for IRR/DSCR/EquityMultiple", () => {
+  it("does not fabricate DSCR from PF interest when take-out terms are absent", () => {
     const r = calculateScenario({ parcel, scenario: makeScenario() });
     expect(r.irr).toBeGreaterThan(0);
     expect(r.irr).toBeLessThan(200); // Korean dev IRR can be 50-150% on prime sites
-    expect(r.dscr).toBeGreaterThan(0);
+    expect(r.dscr).toBe(0);
+    expect(r.dscrStatus).toBe("terms-missing");
+    expect(r.takeout.status).toBe("terms-missing");
     expect(r.equityMultiple).toBeGreaterThan(1);
+  });
+
+  it("computes take-out DSCR from level monthly principal and interest", () => {
+    const r = calculateScenario({
+      parcel,
+      scenario: makeScenario({
+        takeoutLtv: 60,
+        takeoutInterestRate: 5.2,
+        takeoutAmortizationYears: 25,
+        takeoutLoanTermYears: 25,
+        takeoutMinDscr: 1.3,
+        takeoutLoanCommitmentManwon: 0,
+        takeoutFeeRate: 1,
+      }),
+    });
+
+    expect(r.dscrStatus).toBe("takeout-amortizing");
+    expect(r.takeout.status).toBe("modeled-unverified");
+    expect(r.dscr).toBeGreaterThanOrEqual(1.3);
+    expect(r.takeout.annualDebtServiceManwon).toBeGreaterThan(0);
+    expect(r.takeout.modeledLoanManwon).toBeLessThanOrEqual(
+      r.takeout.ltvLimitManwon ?? 0,
+    );
+  });
+
+  it("keeps long-term hold returns separate from the stabilization-sale metrics", () => {
+    const assumptions = {
+      ...defaultAssumptions(),
+      rentPerSqMMonth: 100_000,
+      takeoutLtv: 60,
+      takeoutInterestRate: 5.2,
+      takeoutAmortizationYears: 25,
+      takeoutLoanTermYears: 25,
+      takeoutMinDscr: 1.3,
+      takeoutLoanCommitmentManwon: 0,
+      takeoutFeeRate: 1,
+    };
+    const leaseScenario: Scenario = {
+      id: "HOLD",
+      name: "근생 장기 보유",
+      shortName: "보유",
+      program: defaultProgram("retail", parcel.maxFAR, parcel.maxBCR),
+      assumptions,
+    };
+    const stabilizationSale = calculateScenario({
+      parcel,
+      scenario: leaseScenario,
+    });
+    const hold = calculateScenario({
+      parcel,
+      scenario: {
+        ...leaseScenario,
+        assumptions: {
+          ...assumptions,
+          holdPeriodYears: 5,
+          annualRentGrowthRate: 2,
+          annualExpenseGrowthRate: 3,
+          rentFreeMonths: 2,
+          tenantImprovementPerSqM: 50_000,
+          leasingCommissionRate: 3,
+          securityDepositMonths: 3,
+          tenantLeaseTermMonths: 120,
+          replacementReservePerSqMYear: 5_000,
+          majorRepairYear: 3,
+          majorRepairCostManwon: 2_000,
+          holdExitCapRate: 5.5,
+          exitSellingCostRate: 1,
+        },
+      },
+    });
+
+    expect(stabilizationSale.hold.status).toBe("not-configured");
+    expect(hold.hold.rows).toHaveLength(61);
+    expect(hold.hold.combinedEquityCashFlowsManwon).toHaveLength(
+      hold.totalMonths + 1 + 60,
+    );
+    expect(hold.profit).toBe(stabilizationSale.profit);
+    expect(hold.npv).toBe(stabilizationSale.npv);
+    expect(hold.irr).toBe(stabilizationSale.irr);
+    expect(hold.totalMonths).toBe(stabilizationSale.totalMonths);
+  });
+
+  it("keeps sale proceeds while holding and rolling the lease pools in a mixed case", () => {
+    const result = calculateScenario({
+      parcel,
+      scenario: makeScenario({
+        rentPerSqMMonth: 100_000,
+        takeoutLtv: 60,
+        takeoutInterestRate: 5.2,
+        takeoutAmortizationYears: 25,
+        takeoutLoanTermYears: 10,
+        takeoutMinDscr: 1.3,
+        holdPeriodYears: 5,
+        holdExitCapRate: 5.5,
+        tenantLeaseTermMonths: 24,
+        tenantRenewalProbability: 50,
+        replacementDowntimeMonths: 2,
+        replacementRentFreeMonths: 1,
+        replacementTenantImprovementPerSqM: 50_000,
+        replacementLeasingCommissionRate: 4,
+      }),
+    });
+
+    expect(result.revenueSale).toBeGreaterThan(0);
+    expect(result.revenueLease + result.revenueRetail).toBeGreaterThan(0);
+    expect(result.hold.strategyMode).toBe("mixed-sale-lease");
+    expect(result.hold.developmentSaleRevenueManwon).toBeCloseTo(
+      result.revenueSale,
+      6,
+    );
+    expect(result.hold.tenantRolloverEvents).toHaveLength(2);
+    expect(result.hold.rows).toHaveLength(61);
   });
 
   it("GFA scales linearly with FAR", () => {

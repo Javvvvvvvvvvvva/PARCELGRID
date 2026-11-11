@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,11 +35,17 @@ const nextConfig = {
   // internals correctly (fixes 'ReactCurrentOwner' undefined runtime error).
   transpilePackages: ["three", "@react-three/fiber", "@react-three/drei"],
 
-  serverExternalPackages: ["postgres"],
+  // concaveman's CommonJS RBush constructor must use Node resolution;
+  // bundling it into the RSC graph selects an incompatible ESM namespace.
+  serverExternalPackages: ["postgres", "concaveman"],
 
   // Production: pin to a single image domain for the V월드 / NAVER static
   // tiles used by the comps map. Left empty during local dev.
   images: { remotePatterns: [] },
 };
 
-export default nextConfig;
+/** @param {string} phase */
+export default function configForPhase(phase) {
+  // A production verification build must not delete a running dev server's chunks.
+  return { ...nextConfig, distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next" };
+}

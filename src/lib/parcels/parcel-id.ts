@@ -15,8 +15,9 @@ export function pnuFromParcelAddress(
   input: ParcelAddressIdentity,
 ): string | null {
   if (!/^\d{10}$/.test(input.bCode)) return null;
+  if (input.mountainYn !== "Y" && input.mountainYn !== "N") return null;
   const main = normalizedLotNumber(input.mainAddressNo);
-  if (!main) return null;
+  if (!main || main === "0000") return null;
   const sub = input.subAddressNo?.trim()
     ? normalizedLotNumber(input.subAddressNo)
     : "0000";
