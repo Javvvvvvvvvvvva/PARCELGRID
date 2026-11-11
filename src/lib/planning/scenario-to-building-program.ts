@@ -11,6 +11,7 @@ import { evaluateQuantityCost } from "@/lib/planning/quantity-cost";
 import { quantityCostPlanBasis, type QuantityCostContract } from "@/lib/planning/quantity-cost-contract";
 import { calculatePlanningMaterialAdjustment } from "@/lib/planning/materials";
 import { additionalDwellingCostManwon } from "@/lib/planning/dwelling-program";
+import { planningGeometryInputBasis, type PlanningGeometrySnapshot } from "./planning-geometry";
 import type {
   PlanningScenario,
   PlanningScenarioCalculation,
@@ -64,6 +65,7 @@ function mixFromRevenueAreas(
 
 export interface PlanningBuildingProgramOptions {
   geometryHash?: string;
+  geometry?: PlanningGeometrySnapshot;
 }
 
 function validateQuantityCostSnapshot(
@@ -71,6 +73,7 @@ function validateQuantityCostSnapshot(
   calculation: PlanningScenarioCalculation,
   contract: QuantityCostContract,
   adjustmentManwon: number,
+  geometry?: PlanningGeometrySnapshot,
 ): void {
   const preview = calculation.economicsPreview;
   const inputs = preview.costInputs!;
@@ -95,7 +98,18 @@ function validateQuantityCostSnapshot(
 
   // Derive from raw amounts, not individually rounded preview components.
   const base = contract.baseConstructionCostWon / 10_000;
-  const material = calculatePlanningMaterialAdjustment(scenario).adjustmentManwon;
+  const needsGeometry = preview.facadeCost?.areaBasis === "geometry-derived" ||
+    Object.keys(scenario.materials?.faceAssignments ?? {}).length > 0;
+  if ((needsGeometry && !geometry) || (geometry && (geometry.projectId !== scenario.projectId ||
+      geometry.scenarioId !== scenario.id || geometry.scenarioVersion !== scenario.version ||
+      geometry.scenarioInputBasis !== planningGeometryInputBasis(scenario)))) {
+    throw new Error("Stage 2/3 외벽 원가를 검증할 현재 형상 원본이 필요합니다.");
+  }
+  const materialResult = calculatePlanningMaterialAdjustment(scenario, geometry);
+  if (preview.facadeCost && materialResult.costKey !== preview.facadeCost.costKey) {
+    throw new Error("Stage 2/3 외벽 수량·단가 비용 스냅샷이 다릅니다.");
+  }
+  const material = materialResult.adjustmentManwon;
   const dwelling = additionalDwellingCostManwon(scenario.floorPrograms, scenario.dwellingProgram);
   const hard = base + material + dwelling + adjustmentManwon;
   if (!Number.isFinite(hard) || hard < 0) {
@@ -181,7 +195,7 @@ export function planningScenarioToBuildingProgram(
         `Stage 2/3 상세 수량 원가를 다시 검증해야 합니다: ${quantityCost.issues.join(" · ") || quantityCost.status}`
       );
     }
-    validateQuantityCostSnapshot(scenario, calculation, quantityCost.contract, quantityCost.adjustmentManwon);
+    validateQuantityCostSnapshot(scenario, calculation, quantityCost.contract, quantityCost.adjustmentManwon, options.geometry);
     quantityCostAdjustment = quantityCost.contract;
   }
 

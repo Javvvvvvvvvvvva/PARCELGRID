@@ -8,6 +8,9 @@ import { quantityAdjustmentForBase, quantityCostPlanBasis, type QuantityCostCont
 import { calculatePlanningScenario, planningEconomicsAssumptionsFromLegacy } from "@/lib/planning/scenario-calculator";
 import { planningScenarioToBuildingProgram } from "@/lib/planning/scenario-to-building-program";
 import { integratedVerificationFixture } from "./helpers/integrated-verification-fixture";
+import { createDefaultPlanningMaterials } from "@/lib/planning/materials";
+import { buildPlanningGeometry } from "@/lib/planning/planning-geometry";
+import { recomputeFromPlanningScenarios } from "@/lib/services/recompute-from-planning-scenarios";
 
 const original = integratedVerificationFixture();
 
@@ -49,6 +52,30 @@ function updateOriginalBase(contract: QuantityCostContract) {
 }
 
 describe("Stage 3 original quantity cost binding", () => {
+  it("keeps geometry-derived facade costs when quantity replacement is also active", () => {
+    const f = fixture();
+    f.scenario.materials = { ...createDefaultPlanningMaterials(), primaryFacadeMaterial: "brick-veneer",
+      baselineFacadeUnitCostPerSqmWon: 100000, selectedFacadeUnitCostPerSqmWon: 150000 };
+    f.draft.sourceBasis = createQuantityCostDraft(f.scenario, f.inputs).sourceBasis;
+    const context = { ...f.context, parcel: { ...f.context.parcel, boundary: f.parcel.boundary,
+      roads: f.parcel.roads, zoning: "일반상업지역", setback: { road: 0, side: 0, rear: 0 } } };
+    const calculation = calculatePlanningScenario(f.scenario, context);
+    const geometry = buildPlanningGeometry({ projectId: f.scenario.projectId!, scenario: f.scenario,
+      boundary: context.parcel.boundary, roads: context.parcel.roads, zoning: context.parcel.zoning,
+      setback: context.parcel.setback, lotAreaSqm: 900, sunlight: calculation.sunlight,
+      roofAllowanceM: calculation.metrics.roofAllowanceM }).snapshot;
+    expect(calculation.economicsPreview.facadeCost?.areaBasis).toBe("geometry-derived");
+    const program = planningScenarioToBuildingProgram(f.scenario, calculation, { geometry });
+    const result = calculateScenario({ parcel: f.parcel, scenario: { ...f.financial, program } });
+    expect(Math.abs(result.hardCost - calculation.economicsPreview.constructionCostManwon)).toBeLessThanOrEqual(0.51);
+    const recomputed = recomputeFromPlanningScenarios({ ...f.parcel, zoning: "일반상업지역",
+      setback: { road: 0, side: 0, rear: 0 } }, [f.scenario], f.scenario.id, null, { calculateMaxAcquisition: false });
+    expect(recomputed?.scenarios[0]._raw.program.areaContract?.facadeCost?.areaBasis).toBe("geometry-derived");
+    expect(recomputed?.scenarios[0]._raw.program.areaContract?.quantityCostAdjustment).toBeDefined();
+    expect(() => planningScenarioToBuildingProgram(f.scenario, calculation)).toThrow(/형상/);
+    geometry.scenarioVersion += 1;
+    expect(() => planningScenarioToBuildingProgram(f.scenario, calculation, { geometry })).toThrow(/형상/);
+  });
   it("rejects a forged base that would otherwise subtract the entire current GFA cost", () => {
     const f = fixture();
     f.contract.baseConstructionCostWon = f.contract.allowanceWon;

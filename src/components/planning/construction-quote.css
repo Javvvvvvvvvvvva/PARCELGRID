@@ -49,3 +49,10 @@
   .lv-quote .lv-actions > .lv-note { flex-basis: 100%; }
   .lv-quote-allocation-fields { grid-template-columns: minmax(0, 1fr); }
 }
+.lv-quote-adoption { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 16px; min-width: 0; }
+.lv-quote-adoption-scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.lv-quote-adoption-scope { min-width: 0; }
+.lv-quote-adoption-scope > label:first-child { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.lv-quote-adoption-scope input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 2px; }
+.lv-quote-adoption :is(p, li, label, dt, dd) { overflow-wrap: anywhere; }
+@media (max-width: 640px) { .lv-quote-adoption-scopes { grid-template-columns: minmax(0, 1fr); } }

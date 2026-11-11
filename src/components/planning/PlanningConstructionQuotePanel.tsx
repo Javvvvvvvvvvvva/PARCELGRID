@@ -12,6 +12,7 @@ import { evaluateConstructionQuoteCostComparison } from "@/lib/planning/construc
 import { isPlanningGeometryLocked } from "@/lib/planning/geometry-source";
 import { ConstructionQuoteImport } from "./ConstructionQuoteImport";
 import { ConstructionQuoteCostComparison } from "./ConstructionQuoteCostComparison";
+import { ConstructionQuoteAdoptionReview } from "./ConstructionQuoteAdoptionReview";
 import { ConstructionScopeLedgerSummary } from "@/components/handoff/ConstructionScopeLedgerSummary";
 import type { QuantityCostInputs } from "@/lib/planning/quantity-cost-contract";
 import { QUANTITY_ITEM_IDS } from "@/lib/planning/quantity-takeoff";
@@ -538,6 +539,15 @@ function ConstructionQuoteEditor({ scenario, inputs, geometry, locked: lockedPro
           </dl>
           <p className="lv-note">BASE는 현재 연면적·기본 단가·지하층 배율의 산술값입니다. 기본단가만 비교한 차액은 재료비·추가 세대·상세 수량 원가 증감을 제외한 참고값이며 절감액·사업비 반영액을 뜻하지 않습니다. 미확정·불일치가 있는 견적의 차액은 미산정입니다.</p>
           {currentQuoteReview && <ConstructionQuoteCostComparison comparison={currentQuoteReview.comparison} />}
+          {currentQuoteReview && <ConstructionQuoteAdoptionReview key={currentQuoteReview.key}
+            scenario={{ ...scenario, constructionQuote: quote! }} inputs={costInputs} geometry={geometry}
+            readCurrent={() => {
+              const current = readCurrent(false);
+              if (constructionQuoteBasis(current, costInputs) !== basis.value || comparisonCostKey(current) !== comparisonKey) {
+                throw new Error("계획·원가 기준이 바뀌었습니다. 대사를 다시 실행해야 합니다.");
+              }
+              return { ...current, constructionQuote: quote! };
+            }} />}
           <div className="lv-table-wrap"><table><caption>모델 예비 수량과 견적 수량 대사</caption>
             <thead><tr><th scope="col">수량 항목</th><th scope="col">단위</th><th scope="col">모델 예비 수량</th><th scope="col">견적 수량</th><th scope="col">입력 대사</th></tr></thead>
             <tbody>{currentReview.quantities.map(item => <tr key={item.id}>
