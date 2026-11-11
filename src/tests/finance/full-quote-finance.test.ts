@@ -3,7 +3,11 @@ import { constructionQuoteFixture } from "../helpers/construction-quote-fixture"
 import { fullQuoteAdoptionFixture } from "../helpers/full-quote-adoption-fixture";
 import { createQuoteAdoptionReviewDraft } from "@/lib/planning/construction-quote-adoption-review";
 import { applyFullQuoteAdoption } from "@/lib/planning/full-quote-adoption";
-import { calculateScenario, minimumConstructionCostRate, type CalcInput } from "@/lib/finance/scenario";
+import { calculateScenario, calculateScenarioWithFullQuoteStress, FULL_QUOTE_STRESS_VERSION, minimumConstructionCostRate, type CalcInput } from "@/lib/finance/scenario";
+import { buildConstructionScopeLedger, MAX_CONSTRUCTION_QUOTE_AMOUNT_WON } from "@/lib/planning/construction-quote";
+import { buildProjectLedger } from "@/lib/finance/project-ledger";
+import { blendedRevenueUnitPrice, revenuePricingForScenario, valueRevenueAreaPools } from "@/lib/finance/revenue-contract";
+import { D } from "@/lib/finance/math";
 import { calculateScenarioWithCostSensitivity, verifiedConstructionCostSensitivity } from "@/lib/finance/construction-cost-sensitivity";
 import { buildDealStressTest } from "@/lib/finance/deal-stress-test";
 import { findDealRescuePaths, passesDealRescueTarget } from "@/lib/finance/deal-rescue";
@@ -94,6 +98,7 @@ describe("adopted full quote financial consumers", () => {
     input.scenario.program.areaContract!.quantityCostAdjustment = quantity.contract!;
     for (const evaluate of [
       () => calculateScenario(input),
+      () => calculateScenarioWithFullQuoteStress(input, 10),
       () => minimumConstructionCostRate(input),
       () => calculateScenarioWithCostSensitivity(input),
       () => buildDealStressTest(input.parcel, input.scenario),
@@ -186,19 +191,97 @@ describe("adopted full quote financial consumers", () => {
     expect(input).toEqual(before);
   });
 
-  it("keeps revenue, finance and delay stress operational with no quote cost threshold", () => {
+  it("separates explicit quote increase stress from unit-rate thresholds", () => {
     const input = fixture(), before = structuredClone(input);
     input.scenario.assumptions.constCostPerSqM = 1_000_000_000;
     const stress = buildDealStressTest(input.parcel, input.scenario);
     expect(stress.thresholds.map(row => row.id)).toEqual(["land-price", "revenue-price", "pf-rate"]);
-    expect(stress.stressCases.map(row => row.id)).toEqual(["revenue-down-10", "rate-up-1_5", "delay-3", "combined-downside"]);
+    expect(stress.stressCases.map(row => row.id)).toEqual(["revenue-down-10", "full-quote-increase", "rate-up-1_5", "delay-3", "combined-downside"]);
     expect(stress.costStressUnavailableReason).toBeTruthy();
-    for (const row of stress.stressCases) expect(row.result.hardCost).toBe(stress.baseline.hardCost);
+    for (const row of stress.stressCases.filter(row => !row.quoteCostStress)) expect(row.result.hardCost).toBe(stress.baseline.hardCost);
     expect(stress.stressCases[0].result.totalRevenue).toBeCloseTo(stress.baseline.totalRevenue * 0.9, 0);
-    expect(stress.stressCases[1].result.interestCost).toBeGreaterThan(stress.baseline.interestCost);
-    expect(stress.stressCases[2].result.totalMonths).toBe(stress.baseline.totalMonths + 3);
-    expect(stress.stressCases[3].changes.join(" ")).not.toContain("+10%");
+    expect(stress.stressCases[2].result.interestCost).toBeGreaterThan(stress.baseline.interestCost);
+    expect(stress.stressCases[3].result.totalMonths).toBe(stress.baseline.totalMonths + 3);
+    expect(stress.stressCases[4].changes.join(" ")).toContain("견적 대비 추가 공사비 +10%");
+    expect(stress.stressCases[4].changes.join(" ")).not.toContain("기본 공사단가 +10%");
     expect(input.scenario.program).toEqual(before.scenario.program);
+  });
+
+  it.each([0, 5, 12.5, 100])("replays a %s%% quote risk overlay through the same monthly ledger without mutating the quote", increasePct => {
+    const input = fixture(), before = structuredClone(input);
+    input.scenario.assumptions.pfUpfrontFeeRate = 1;
+    before.scenario.assumptions.pfUpfrontFeeRate = 1;
+    freezeDeep(input);
+    const baseline = calculateScenario(input);
+    const evaluated = calculateScenarioWithFullQuoteStress(input, increasePct);
+    const quote = input.scenario.program.areaContract!.fullQuoteCost!;
+    const hard = D(quote.totalWon).times(D(100).plus(increasePct)).div(100).div(10000);
+    const soft = hard.times(input.scenario.assumptions.softCostRate).div(100);
+    const contingency = hard.plus(soft).times(input.scenario.assumptions.contingencyRate).div(100);
+    const revenue = valueRevenueAreaPools(input.scenario.program.areaContract!.revenueAreas, revenuePricingForScenario(input.scenario));
+    const ledger = buildProjectLedger({ ...input, revenueByPool: revenue.valueByPoolManwon,
+      hardCost: hard.toNumber(), softCost: soft.toNumber(), contingency: contingency.toNumber() });
+    expect(evaluated.basis).toMatchObject({ version: FULL_QUOTE_STRESS_VERSION, kind: "illustrative-cost-increase",
+      sourceKey: quote.sourceKey, originalQuoteTotalWon: quote.totalWon, increasePct });
+    expect(evaluated.basis.additionalCostWon).toBe(D(quote.totalWon).times(increasePct).div(100).toNumber());
+    expect(evaluated.result.hardCost).toBe(hard.toDecimalPlaces(0).toNumber());
+    expect(evaluated.result.softCost).toBe(soft.toDecimalPlaces(0).toNumber());
+    expect(evaluated.result.contingency).toBe(contingency.toDecimalPlaces(0).toNumber());
+    expect(evaluated.result.equityCashFlowsManwon).toEqual(ledger.equityCashFlows);
+    expect(evaluated.result.totalRevenue).toBe(baseline.totalRevenue);
+    expect(evaluated.result.parkingSpaces).toBe(baseline.parkingSpaces);
+    if (increasePct === 0) expect(evaluated.result).toEqual(baseline);
+    else {
+      expect(evaluated.result.pfFee).toBeGreaterThan(baseline.pfFee);
+      expect(evaluated.result.interestCost).toBeGreaterThan(baseline.interestCost);
+      expect(evaluated.result.profitUnroundedManwon).toBeLessThan(baseline.profitUnroundedManwon!);
+      expect(evaluated.result.npvUnroundedManwon).toBeLessThan(baseline.npvUnroundedManwon!);
+    }
+    expect(calculateScenario(input)).toEqual(baseline);
+    expect(input).toEqual(before);
+  });
+
+  it.each([-1, 100.01, NaN, Infinity, -Infinity, null, "10"])("rejects invalid quote risk input %s without a fallback", value => {
+    expect(() => calculateScenarioWithFullQuoteStress(fixture(), value as number)).toThrow("0~100%");
+  });
+
+  it("rejects unsupported overlays and a total beyond the existing financial ceiling", () => {
+    const input = fixture();
+    delete input.scenario.program.areaContract!.fullQuoteCost;
+    expect(() => calculateScenarioWithFullQuoteStress(input, 10)).toThrow("채택된 전체");
+    expect(() => buildDealStressTest(input.parcel, input.scenario, { fullQuoteIncreasePct: 10 })).toThrow("채택된 전체");
+    const maximum = fixture(), quote = maximum.scenario.program.areaContract!.fullQuoteCost!;
+    for (const line of quote.quote.lines) {
+      line.amountWon = 0;
+      if (line.unitRateWon !== null) line.unitRateWon = 0;
+    }
+    quote.quote.lines[0].amountWon = MAX_CONSTRUCTION_QUOTE_AMOUNT_WON;
+    quote.quote.lines[0].allocations!.forEach((allocation, index) => {
+      allocation.amountWon = index === 0 ? MAX_CONSTRUCTION_QUOTE_AMOUNT_WON : 0;
+    });
+    quote.quote.statedTotalWon = MAX_CONSTRUCTION_QUOTE_AMOUNT_WON;
+    quote.totalWon = buildConstructionScopeLedger(quote.quote).totalAmountWon!;
+    quote.quote.statedTotalWon = quote.totalWon;
+    expect(quote.totalWon).toBe(MAX_CONSTRUCTION_QUOTE_AMOUNT_WON);
+    expect(() => calculateScenarioWithFullQuoteStress(maximum, 0)).not.toThrow();
+    expect(() => calculateScenarioWithFullQuoteStress(maximum, 0.01)).toThrow("금액 한도");
+  });
+
+  it("replays the configurable combined quote shock and preserves the original base", () => {
+    const input = fixture(), before = structuredClone(input);
+    const stress = buildDealStressTest(input.parcel, input.scenario, { fullQuoteIncreasePct: 12.5 });
+    const cost = stress.stressCases.find(row => row.id === "full-quote-increase")!;
+    expect(cost.result).toEqual(calculateScenarioWithFullQuoteStress(input, 12.5).result);
+    const combined = stress.stressCases.find(row => row.id === "combined-downside")!;
+    const revenue = blendedRevenueUnitPrice(input.scenario, "sale");
+    const scenario = withScenarioRevenueUnitPrice(input.scenario, "sale", revenue * 0.95);
+    scenario.assumptions = { ...scenario.assumptions, interestRate: scenario.assumptions.interestRate + 1,
+      constructionMonths: scenario.assumptions.constructionMonths + 3 };
+    const expected = calculateScenarioWithFullQuoteStress({ parcel: input.parcel, scenario }, 12.5);
+    expect(combined.result).toEqual(expected.result);
+    expect(combined.quoteCostStress).toEqual(expected.basis);
+    expect(stress.baseline).toEqual(calculateScenario(input));
+    expect(input).toEqual(before);
   });
 
   it("removes quote VE from balanced rescue changes and burden scoring", () => {

@@ -311,6 +311,7 @@ export default function DashboardPage({
     result: DealStressResult;
   } | null>(null);
   const [stressRunning, setStressRunning] = useState(false);
+  const [quoteIncreasePct, setQuoteIncreasePct] = useState("10");
   const [stressError, setStressError] = useState<{ key: string; message: string } | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [taxStrategy, setTaxStrategy] = useState<AfterTaxStrategy>(
@@ -723,14 +724,18 @@ export default function DashboardPage({
     projectId,
     geometryHash: geometry.geometryHash,
     scenarioId: scenario.id,
+    parcel: calculation.parcel,
+    program: scenario.program,
     acquisitionPrice,
     assumptions,
     revenuePricing: scenario.revenuePricing,
   });
   const visibleRescue =
     rescueRun?.key === rescueKey ? rescueRun.result : null;
+  const hasFullQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
+  const stressKey = JSON.stringify([rescueKey, hasFullQuote ? quoteIncreasePct : null]);
   const visibleStress =
-    stressRun?.key === rescueKey ? stressRun.result : null;
+    stressRun?.key === stressKey ? stressRun.result : null;
 
   const resetAll = () => {
     resetDraftAssumptions(financeScenario.id);
@@ -788,10 +793,12 @@ export default function DashboardPage({
     setStressError(null);
     window.setTimeout(() => {
       try {
-        const stress = buildDealStressTest(calculation.parcel, scenario);
-        setStressRun({ key: rescueKey, result: stress });
+        const stress = buildDealStressTest(calculation.parcel, scenario, hasFullQuote
+          ? { fullQuoteIncreasePct: quoteIncreasePct.trim() === "" ? NaN : Number(quoteIncreasePct) }
+          : {});
+        setStressRun({ key: stressKey, result: stress });
       } catch (error) {
-        setStressError({ key: rescueKey, message: error instanceof Error ? error.message : "입력값과 계산 범위를 확인하세요." });
+        setStressError({ key: stressKey, message: error instanceof Error ? error.message : "입력값과 계산 범위를 확인하세요." });
       } finally {
         setStressRunning(false);
       }
@@ -1218,8 +1225,10 @@ export default function DashboardPage({
               targetIRR={assumptions.equityIRR}
               running={stressRunning}
               onRun={runDealStress}
+              quoteIncreasePct={hasFullQuote ? quoteIncreasePct : undefined}
+              onQuoteIncreaseChange={setQuoteIncreasePct}
             />
-            {stressError?.key === rescueKey && (
+            {stressError?.key === stressKey && (
               <p role="alert" style={{ color: "var(--neg-fg)", overflowWrap: "anywhere" }}>
                 스트레스 분석 실패: {stressError.message}
               </p>
@@ -1535,6 +1544,7 @@ export default function DashboardPage({
         .assumption-group{border-bottom:1px solid var(--border-faint)}.assumption-group summary{padding:11px 0 7px;font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--fg-muted);cursor:pointer}.coverage-note{padding:10px;margin:11px 0 0;border-radius:8px;background:var(--bg-soft);font-size:9.5px;color:var(--fg-muted);line-height:1.55}.next-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.next-actions .primary-button,.save-status{grid-column:1/-1}.save-status{text-align:center;color:var(--pos-fg);font-size:9.5px}
         :global(.revenue-pricing-group){border-bottom:1px solid var(--border-faint)}:global(.revenue-pricing-group>summary){padding:11px 0 7px;font-size:10px;font-weight:800;color:var(--fg-muted);cursor:pointer}:global(.revenue-pricing-list){display:grid;gap:6px;padding:2px 0 10px}:global(.revenue-price-row){border:1px solid var(--border-faint);border-radius:6px;background:var(--bg)}:global(.revenue-price-row>summary){display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;cursor:pointer;list-style:none}:global(.revenue-price-row>summary::-webkit-details-marker){display:none}:global(.revenue-price-row>summary>span),:global(.revenue-price-row>summary>strong){display:grid;gap:2px}:global(.revenue-price-row>summary b){font-size:10px}:global(.revenue-price-row>summary small){color:var(--fg-subtle);font-size:8px;font-weight:500}:global(.revenue-price-row>summary>strong){text-align:right;font-family:var(--font-mono);font-size:10.5px}:global(.revenue-base-input){display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 8px;padding:8px 0;border-top:1px solid var(--border-faint);color:var(--fg-muted);font-size:9px}:global(.revenue-base-input>span:last-child){display:flex;align-items:center;gap:4px}:global(.revenue-base-input input){width:84px;height:26px;padding:0 5px;border:1px solid var(--border);border-radius:5px;background:var(--bg-elev);color:var(--fg);text-align:right;font:inherit;font-weight:700}:global(.revenue-base-input input:disabled){cursor:not-allowed;opacity:.58}:global(.revenue-base-input small),:global(.revenue-adjustment-grid small){color:var(--fg-faint);font-size:8px}:global(.revenue-adjustment-grid){display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;padding:0 8px 8px}:global(.revenue-adjustment-grid label){display:grid;gap:3px;min-width:0;color:var(--fg-subtle);font-size:8px}:global(.revenue-adjustment-grid label>span:last-child){display:flex;align-items:center;gap:2px}:global(.revenue-adjustment-grid input){width:100%;min-width:0;height:24px;padding:0 3px;border:1px solid var(--border);border-radius:4px;background:var(--bg-elev);color:var(--fg);text-align:right;font:inherit;font-size:8.5px}:global(.revenue-price-source){display:block;overflow:hidden;margin:0 8px;padding:0 0 8px;color:var(--fg-faint);font-size:8px;text-overflow:ellipsis;white-space:nowrap}
         @media(max-width:1180px){.workspace-grid{grid-template-columns:1fr}.stage3-sidebar{position:static;grid-template-columns:1fr 1fr}.next-actions{grid-column:1/-1}.decision-grid{grid-template-columns:repeat(2,1fr)}.hold-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.hold-metrics>:global(.hold-metric:nth-child(4)){border-left:0}.hold-metrics>:global(.hold-metric:nth-child(n+4)){border-top:1px solid var(--border-faint)}}
+        @media(max-width:1180px){.workspace-grid{grid-template-columns:minmax(0,1fr)}.stage3-sidebar{min-width:0}}
         @media(max-width:760px){.stage3-page{padding:18px 14px}.stage3-header{display:block}.header-actions{margin-top:14px}.source-lock,.price-ladder,.metric-grid,.split-section,.evidence-summary,.stage3-sidebar,.funding-banner,.takeout-banner,.hold-heading{grid-template-columns:1fr}.source-main{border-right:0}.decision-grid{grid-template-columns:1fr}.return-strip,.hold-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.hold-metrics>:global(.hold-metric:nth-child(odd)){border-left:0}.hold-metrics>:global(.hold-metric:nth-child(n+3)){border-top:1px solid var(--border-faint)}.case-row{grid-template-columns:1fr}.case-row strong,.case-row em{text-align:left}.method-strip button{margin-left:0}}
       `}</style>
     </div>
@@ -2266,12 +2276,16 @@ function DealStressLabPanel({
   targetIRR,
   running,
   onRun,
+  quoteIncreasePct,
+  onQuoteIncreaseChange,
 }: {
   stress: DealStressResult | null;
   baseline: DealStressResult["baseline"];
   targetIRR: number;
   running: boolean;
   onRun: () => void;
+  quoteIncreasePct?: string;
+  onQuoteIncreaseChange: (value: string) => void;
 }) {
   const baselinePasses = passesDealRescueTarget(baseline, targetIRR);
   const fundingUnverified = baseline.funding.status === "unverified";
@@ -2289,6 +2303,7 @@ function DealStressLabPanel({
           justifyContent: "space-between",
           gap: 18,
           alignItems: "flex-start",
+          flexWrap: "wrap",
         }}
       >
         <SectionHeader
@@ -2323,13 +2338,21 @@ function DealStressLabPanel({
             }}
           >
             {stress
-              ? `하방 ${passCount}/5 통과`
+              ? `하방 ${passCount}/${stress.stressCases.length} 통과`
               : baselinePasses
                 ? fundingUnverified
                   ? "재무 목표 통과 · 자금한도 미확인"
                   : "현재안 통과 · 하방 미검증"
                 : "현재안 미달 · 원인 미검증"}
           </span>
+          {quoteIncreasePct !== undefined && (
+            <label style={{ display: "grid", gap: 5, maxWidth: 180, fontSize: 11 }}>
+              견적 대비 추가 공사비 (%)
+              <input type="number" min={0} max={100} step="any" value={quoteIncreasePct}
+                disabled={running} onChange={(event) => onQuoteIncreaseChange(event.target.value)}
+                style={{ minWidth: 0, width: "100%", padding: 7, boxSizing: "border-box" }} />
+            </label>
+          )}
           <button
             disabled={running}
             onClick={onRun}
@@ -2394,7 +2417,7 @@ function DealStressLabPanel({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(0, .9fr) minmax(0, 1.35fr)",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 430px), 1fr))",
               gap: 12,
               marginTop: 15,
             }}
@@ -2548,10 +2571,12 @@ function DealStressLabPanel({
                       gap: 8,
                     }}
                   >
-                    <strong style={{ fontSize: 10.5 }}>{row.label}</strong>
+                    <strong style={{ fontSize: 10.5, minWidth: 0, overflowWrap: "anywhere" }}>{row.label}</strong>
                     <b
                       style={{
                         fontSize: 8.5,
+                        whiteSpace: "nowrap",
+                        flexShrink: 0,
                         color: row.passesTarget
                           ? "var(--pos-fg)"
                           : "var(--neg-fg)",
@@ -2569,6 +2594,13 @@ function DealStressLabPanel({
                   >
                     {row.changes.join(" · ")}
                   </small>
+                  {row.quoteCostStress && (
+                    <dl data-quote-cost-stress={row.id} style={{ margin: 0, display: "grid", gap: 4, fontSize: 10, overflowWrap: "anywhere" }}>
+                      <div><dt>원본 견적</dt><dd style={{ margin: 0 }}>{won(row.quoteCostStress.originalQuoteTotalWon / 10000)}</dd></div>
+                      <div><dt>추가 직접공사비 가정</dt><dd style={{ margin: 0 }}>+{won(row.quoteCostStress.additionalCostWon / 10000)}</dd></div>
+                      <div><dt>가정 적용 직접공사비</dt><dd style={{ margin: 0 }}>{won(row.quoteCostStress.stressedCostWon / 10000)}</dd></div>
+                    </dl>
+                  )}
                   <div
                     style={{
                       display: "grid",
@@ -2672,7 +2704,7 @@ function StressThresholdRow({
       style={{
         display: "grid",
         gridTemplateColumns:
-          "minmax(110px, 1fr) minmax(95px, .8fr) 18px minmax(95px, .8fr)",
+          "minmax(0, 1fr) 18px minmax(0, 1fr)",
         gap: 8,
         alignItems: "center",
         padding: "9px 10px",
@@ -2680,7 +2712,7 @@ function StressThresholdRow({
         background: available ? "var(--bg-soft)" : "var(--neg-soft)",
       }}
     >
-      <span style={{ display: "grid", gap: 3, minWidth: 0 }}>
+      <span style={{ display: "grid", gap: 3, minWidth: 0, gridColumn: "1 / -1" }}>
         <b style={{ fontSize: 10 }}>{row.label}</b>
         <small
           style={{
@@ -2695,7 +2727,7 @@ function StressThresholdRow({
           {status}
         </small>
       </span>
-      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+      <span style={{ fontSize: 8.5, minWidth: 0, overflowWrap: "anywhere", color: "var(--fg-muted)" }}>
         현재
         <b
           style={{
@@ -2709,7 +2741,7 @@ function StressThresholdRow({
         </b>
       </span>
       <b style={{ color: "var(--fg-muted)" }}>→</b>
-      <span style={{ fontSize: 8.5, color: "var(--fg-muted)" }}>
+      <span style={{ fontSize: 8.5, minWidth: 0, overflowWrap: "anywhere", color: "var(--fg-muted)" }}>
         {row.direction === "maximum" ? "최대" : "최소"}
         <b
           style={{

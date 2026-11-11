@@ -27,6 +27,7 @@ import { calculateEffectiveGFA } from "@/lib/finance/parking-core";
 import { buildProjectLedger } from "@/lib/finance/project-ledger";
 import { quantityAdjustmentForBase, quantityCostContractSchema } from "@/lib/planning/quantity-cost-contract";
 import { validateFullQuoteCostContract } from "@/lib/planning/full-quote-cost-contract";
+import { MAX_CONSTRUCTION_QUOTE_AMOUNT_WON } from "@/lib/planning/construction-quote";
 import {
   DEFAULT_RETAIL_RENT_PREMIUM,
   DEFAULT_STABILIZATION_FACTOR_PCT,
@@ -299,6 +300,45 @@ export interface CalcInput {
   scenario: Scenario;
 }
 
+export const FULL_QUOTE_STRESS_VERSION = "full-quote-stress-2026.1" as const;
+export interface FullQuoteCostStress {
+  version: typeof FULL_QUOTE_STRESS_VERSION;
+  kind: "illustrative-cost-increase";
+  sourceKey: string;
+  scenarioId: string;
+  scenarioVersion: number;
+  originalQuoteTotalWon: number;
+  increasePct: number;
+  additionalCostWon: number;
+  stressedCostWon: number;
+}
+
+/** Read-only risk overlay, never a replacement quote or a saved base calculation. */
+export function calculateScenarioWithFullQuoteStress(input: CalcInput, increasePct: number): {
+  basis: FullQuoteCostStress;
+  result: ScenarioResult;
+} {
+  const quote = fullQuoteCostForScenario(input.scenario);
+  if (!quote) throw new Error("전체 견적 증액 분석에는 채택된 전체 공사 견적이 필요합니다.");
+  if (!Number.isFinite(increasePct) || increasePct < 0 || increasePct > 100) {
+    throw new Error("견적 대비 추가 공사비는 0~100%의 유한한 숫자여야 합니다.");
+  }
+  const additional = D(quote.totalWon).times(D(increasePct)).div(HUNDRED);
+  const stressed = D(quote.totalWon).plus(additional);
+  if (stressed.gt(MAX_CONSTRUCTION_QUOTE_AMOUNT_WON)) {
+    throw new Error("증액 가정 적용 공사비가 분석 금액 한도를 초과했습니다.");
+  }
+  return {
+    basis: {
+      version: FULL_QUOTE_STRESS_VERSION, kind: "illustrative-cost-increase",
+      sourceKey: quote.sourceKey, scenarioId: quote.scenarioId, scenarioVersion: quote.scenarioVersion,
+      originalQuoteTotalWon: quote.totalWon, increasePct,
+      additionalCostWon: additional.toNumber(), stressedCostWon: stressed.toNumber(),
+    },
+    result: calculateScenarioLedger(input, additional),
+  };
+}
+
 export function validateScenarioFinancialInputs(
   parcel: Parcel,
   scenario: Scenario,
@@ -391,6 +431,10 @@ export function minimumConstructionCostRate(input: CalcInput): number {
  * the UI (e.g. show "hard cost = GFA × constCost" inline).
  */
 export function calculateScenario(input: CalcInput): ScenarioResult {
+  return calculateScenarioLedger(input, ZERO);
+}
+
+function calculateScenarioLedger(input: CalcInput, additionalQuoteCostWon: Decimal): ScenarioResult {
   const { parcel, scenario } = input;
   const { program, assumptions: a } = scenario;
   validateScenarioFinancialInputs(parcel, scenario);
@@ -466,7 +510,8 @@ export function calculateScenario(input: CalcInput): ScenarioResult {
   // ─── 3. Cost ────────────────────────────────────────────────────────
   const landCost = D(parcel.acquiredPrice);
   const demolitionCost = D(parcel.demolitionCost ?? 0);
-  const hardCostWithMaterial = hardConstructionCost(input, a.constCostPerSqM);
+  const hardCostWithMaterial = hardConstructionCost(input, a.constCostPerSqM)
+    .plus(additionalQuoteCostWon.div(WON_TO_MANWON));
   if (hardCostWithMaterial.lt(0)) {
     throw new Error(NEGATIVE_HARD_COST_MESSAGE);
   }

@@ -5,11 +5,11 @@ import {
   revenuePricingKindForScenario,
   withScenarioRevenueUnitPrice,
 } from "./revenue-contract";
-import { calculateScenario, FIXED_FULL_QUOTE_COST_REASON, minimumConstructionCostRate } from "./scenario";
+import { calculateScenario, calculateScenarioWithFullQuoteStress, FIXED_FULL_QUOTE_COST_REASON, minimumConstructionCostRate, type FullQuoteCostStress } from "./scenario";
 import { ASSUMPTION_VALUE_RULES } from "./assumption-validation";
 import type { Parcel, Scenario, ScenarioResult } from "./types";
 
-export const DEAL_STRESS_MODEL_VERSION = "deal-stress-2026.2";
+export const DEAL_STRESS_MODEL_VERSION = "deal-stress-2026.3";
 const BINARY_SEARCH_ITERATIONS = 20;
 
 export type DealStressThresholdId =
@@ -59,6 +59,7 @@ export interface DealStressCase {
   id:
     | "revenue-down-10"
     | "cost-up-10"
+    | "full-quote-increase"
     | "rate-up-1_5"
     | "delay-3"
     | "combined-downside";
@@ -66,6 +67,7 @@ export interface DealStressCase {
   changes: string[];
   result: ScenarioResult;
   passesTarget: boolean;
+  quoteCostStress?: FullQuoteCostStress;
 }
 
 export interface DealStressResult {
@@ -204,10 +206,16 @@ function stressCase(
   parcel: Parcel,
   scenario: Scenario,
   targetIRR: number,
+  quoteIncreasePct?: number,
 ): DealStressCase {
   let result: ScenarioResult;
+  let quoteCostStress: FullQuoteCostStress | undefined;
   try {
-    result = calculateScenario({ parcel, scenario });
+    if (quoteIncreasePct !== undefined) {
+      const evaluated = calculateScenarioWithFullQuoteStress({ parcel, scenario }, quoteIncreasePct);
+      result = evaluated.result;
+      quoteCostStress = evaluated.basis;
+    } else result = calculateScenario({ parcel, scenario });
   } catch (error) {
     throw new Error(`${label} 분석을 완료하지 못했습니다. ${error instanceof Error ? error.message : "입력값과 계산 범위를 확인하세요."}`);
   }
@@ -217,6 +225,7 @@ function stressCase(
     changes,
     result,
     passesTarget: passesDealRescueTarget(result, targetIRR),
+    ...(quoteCostStress ? { quoteCostStress } : {}),
   };
 }
 
@@ -228,6 +237,7 @@ function stressCase(
 export function buildDealStressTest(
   parcel: Parcel,
   scenario: Scenario,
+  options: { fullQuoteIncreasePct?: number } = {},
 ): DealStressResult {
   const targetIRR = scenario.assumptions.equityIRR;
   const baseline = calculateScenario({ parcel, scenario });
@@ -259,6 +269,10 @@ export function buildDealStressTest(
 
   const constructionCurrent = scenario.assumptions.constCostPerSqM;
   const fixedQuote = scenario.program.areaContract?.fullQuoteCost !== undefined;
+  const quoteIncreasePct = options.fullQuoteIncreasePct === undefined ? 10 : options.fullQuoteIncreasePct;
+  if (options.fullQuoteIncreasePct !== undefined && !fixedQuote) {
+    throw new Error("전체 견적 증액 가정은 채택된 전체 견적에만 적용할 수 있습니다.");
+  }
   const quantityCostScope = scenario.program.areaContract?.quantityCostAdjustment
     ? "수량 교체 견적액 고정 · 잔여 기본 공종만 증감" : "직접 공사비 단가 변동";
   const constructionLow = fixedQuote ? 0 : minimumConstructionCostRate({ parcel, scenario });
@@ -362,7 +376,15 @@ export function buildDealStressTest(
       revenueDown,
       targetIRR,
     ),
-    ...(fixedQuote ? [] : [stressCase(
+    ...(fixedQuote ? [stressCase(
+      "full-quote-increase",
+      `견적 대비 추가 공사비 +${quoteIncreasePct}%`,
+      ["물가·설계변경의 예시 증액 가정 · 실제 변경 견적 아님", "기존 예비비 상계 없음", "간접비·예비비·월별 금융비 재계산"],
+      parcel,
+      scenario,
+      targetIRR,
+      quoteIncreasePct,
+    )] : [stressCase(
       "cost-up-10",
       "기본 공사단가 +10%",
       ["직접 공사비 단가 +10%", quantityCostScope, "연동 간접비·예비비 재계산"],
@@ -388,11 +410,12 @@ export function buildDealStressTest(
     ),
     stressCase(
       "combined-downside",
-      fixedQuote ? "복합 하방 · 전체 견적 고정" : "복합 하방",
-      ["매출 -5%", ...(fixedQuote ? [FIXED_FULL_QUOTE_COST_REASON] : ["기본 공사단가 +10%", quantityCostScope]), "PF +1.0%p", "공사 +3개월"],
+      fixedQuote ? "복합 하방 · 견적 증액 가정" : "복합 하방",
+      ["매출 -5%", ...(fixedQuote ? [`견적 대비 추가 공사비 +${quoteIncreasePct}% · 원본 견적 불변`, "기존 예비비 상계 없음"] : ["기본 공사단가 +10%", quantityCostScope]), "PF +1.0%p", "공사 +3개월"],
       parcel,
       combined,
       targetIRR,
+      fixedQuote ? quoteIncreasePct : undefined,
     ),
   ];
 
@@ -425,6 +448,7 @@ export function buildDealStressTest(
       `부동산 총 취득대금 0~${Math.round(landHigh)}만원`,
       `매출 단가 0~${revenueHigh}원 (현재의 4배와 입력 상한 중 작은 값)`,
       fixedQuote ? FIXED_FULL_QUOTE_COST_REASON : `직접 공사비 ${constructionLow}~${constructionHigh}원/㎡ (음수 공사비 제외 · 현재의 2.5배와 입력 상한 중 작은 값)`,
+      ...(fixedQuote ? [`견적 증액 가정 +${quoteIncreasePct}% · 원본 견적과 별도 · 공사기간 전체에 기존 지급 비율 적용 · 변경 발주 시점·승인·보상 미반영`] : []),
       `PF 금리 0~25%`,
     ],
   };
