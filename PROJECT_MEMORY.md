@@ -2,7 +2,11 @@
 
 최종 갱신: 2026-11-11 (America/Chicago)
 
-## 현재 실행: 운영비 검증 완료·프로젝트 인계 보강
+## 현재 실행: 프로젝트 인계 검증 완료·서버 가격 입력 보강
+
+- 인계 최종검증(2026-11-11): 전체3884통과+opt-inDB2제외/lint·타입·build `00nc6H-pHgdkhbglPS473`, 신규137회귀와 독립검토3수정 재검증 통과. 실제PG18.6/Chrome1440·native390 각27동작+같은ID2프로젝트행렬,320~1440 화면 검수, 6프로젝트의24workspace/24audit 이력 재시작·dump/restore 해시 일치. 소스/빌드/런타임 불변·검증자원/frozen copy 정리 완료. `docs/PROJECT-TRANSFER-SAFETY-2026.1.md`, `artifacts/project-transfer-production-2026-11-11/attempt-1/` 참조. 아래 인계 진행 중 기록은 이전 경과다. 다음은 서버 Workspace 경로가 잘못된 nested 가격사례와 중복/null 가격초안을 허용하는 재현 결함을 공통 계약으로 차단하는 작업이다. 실제자료·외부전문가·공식/운영/최종 인수는 계속 미확정이다.
+
+- 운영비 완료 체크포인트 `430d24c`를 원격 master에 게시했다. 현재 프로젝트 인계 v2 안전성/초안 확장을 개발 중이며 `docs/PROJECT-TRANSFER-SAFETY-2026.1.md` 참조. bounded파일·무변경미리보기·명시적적용, 세션/프로젝트/내용변경 가드, 같은ID 타프로젝트 보존·미소유 가정 충돌차단, 서버검토캐시 불변과 dynamic query 데이터 동기화를 연결했다. 공유 Workspace apply의 finance-only 가정 정리도 보완했다. 관련104회귀 통과, 전체검증/독립검토/실제DB·브라우저는 아직 미완료다. 외부전문가/실제자료/공식승인은 계속 미확정이다.
 
 - 최신 운영비 완료(2026-11-11): 최종 full verify3747+opt-inDB2제외/lint·타입·build `SbJNgwF-n6XH0Okoto5-P` 통과. 독립 검토의 기존 NOI 합계 상한 누락을 수정했고131신규회귀를 포함한다. 실제PG18.6/Chrome1440·native390 각32동작/19대사상태, 독립24개월검산·권한403/로그아웃401·SPA복구·320~1440화면 검수 통과. DB재시작·dump/restore 후 운영비이력8개/임대차이력12개 및 전체workspace/audit 해시 동일. 소스불변/임시자원·frozen copy정리 완료. 증빙 `artifacts/operating-budget-production-2026-11-11/attempt-1/`, 상세 `docs/OPERATING-BUDGET-NOI-2026.1.md`. 아래 진행 중 기록은 이 최종결과 이전의 경과다. 실제 재무 채택·공식/전문가/운영 인수는 미완료다.
 - 다음 인계 보강은 v2 체크섬 호환을 유지하며 임대차/운영비/가격 초안과 보류가정을 포함한다. bounded 읽기·미리보기·명시적 교체, 세션/프로젝트/원본변경 취소, 다른 프로젝트 동일ID 보존, 권한검사와 서버 전문가 이력 불변을 검증할 예정이다. 사용량43%소진/57%잔여 확인, 잔여30% 보존 지시 유지.

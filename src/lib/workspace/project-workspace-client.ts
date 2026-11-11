@@ -87,8 +87,11 @@ export function applyProjectWorkspace(payload: ProjectWorkspacePayload): void {
       )
       .map((scenario) => scenario.id),
   );
+  if (project.data?.parcel.id === projectId) {
+    for (const scenario of project.data.scenarios) priorScenarioIds.add(scenario.id);
+  }
   const nextScenarioIds = new Set(
-    payload.planningScenarios.map((scenario) => scenario.id),
+    [...payload.planningScenarios, ...payload.projectData.scenarios].map((scenario) => scenario.id),
   );
   const replacedScenarioIds = new Set([...priorScenarioIds, ...nextScenarioIds]);
   const draftAssumptions = {
